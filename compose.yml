@@ -1,10 +1,10 @@
 services:
-  subtitle-ai-v2:
-    image: subtitle-ai-v2:dev
+  subtitle-ai:
+    image: subtitle-ai:dev
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: subtitle-ai-v2
+    container_name: subtitle-ai
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Kuala_Lumpur}
@@ -37,14 +37,13 @@ services:
       # ignored on failure) -- the app has no legitimate reason to write
       # into model weights.
       - ${CONFIG_PATH}/subtitle-ai/models:/models:ro
-      # Deliberately a SEPARATE cache path from v1 (subtitle-ai-v2, not
-      # subtitle-ai) -- v2's job database/work directory must never share
-      # a path with the running v1 rollback deployment.
+      # Cache path kept under its original subtitle-ai-v2 appdata name --
+      # this predates the image being renamed from subtitle-ai-v2 to
+      # subtitle-ai; renaming a live job db/work dir is a data-migration
+      # operation, not part of an image rename.
       - ${CONFIG_PATH}/subtitle-ai-v2/cache:/cache
       - ${CONFIG_PATH}/subtitle-ai/glossary:/glossary:ro
     ports:
-      # Different host port from v1's 8098 -- the two must never collide,
-      # in case a rollback to v1 is needed while v2 is still under test.
       - "8099:8080"
     deploy:
       resources:
