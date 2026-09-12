@@ -1,0 +1,20 @@
+{
+  "signatures": [
+    {
+      "id": "tr-subtitle-credit-altyazi",
+      "language": "tr",
+      "pattern": "\\baltyaz[ıi]\\b",
+      "category": "subtitle_credit",
+      "weight": 0.9,
+      "description": "Confirmed artifact (S01E01-S06 audit, 2026-09-11): faster-whisper large-v3 repeatedly inserted 'Altyazı M.K.' (\"Subtitle by M.K.\") mid-sentence into unrelated dialogue across every checked episode. Classic subtitle-credit training-data contamination, the same family as Whisper's documented 'thanks for watching' hallucination. Evidence for this entry: 26 occurrences / 5 episodes, always mid-sentence, never explained by nearby audio content."
+    },
+    {
+      "id": "audio-description-disclaimer",
+      "language": "tr",
+      "pattern": "sesli betimleme|betimleme derneğine",
+      "category": "broadcast_boilerplate",
+      "weight": 0.5,
+      "description": "Turkish broadcaster (TRT) audio-description disclaimer. Lower weight than the credit pattern: this text is plausibly genuinely spoken by an announcer in some broadcasts, not purely hallucinated -- treat as suspect, not certain, pending audio confirmation."
+    }
+  ]
+}

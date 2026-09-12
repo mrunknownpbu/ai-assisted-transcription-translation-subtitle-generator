@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Subtitle AI v2</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Subtitle AI v2</h1>
+      <p>Transcription and English subtitle generation</p>
+    </div>
+    <div id="queue-summary" class="status">Loading queue&hellip;</div>
+  </header>
+  <main>
+    <section class="workspace">
+      <div class="panel browser-panel">
+        <div class="panel-head">
+          <h2>Media library</h2>
+          <button id="up" class="icon-button" title="Go to parent folder" aria-label="Go to parent folder">&#8593;</button>
+        </div>
+        <div id="crumbs" class="crumbs"></div>
+        <div id="browser" class="browser" aria-live="polite">Loading&hellip;</div>
+      </div>
+      <div class="panel selection-panel">
+        <div class="panel-head"><h2>Selection</h2><button id="clear" class="text-button">Clear</button></div>
+        <div id="selection" class="selection-empty">Select a video from the library.</div>
+        <div id="summary" class="summary hidden"></div>
+        <div id="existing" class="existing hidden"></div>
+        <div id="audio-streams" class="audio-streams hidden">
+          <div class="panel-head-sub">
+            <h3>Audio Streams</h3>
+            <button id="analyze-audio" class="text-button">Analyze (detect language)</button>
+          </div>
+          <div id="audio-stream-list" class="stream-list"></div>
+          <div id="audio-stream-recommendation" class="recommendation hidden"></div>
+        </div>
+        <div class="options">
+          <label>Selected audio stream <select id="audio-stream-select">
+            <option value="">Auto (recommended)</option>
+          </select></label>
+          <div class="option-row"><span>Spoken language</span><strong id="derived-language">Auto-detect</strong></div>
+          <div class="option-row"><span>Transcription</span><strong>faster-whisper large-v3</strong></div>
+          <div class="option-row"><span>Translation</span><strong>NLLB-200 distilled 1.3B</strong></div>
+        </div>
+        <button id="start" class="primary" disabled>Start processing</button>
+        <div id="message" class="message" role="status"></div>
+      </div>
+    </section>
+    <section class="panel jobs-panel">
+      <div class="panel-head"><h2>Job history</h2><button id="refresh" class="text-button">Refresh</button></div>
+      <div id="tabs" class="tabs" role="tablist"></div>
+      <div class="table-wrap"><table><thead><tr><th>File</th><th>Status</th><th>Stage</th><th>Progress</th><th>Elapsed</th><th>QC flags</th><th>Action</th></tr></thead><tbody id="jobs"></tbody></table></div>
+      <section id="detail" class="detail hidden" aria-live="polite"></section>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

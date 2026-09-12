@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Model weights
+models/
+*.pt
+*.bin
+*.onnx
+
+# Cache / runtime data / job artifacts
+cache/
+**/cache/
+transcripts/
+**/transcripts/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets
+.env
+.env.*
+*secret*
+*token*
+*credential*
+
+# Third-party copyrighted reference corpus - not for redistribution
+srt-output/
+
+# Dev fixtures / scratch - large binaries and copyrighted media, not shipped code
+dev-sandbox/
+dev-scratch/
+
+# Media fixtures (defensive, in case new ones land outside the dirs above)
+*.mkv
+*.mp4
+*.avi
+*.wav
+*.mp3
+
+# Editor/OS cruft
+.DS_Store
+*.swp

@@ -1,0 +1,1055 @@
+[
+  {
+    "episode": "S01E01",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 537.3,
+    "segments": 2159,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 37,
+      "translation": 76,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 435,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2159,
+      "translation": 1940,
+      "entity": 2,
+      "timing": 2175,
+      "segmentation": 2001,
+      "readability": 2175,
+      "output": 2175
+    }
+  },
+  {
+    "episode": "S01E02",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 516.4,
+    "segments": 2254,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 44,
+      "translation": 74,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 467,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2254,
+      "translation": 2158,
+      "entity": 2,
+      "timing": 2423,
+      "segmentation": 2224,
+      "readability": 2423,
+      "output": 2423
+    }
+  },
+  {
+    "episode": "S01E03",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 490.3,
+    "segments": 2171,
+    "hallucination_suppressed": 2,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 76,
+      "translation": 64,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 400,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2171,
+      "translation": 2097,
+      "entity": 2,
+      "timing": 2324,
+      "segmentation": 2148,
+      "readability": 2324,
+      "output": 2324
+    }
+  },
+  {
+    "episode": "S01E04",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 482.0,
+    "segments": 2235,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 48,
+      "translation": 83,
+      "entity": 1,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 364,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2235,
+      "translation": 2117,
+      "entity": 2,
+      "timing": 2358,
+      "segmentation": 2199,
+      "readability": 2358,
+      "output": 2358
+    }
+  },
+  {
+    "episode": "S01E05",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 416.5,
+    "segments": 1943,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 26,
+      "translation": 77,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 307,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 1943,
+      "translation": 1783,
+      "entity": 2,
+      "timing": 1994,
+      "segmentation": 1845,
+      "readability": 1994,
+      "output": 1994
+    }
+  },
+  {
+    "episode": "S01E06",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 444.6,
+    "segments": 1980,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 20,
+      "translation": 52,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 387,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 1980,
+      "translation": 1913,
+      "entity": 2,
+      "timing": 2128,
+      "segmentation": 1969,
+      "readability": 2128,
+      "output": 2128
+    }
+  },
+  {
+    "episode": "S01E07",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 445.1,
+    "segments": 2092,
+    "hallucination_suppressed": 2,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 38,
+      "translation": 85,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 318,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2092,
+      "translation": 2018,
+      "entity": 2,
+      "timing": 2209,
+      "segmentation": 2064,
+      "readability": 2209,
+      "output": 2209
+    }
+  },
+  {
+    "episode": "S01E08",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 514.8,
+    "segments": 2271,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 54,
+      "translation": 77,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 402,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2271,
+      "translation": 2163,
+      "entity": 2,
+      "timing": 2440,
+      "segmentation": 2227,
+      "readability": 2440,
+      "output": 2440
+    }
+  },
+  {
+    "episode": "S01E09",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 431.7,
+    "segments": 1906,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 21,
+      "translation": 74,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 282,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 1906,
+      "translation": 1828,
+      "entity": 2,
+      "timing": 2038,
+      "segmentation": 1888,
+      "readability": 2038,
+      "output": 2038
+    }
+  },
+  {
+    "episode": "S01E10",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 466.9,
+    "segments": 2104,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 39,
+      "translation": 67,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 255,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2104,
+      "translation": 1888,
+      "entity": 2,
+      "timing": 2135,
+      "segmentation": 1966,
+      "readability": 2135,
+      "output": 2135
+    }
+  },
+  {
+    "episode": "S01E11",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 440.4,
+    "segments": 1987,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 55,
+      "translation": 67,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 258,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 1987,
+      "translation": 1900,
+      "entity": 2,
+      "timing": 2107,
+      "segmentation": 1946,
+      "readability": 2107,
+      "output": 2107
+    }
+  },
+  {
+    "episode": "S01E12",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 263.7,
+    "segments": 1192,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 16,
+      "translation": 27,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 186,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 1192,
+      "translation": 1072,
+      "entity": 2,
+      "timing": 1247,
+      "segmentation": 1128,
+      "readability": 1247,
+      "output": 1247
+    }
+  },
+  {
+    "episode": "S01E13",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 455.0,
+    "segments": 2197,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 51,
+      "translation": 94,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 259,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2197,
+      "translation": 2076,
+      "entity": 2,
+      "timing": 2285,
+      "segmentation": 2145,
+      "readability": 2285,
+      "output": 2285
+    }
+  },
+  {
+    "episode": "S01E14",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 386.4,
+    "segments": 1776,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 20,
+      "translation": 57,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 259,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 1776,
+      "translation": 1745,
+      "entity": 2,
+      "timing": 1934,
+      "segmentation": 1791,
+      "readability": 1934,
+      "output": 1934
+    }
+  },
+  {
+    "episode": "S01E15",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 349.9,
+    "segments": 1608,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 16,
+      "translation": 47,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 243,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 1608,
+      "translation": 1581,
+      "entity": 2,
+      "timing": 1715,
+      "segmentation": 1612,
+      "readability": 1715,
+      "output": 1715
+    }
+  },
+  {
+    "episode": "S01E16",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 431.2,
+    "segments": 2047,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 23,
+      "translation": 101,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 417,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2047,
+      "translation": 2051,
+      "entity": 2,
+      "timing": 2226,
+      "segmentation": 2083,
+      "readability": 2226,
+      "output": 2226
+    }
+  },
+  {
+    "episode": "S01E17",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 464.4,
+    "segments": 2172,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 50,
+      "translation": 82,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 413,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2172,
+      "translation": 2073,
+      "entity": 2,
+      "timing": 2310,
+      "segmentation": 2125,
+      "readability": 2310,
+      "output": 2310
+    }
+  },
+  {
+    "episode": "S01E18",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 489.8,
+    "segments": 2349,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 53,
+      "translation": 94,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 401,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2349,
+      "translation": 2262,
+      "entity": 2,
+      "timing": 2472,
+      "segmentation": 2302,
+      "readability": 2472,
+      "output": 2472
+    }
+  },
+  {
+    "episode": "S01E19",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 471.4,
+    "segments": 2205,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 23,
+      "translation": 77,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 383,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2205,
+      "translation": 2208,
+      "entity": 2,
+      "timing": 2373,
+      "segmentation": 2247,
+      "readability": 2373,
+      "output": 2373
+    }
+  },
+  {
+    "episode": "S01E20",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 486.7,
+    "segments": 2265,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 42,
+      "translation": 84,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 334,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2265,
+      "translation": 2143,
+      "entity": 2,
+      "timing": 2372,
+      "segmentation": 2194,
+      "readability": 2372,
+      "output": 2372
+    }
+  },
+  {
+    "episode": "S01E21",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 495.5,
+    "segments": 2345,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 54,
+      "translation": 107,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 434,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2345,
+      "translation": 2294,
+      "entity": 2,
+      "timing": 2484,
+      "segmentation": 2338,
+      "readability": 2484,
+      "output": 2484
+    }
+  },
+  {
+    "episode": "S01E22",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 530.9,
+    "segments": 2268,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 29,
+      "translation": 101,
+      "entity": 1,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 402,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2268,
+      "translation": 2221,
+      "entity": 2,
+      "timing": 2478,
+      "segmentation": 2307,
+      "readability": 2478,
+      "output": 2478
+    }
+  },
+  {
+    "episode": "S01E23",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 532.4,
+    "segments": 2401,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 44,
+      "translation": 100,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 447,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2401,
+      "translation": 2360,
+      "entity": 2,
+      "timing": 2544,
+      "segmentation": 2414,
+      "readability": 2544,
+      "output": 2544
+    }
+  },
+  {
+    "episode": "S01E24",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 534.8,
+    "segments": 2505,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 59,
+      "translation": 91,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 381,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2505,
+      "translation": 2350,
+      "entity": 2,
+      "timing": 2601,
+      "segmentation": 2429,
+      "readability": 2601,
+      "output": 2601
+    }
+  },
+  {
+    "episode": "S01E25",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 440.3,
+    "segments": 1975,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 93,
+      "translation": 62,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 335,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 1975,
+      "translation": 1919,
+      "entity": 2,
+      "timing": 2105,
+      "segmentation": 1967,
+      "readability": 2105,
+      "output": 2105
+    }
+  },
+  {
+    "episode": "S01E26",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 474.7,
+    "segments": 2244,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 77,
+      "translation": 99,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 455,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2244,
+      "translation": 2108,
+      "entity": 2,
+      "timing": 2349,
+      "segmentation": 2167,
+      "readability": 2349,
+      "output": 2349
+    }
+  },
+  {
+    "episode": "S01E27",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 497.2,
+    "segments": 2276,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 113,
+      "translation": 93,
+      "entity": 1,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 487,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2276,
+      "translation": 2265,
+      "entity": 2,
+      "timing": 2465,
+      "segmentation": 2307,
+      "readability": 2465,
+      "output": 2465
+    }
+  },
+  {
+    "episode": "S01E28",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 569.8,
+    "segments": 2544,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 42,
+      "translation": 82,
+      "entity": 1,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 559,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2544,
+      "translation": 2409,
+      "entity": 2,
+      "timing": 2651,
+      "segmentation": 2466,
+      "readability": 2651,
+      "output": 2651
+    }
+  },
+  {
+    "episode": "S01E29",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 565.8,
+    "segments": 2410,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 76,
+      "translation": 72,
+      "entity": 1,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 506,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2410,
+      "translation": 2237,
+      "entity": 2,
+      "timing": 2536,
+      "segmentation": 2331,
+      "readability": 2536,
+      "output": 2536
+    }
+  },
+  {
+    "episode": "S01E30",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 557.1,
+    "segments": 2298,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 75,
+      "translation": 83,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 468,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2298,
+      "translation": 2268,
+      "entity": 2,
+      "timing": 2485,
+      "segmentation": 2322,
+      "readability": 2485,
+      "output": 2485
+    }
+  },
+  {
+    "episode": "S01E31",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 500.8,
+    "segments": 2032,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 63,
+      "translation": 79,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 373,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2032,
+      "translation": 2020,
+      "entity": 2,
+      "timing": 2201,
+      "segmentation": 2060,
+      "readability": 2201,
+      "output": 2201
+    }
+  },
+  {
+    "episode": "S01E32",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 480.9,
+    "segments": 2001,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 28,
+      "translation": 86,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 407,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2001,
+      "translation": 1993,
+      "entity": 2,
+      "timing": 2181,
+      "segmentation": 2036,
+      "readability": 2181,
+      "output": 2181
+    }
+  },
+  {
+    "episode": "S01E33",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 535.5,
+    "segments": 2325,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 30,
+      "translation": 98,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 570,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2325,
+      "translation": 2373,
+      "entity": 2,
+      "timing": 2508,
+      "segmentation": 2388,
+      "readability": 2508,
+      "output": 2508
+    }
+  },
+  {
+    "episode": "S01E34",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 548.3,
+    "segments": 2486,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 32,
+      "translation": 77,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 652,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2486,
+      "translation": 2467,
+      "entity": 2,
+      "timing": 2686,
+      "segmentation": 2500,
+      "readability": 2686,
+      "output": 2686
+    }
+  },
+  {
+    "episode": "S01E35",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 531.4,
+    "segments": 2340,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 24,
+      "translation": 93,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 595,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2340,
+      "translation": 2397,
+      "entity": 2,
+      "timing": 2566,
+      "segmentation": 2432,
+      "readability": 2566,
+      "output": 2566
+    }
+  },
+  {
+    "episode": "S01E36",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 529.5,
+    "segments": 2299,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 37,
+      "translation": 90,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 607,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2299,
+      "translation": 2277,
+      "entity": 2,
+      "timing": 2501,
+      "segmentation": 2327,
+      "readability": 2501,
+      "output": 2501
+    }
+  },
+  {
+    "episode": "S01E37",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 501.5,
+    "segments": 2263,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 34,
+      "translation": 78,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 535,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2263,
+      "translation": 2223,
+      "entity": 2,
+      "timing": 2472,
+      "segmentation": 2282,
+      "readability": 2472,
+      "output": 2472
+    }
+  },
+  {
+    "episode": "S01E38",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 482.4,
+    "segments": 2167,
+    "hallucination_suppressed": 1,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 55,
+      "translation": 85,
+      "entity": 0,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 501,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2167,
+      "translation": 2172,
+      "entity": 2,
+      "timing": 2386,
+      "segmentation": 2229,
+      "readability": 2386,
+      "output": 2386
+    }
+  },
+  {
+    "episode": "S01E39",
+    "status": "completed",
+    "valid": true,
+    "elapsed_seconds": 491.6,
+    "segments": 2328,
+    "hallucination_suppressed": 0,
+    "altyazi_pattern_in_output": 0,
+    "qc_flagged": {
+      "transcription": 33,
+      "translation": 80,
+      "entity": 1,
+      "timing": 0,
+      "segmentation": 0,
+      "readability": 535,
+      "output": 0
+    },
+    "qc_population": {
+      "transcription": 2328,
+      "translation": 2305,
+      "entity": 2,
+      "timing": 2454,
+      "segmentation": 2344,
+      "readability": 2454,
+      "output": 2454
+    }
+  }
+]

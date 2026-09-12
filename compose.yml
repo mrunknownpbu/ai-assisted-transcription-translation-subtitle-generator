@@ -1,0 +1,56 @@
+services:
+  subtitle-ai-v2:
+    image: subtitle-ai-v2:dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: subtitle-ai-v2
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Kuala_Lumpur}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      SUBTITLE_AI_DB: /cache/jobs.db
+      SUBTITLE_AI_MEDIA_ROOT: /data
+      SUBTITLE_AI_WORK_ROOT: /cache/work
+      SUBTITLE_AI_GLOSSARY_DIR: /glossary
+      # Serializes GPU-heavy sections (model load through free) across
+      # every process that mounts this same /cache path -- confirmed
+      # necessary by a real CUDA OOM when two jobs loaded large-v3
+      # concurrently on this 8GB card. A future horizontally-scaled
+      # deployment sharing this cache path gets safe GPU queuing for
+      # free; a single replica just gets this against its own API's
+      # stream-sampling endpoint, which is otherwise unsynchronized with
+      # the worker thread in the same process.
+      SUBTITLE_AI_GPU_LOCK: /cache/.gpu.lock
+      # Persistent ASR-transcript cache, keyed on media+stream+model+
+      # pipeline-version (see transcript.py). Lives under the same /cache
+      # mount as the job database, not a per-job scratch dir -- the whole
+      # point is surviving across jobs and container restarts. A retry
+      # always bypasses this (see worker.py) so it can never make Retry a
+      # no-op after a bad transcription.
+      SUBTITLE_AI_TRANSCRIPT_CACHE: /cache/transcripts
+    volumes:
+      - ${DATA_PATH}:/data
+      # Read-only: confirmed safe by real GPU inference runs this session
+      # (faster-whisper's harmless hub-cache commit-hash write is simply
+      # ignored on failure) -- the app has no legitimate reason to write
+      # into model weights.
+      - ${CONFIG_PATH}/subtitle-ai/models:/models:ro
+      # Deliberately a SEPARATE cache path from v1 (subtitle-ai-v2, not
+      # subtitle-ai) -- v2's job database/work directory must never share
+      # a path with the running v1 rollback deployment.
+      - ${CONFIG_PATH}/subtitle-ai-v2/cache:/cache
+      - ${CONFIG_PATH}/subtitle-ai/glossary:/glossary:ro
+    ports:
+      # Different host port from v1's 8098 -- the two must never collide,
+      # in case a rollback to v1 is needed while v2 is still under test.
+      - "8099:8080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities:
+                - gpu
