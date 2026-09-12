@@ -1,0 +1,35 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pyyaml "fastapi==0.115.12" "uvicorn[standard]==0.34.2" "httpx==0.28.1"
+          # CPU-only build: the pipeline's actual ASR/translation calls (faster-whisper,
+          # transformers/NLLB) are lazily imported and mocked out in tests, but
+          # gpu.py's cleanup path does an unconditional `import torch` whenever a test
+          # exercises device="cuda" config, even mocked -- torch.cuda.is_available()
+          # then correctly reports False and skips the real CUDA call.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Run tests
+        working-directory: subtitle_ai
+        run: python -m pytest ../tests -q
