@@ -28,7 +28,7 @@ from projection import ProjectedCue, merge_groups, project, validate_coverage
 from qc import entity_qc, output_qc, readability_qc, timing_qc, transcription_qc, translation_qc
 from qc.types import JobQc
 from transcript import (CanonicalTranscript, ModelInfo, auto_lookup_key, cache_key,
-                        validate_cached_transcript)
+                        join_words, validate_cached_transcript)
 
 
 AUTO = "auto"
@@ -240,12 +240,12 @@ def run(video_path: str, media_root: str, work_dir: str, *,
             continue
         live_words.extend(normalize.normalize_transcript_words(list(seg.words), transcript.language))
 
-    source_cues = segmentation_source.build_cues(live_words)
+    source_cues = segmentation_source.build_cues(live_words, language=transcript.language)
     _emit(on_event, events, "SOURCE_SEGMENTATION_COMPLETED", cues=len(source_cues))
 
     glossary_map = glossary_mod.build_glossary(glossary_entities) if glossary_entities else {}
     spans = translate.build_context_spans(source_cues)
-    sentences = [" ".join(source_cues[i].text for i in span) for span in spans]
+    sentences = [join_words([source_cues[i].text for i in span], transcript.language) for span in spans]
     protected_sentences = [glossary_mod.protect(s, glossary_map) for s in sentences] if glossary_map else sentences
 
     target_language = "en"

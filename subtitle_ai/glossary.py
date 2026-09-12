@@ -11,6 +11,22 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+# Real defect (Japanese validation, 2026-09-13): Python's \b is defined in
+# terms of \w, which is Unicode-aware and treats CJK ideographs/kana as
+# word characters too -- so \bNAME\b silently fails to match a name (or a
+# placeholder spliced back in) embedded directly in continuous Japanese
+# text with no surrounding whitespace, which is the NORMAL way Japanese is
+# written. Redefining the boundary in terms of ASCII alphanumerics only
+# fixes this: any adjacent CJK character automatically counts as a
+# boundary (since it's outside this class), while Latin-script behavior
+# (e.g. not matching "Cenk" inside "Cenkiz") is unchanged, since ASCII
+# letters are still in the class on both sides.
+_ASCII_WORD = "[A-Za-z0-9_]"
+
+
+def _bounded(pattern: str) -> str:
+    return rf"(?<!{_ASCII_WORD}){pattern}(?!{_ASCII_WORD})"
+
 
 @dataclass
 class Entity:
@@ -37,18 +53,18 @@ def build_glossary(entities: list[Entity]) -> dict[str, tuple[str, str]]:
 
 def protect(text: str, glossary: dict[str, tuple[str, str]]) -> str:
     for form, (placeholder, _canonical) in sorted(glossary.items(), key=lambda kv: -len(kv[0])):
-        text = re.sub(rf"\b{re.escape(form)}\b", placeholder, text, flags=re.IGNORECASE)
+        text = re.sub(_bounded(re.escape(form)), placeholder, text, flags=re.IGNORECASE)
     return text
 
 
 def restore(text: str, glossary: dict[str, tuple[str, str]]) -> str:
     for _form, (placeholder, canonical) in glossary.items():
-        text = re.sub(rf"\b{re.escape(placeholder)}\b", canonical, text, flags=re.IGNORECASE)
+        text = re.sub(_bounded(re.escape(placeholder)), canonical, text, flags=re.IGNORECASE)
     return text
 
 
 def occurrence_count(text: str, canonical: str) -> int:
-    return len(re.findall(rf"\b{re.escape(canonical)}\b", text, re.IGNORECASE))
+    return len(re.findall(_bounded(re.escape(canonical)), text, re.IGNORECASE))
 
 
 def recover_dropped_entities(source_protected: str, best_candidate: str,
@@ -86,7 +102,7 @@ def entity_occurrence_report(source_protected: str, target_text: str,
     for _form, (placeholder, canonical) in glossary.items():
         if canonical in seen_canonical:
             continue
-        source_count = len(re.findall(rf"\b{re.escape(placeholder)}\b", source_protected, re.IGNORECASE))
+        source_count = len(re.findall(_bounded(re.escape(placeholder)), source_protected, re.IGNORECASE))
         if source_count == 0:
             continue
         seen_canonical.add(canonical)

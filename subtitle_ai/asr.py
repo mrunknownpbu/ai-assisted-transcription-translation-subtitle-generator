@@ -72,11 +72,16 @@ def _model_info(config: AsrConfig, model_version: str) -> ModelInfo:
                                 "compute_type": config.compute_type})
 
 
-def segments_from_raw(raw_segments: list[dict]) -> list[Segment]:
+def segments_from_raw(raw_segments: list[dict], language: str = "") -> list[Segment]:
     """Build Segment/Word objects from faster-whisper's own decoded
     output shape (a list of dicts with word-level timing already
     present) -- separated from transcribe() so this half is unit-testable
-    without a GPU or the model loaded."""
+    without a GPU or the model loaded.
+
+    `language` is threaded onto every Segment so Segment.text joins words
+    correctly for unspaced languages (see transcript.NO_SPACE_LANGUAGES) --
+    it never affects decoding, only how word tokens are rendered back into
+    running text."""
     out = []
     for i, seg in enumerate(raw_segments):
         words = [Word(text=w["word"].strip(), original_text=w["word"].strip(),
@@ -85,7 +90,8 @@ def segments_from_raw(raw_segments: list[dict]) -> list[Segment]:
         out.append(Segment(index=i, start=seg["start"], end=seg["end"], words=words,
                            avg_logprob=seg.get("avg_logprob", 0.0),
                            no_speech_prob=seg.get("no_speech_prob", 0.0),
-                           compression_ratio=seg.get("compression_ratio", 0.0)))
+                           compression_ratio=seg.get("compression_ratio", 0.0),
+                           language=language))
     return out
 
 
@@ -143,7 +149,7 @@ def transcribe(wav_path: str, media_path: str, media_hash: str, audio_stream_ind
                     on_progress(seg.end, total_duration, len(raw))
             if on_progress and raw:
                 on_progress(raw[-1]["end"], total_duration, len(raw))
-            segments = segments_from_raw(raw)
+            segments = segments_from_raw(raw, language=info.language)
             model_version = getattr(model, "model_size_or_path", config.model_name)
             return CanonicalTranscript(
                 media_path=media_path, media_hash=media_hash, audio_stream_index=audio_stream_index,

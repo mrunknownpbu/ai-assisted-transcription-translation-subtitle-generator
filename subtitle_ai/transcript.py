@@ -18,6 +18,27 @@ from enum import Enum
 from pathlib import Path
 
 
+# Languages written without spaces between words -- reconstructing running
+# text from word-level ASR tokens (or rejoining split segments) must not
+# insert a space for these, unlike every space-delimited language. Real
+# defect (Japanese validation, 2026-09-13): faster-whisper's word-level
+# timestamps decompose Japanese into individual tokens same as any other
+# language, and naively " ".join()-ing them back together produced visibly
+# malformed text ("つ か 喋 れ や でも" instead of "つか喋れやでも"), which
+# then destabilized NLLB translation into a repetition loop on the garbled
+# input. Not exhaustive (e.g. Lao, Khmer, Burmese are also unspaced) --
+# covers the languages this project has actually validated so far.
+NO_SPACE_LANGUAGES = frozenset({"ja", "zh", "th"})
+
+
+def join_words(words: list[str], language: str) -> str:
+    """Reconstruct running text from word-level tokens, space-delimited or
+    not depending on the language. See NO_SPACE_LANGUAGES."""
+    if language in NO_SPACE_LANGUAGES:
+        return "".join(words)
+    return " ".join(words)
+
+
 class BoundaryReason(str, Enum):
     """Why a segment boundary exists -- decided once, where the acoustic
     evidence actually is (word gaps, punctuation), never re-guessed later
@@ -90,10 +111,11 @@ class Segment:
     hallucination_score: float = 0.0          # 0 = clean, 1 = certain hallucination
     hallucination_reasons: list[str] = field(default_factory=list)
     suppressed: bool = False                  # True if excluded from output entirely
+    language: str = ""                        # see NO_SPACE_LANGUAGES; "" = space-delimited
 
     @property
     def text(self) -> str:
-        return " ".join(w.text for w in self.words if w.text)
+        return join_words([w.text for w in self.words if w.text], self.language)
 
     @property
     def is_suspect(self) -> bool:
@@ -152,7 +174,7 @@ class CanonicalTranscript:
                 boundary_before=BoundaryReason(boundary) if boundary else None,
                 hallucination_score=s.get("hallucination_score", 0.0),
                 hallucination_reasons=list(s.get("hallucination_reasons", [])),
-                suppressed=s.get("suppressed", False)))
+                suppressed=s.get("suppressed", False), language=s.get("language", "")))
         asr = data["asr_model"]
         align = data.get("alignment_model")
         return cls(

@@ -63,5 +63,39 @@ class RecoverDroppedEntitiesTests(unittest.TestCase):
         self.assertEqual(result.strip(), "Eda!")
 
 
+class CjkBoundaryTests(unittest.TestCase):
+    """Real defect (Japanese validation, 2026-09-13): Python's \\b is
+    Unicode-\\w-based, so it never matches around a name embedded directly
+    in continuous Japanese/Chinese text with no surrounding whitespace --
+    the normal way those scripts are written. glossary.py's internal
+    _bounded() helper redefines the boundary in ASCII-alnum terms instead
+    (see its docstring); these tests protect that fix directly."""
+
+    def test_protects_entity_embedded_in_continuous_japanese_with_no_spaces(self):
+        g = build_glossary([Entity("アリス", ["アリス"])])
+        protected = protect("アリスは走った", g)
+        self.assertNotIn("アリス", protected)
+
+    def test_restores_placeholder_spliced_into_continuous_japanese(self):
+        g = build_glossary([Entity("アリス", ["アリス"])])
+        protected = protect("アリスは走った", g)
+        # Simulate the placeholder surviving translation untouched, still
+        # glued directly to non-Latin text with no separating space.
+        translated = protected + "です"
+        restored = restore(translated, g)
+        self.assertIn("アリス", restored)
+
+    def test_occurrence_count_finds_canonical_embedded_in_japanese(self):
+        g = build_glossary([Entity("アリス", ["アリス"])])
+        self.assertEqual(glossary_mod.occurrence_count("アリスとカルベ", "アリス"), 1)
+
+    def test_latin_script_word_boundary_behavior_is_unchanged(self):
+        # No regression: "Cenk" must still not match inside "Cenkiz".
+        g = build_glossary([Entity("Cenk", ["Cenk"])])
+        protected = protect("Cenkiz geldi.", g)
+        self.assertIn("Cenk", protected)
+        self.assertNotIn(list(g.values())[0][0], protected)
+
+
 if __name__ == "__main__":
     unittest.main()

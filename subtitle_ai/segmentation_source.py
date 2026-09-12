@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from transcript import BoundaryReason, Segment, Word
+from transcript import NO_SPACE_LANGUAGES, BoundaryReason, Segment, Word, join_words
 
 MAX_CUE_CHARS = 84            # ~2 lines x 42 chars
 MAX_DURATION = 7.0
@@ -23,10 +23,16 @@ MAX_GAP = 0.8                 # silence between words that forces a break
 _SENTENCE_END = re.compile(r"[.!?…]['\"»)\]]*$")
 
 
-def build_cues(words: list[Word]) -> list[Segment]:
+def build_cues(words: list[Word], language: str = "") -> list[Segment]:
     """Flatten -> regroup into display cues. Suppressed (hallucinated)
     words are dropped entirely before grouping -- a suppressed word must
-    never anchor or extend a cue boundary."""
+    never anchor or extend a cue boundary.
+
+    `language` (see transcript.NO_SPACE_LANGUAGES) affects both the cues'
+    own Segment.text rendering and the MAX_CUE_CHARS length estimate here:
+    for unspaced languages, joining with " " would inflate the estimated
+    length by one character per word and could split a cue earlier than
+    actually necessary."""
     live = [w for w in words if w.text.strip()]
     cues: list[Segment] = []
     cur: list[Word] = []
@@ -39,17 +45,18 @@ def build_cues(words: list[Word]) -> list[Segment]:
         cues.append(Segment(
             index=len(cues), start=cur[0].start, end=cur[-1].end, words=list(cur),
             avg_logprob=0.0, no_speech_prob=0.0, compression_ratio=0.0,
-            boundary_before=pending_reason))
+            boundary_before=pending_reason, language=language))
         pending_reason = next_reason
 
     for w in live:
         if not cur:
             cur = [w]
             continue
-        cur_text = " ".join(x.text for x in cur)
+        cur_text = join_words([x.text for x in cur], language)
         gap = w.start - cur[-1].end
         dur = w.end - cur[0].start
-        too_long = len(cur_text) + 1 + len(w.text) > MAX_CUE_CHARS
+        sep_len = 0 if language in NO_SPACE_LANGUAGES else 1
+        too_long = len(cur_text) + sep_len + len(w.text) > MAX_CUE_CHARS
         too_slow = dur > MAX_DURATION
         sentence_end = bool(_SENTENCE_END.search(cur_text)) and len(cur_text) >= 12
 
