@@ -49,6 +49,14 @@ class TranslationConfig:
     max_new_tokens: int = 256
     num_beams: int = 4
     batch_size: int = 12   # confirmed necessary by a real CUDA OOM on a 48-span clip; see translate_batch()
+    # Guards against degenerate repetition loops (confirmed real: a Japanese
+    # span mentioning "zombie" 3 times produced ~13x "if you're a zombie,
+    # you're all zombies" instead of one sentence). 4 was chosen empirically
+    # against real NLLB output as the largest (most conservative) size that
+    # still fully collapses that loop -- verified to leave legitimate short
+    # source repetition (Turkish "Tamam tamam", "Eda! Eda!") byte-identical
+    # to the pre-fix output, since those only repeat a 1-2 word span once.
+    no_repeat_ngram_size: int = 4
 
 
 def build_context_spans(cues: list[Segment], real_boundaries: frozenset = frozenset(
@@ -113,7 +121,8 @@ def _generate_one_batch(model, tok, bos: int, batch: list[str], device: str,
     try:
         with torch.inference_mode():
             gen = model.generate(**enc, forced_bos_token_id=bos, max_new_tokens=config.max_new_tokens,
-                                 num_beams=config.num_beams)
+                                 num_beams=config.num_beams,
+                                 no_repeat_ngram_size=config.no_repeat_ngram_size)
         return tok.batch_decode(gen, skip_special_tokens=True)
     except torch.cuda.OutOfMemoryError:
         del enc

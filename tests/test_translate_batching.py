@@ -7,8 +7,11 @@ logic by mocking _generate_one_batch, not the actual OOM-catch path
 (verified separately against real hardware).
 """
 
+import contextlib
+import sys
+import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import translate
 from translate import TranslationConfig, translate_batch
@@ -51,6 +54,48 @@ class ChunkingTests(unittest.TestCase):
     def test_default_batch_size_is_12(self):
         self.assertEqual(TranslationConfig().batch_size, 12)
 
+
+class FakeEncoding(dict):
+    def to(self, device):
+        return self
+
+
+class RepetitionGuardTests(unittest.TestCase):
+    """The real bug this guards against: NLLB's generate() call had no
+    repetition guard, and a source span with natural internal repetition
+    (a real Japanese "zombie" span from multi-language validation) produced
+    ~13 near-duplicate translated clauses instead of one sentence. torch
+    isn't a host test dependency (see module docstring), so this proves the
+    guard is actually wired into the real model.generate() call -- by
+    faking torch/model/tok rather than mocking _generate_one_batch away
+    entirely -- not that it suppresses real degenerate output (verified
+    separately against real hardware: the zombie span collapsed from a
+    13x-repeated clause to one clean sentence, while the Turkish emphasis
+    cases "Tamam tamam..." and "Eda! Eda!..." came back byte-identical to
+    their pre-fix translations, since a legitimate repeat is only a 1-2
+    word span repeated once, well under the 4-token guard)."""
+
+    def test_default_no_repeat_ngram_size_is_4(self):
+        self.assertEqual(TranslationConfig().no_repeat_ngram_size, 4)
+
+    def test_generate_call_receives_configured_no_repeat_ngram_size(self):
+        fake_torch = types.ModuleType("torch")
+        fake_torch.inference_mode = contextlib.nullcontext
+        fake_torch.cuda = types.SimpleNamespace(OutOfMemoryError=RuntimeError)
+
+        model = MagicMock()
+        model.generate.return_value = "GEN_TOKENS"
+        tok = MagicMock()
+        tok.return_value = FakeEncoding(input_ids="IDS", attention_mask="MASK")
+        tok.batch_decode.return_value = ["translated"]
+
+        with patch.dict(sys.modules, {"torch": fake_torch}):
+            result = translate._generate_one_batch(
+                model, tok, 0, ["hello"], "cuda", TranslationConfig())
+
+        self.assertEqual(result, ["translated"])
+        _, kwargs = model.generate.call_args
+        self.assertEqual(kwargs["no_repeat_ngram_size"], 4)
 
 if __name__ == "__main__":
     unittest.main()
