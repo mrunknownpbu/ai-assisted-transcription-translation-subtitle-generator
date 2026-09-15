@@ -6,24 +6,26 @@
 #   NVIDIA GPU:    docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up --build
 #   AMD ROCm:      docker compose -f docker-compose.yml -f docker-compose.rocm.yml up --build
 #
-# Both services run as non-root users (see each Dockerfile's USER directive).
+# The single service serves the React UI through nginx and runs FastAPI plus in-process
+# workers under supervisord. /data is reserved for media; application state lives under
+# /config/subtitleai.
 
 services:
-  api:
+  subtitleai:
     build:
-      context: ./backend
+      context: .
       args:
         TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
-    image: subtitleai-api:cpu
+    image: subtitleai:cpu
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8080:8080"
     environment:
       SUBTITLE_MEDIA_DIR: /data/media
-      SUBTITLE_OUTPUT_DIR: /data/output
-      SUBTITLE_DB_PATH: /data/db/subtitles.db
-      SUBTITLE_MODELS_DIR: /data/models
-      SUBTITLE_WORK_DIR: /data/work
+      SUBTITLE_OUTPUT_DIR: /config/subtitleai/output
+      SUBTITLE_DB_PATH: /config/subtitleai/db/subtitles.db
+      SUBTITLE_MODELS_DIR: /config/subtitleai/models
+      SUBTITLE_WORK_DIR: /config/subtitleai/work
       SUBTITLE_WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-large-v3}
       # SUBTITLE_ASR_ENGINE_CHAIN: '["faster_whisper","openai_whisper","whisper_cpp","whisper_api","vosk"]'
       # Uncomment above (as a JSON array) in a .env file to customize the ASR fallback
@@ -35,11 +37,8 @@ services:
       TVDB_API_PIN: ${TVDB_API_PIN:-}
       SUBTITLE_WORKER_THREADS: ${WORKER_THREADS:-1}
     volumes:
-      - media_data:/data/media
-      - output_data:/data/output
-      - db_data:/data/db
-      - models_data:/data/models
-      - work_data:/data/work
+      - ${MEDIA_DIR:-/data}:/data
+      - ${CONFIG_DIR:-/config}:/config
     deploy:
       resources:
         limits:
@@ -48,32 +47,10 @@ services:
     mem_limit: ${API_MEM_LIMIT:-12g}
     cpus: "${API_CPU_LIMIT:-4}"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 30s
       timeout: 5s
       start_period: 20s
       retries: 3
 
-  frontend:
-    build:
-      context: ./frontend
-    image: subtitleai-frontend:latest
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    depends_on:
-      - api
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: "256m"
-    mem_limit: 256m
-    cpus: "0.5"
-
-volumes:
-  media_data:
-  output_data:
-  db_data:
-  models_data:
-  work_data:
+    stop_grace_period: 30s

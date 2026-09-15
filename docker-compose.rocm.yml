@@ -4,11 +4,11 @@
 # Requires the host to have the amdgpu/ROCm kernel driver installed; the container needs
 # /dev/kfd and /dev/dri plus membership in the host's `video`/`render` groups.
 services:
-  api:
+  subtitleai:
     build:
       args:
         TORCH_INDEX_URL: https://download.pytorch.org/whl/rocm6.2
-    image: subtitleai-api:rocm
+    image: subtitleai:rocm
     devices:
       - /dev/kfd
       - /dev/dri

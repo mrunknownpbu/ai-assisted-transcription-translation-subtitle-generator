@@ -27,9 +27,15 @@ docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up --build -d
 docker compose -f docker-compose.yml -f docker-compose.rocm.yml up --build -d
 ```
 
-Then open http://localhost:8080 for the UI. The API is also directly reachable at
-http://localhost:8000 (used internally by the frontend's nginx reverse proxy — see
-`frontend/nginx.conf`).
+Then open http://localhost:8080 for the UI. The single container exposes nginx on port
+8080; FastAPI listens only on the internal container loopback interface.
+
+Mount `/data` as the media-only mount and `/config` as the application-state mount. The
+application uses `/data/media` for source media and `/config/subtitleai/{db,output,models,work}`
+for its database, generated files, model cache, and temporary processing files. Override
+the host paths with `MEDIA_DIR` and `CONFIG_DIR` in `.env` when required. Because the
+container runs as UID/GID 1000, the host directories must be writable by that account
+(for example, `chown -R 1000:1000 /config/subtitleai` after creating the directory).
 
 Check it's actually up:
 
@@ -38,19 +44,20 @@ curl http://localhost:8080/api/health        # {"status": "ok"}
 curl http://localhost:8080/api/hardware      # confirms what was detected inside the container
 ```
 
-The first job run downloads model weights (faster-whisper + NLLB-200) into the
-`models_data` volume — this can take several minutes and needs outbound network access to
-Hugging Face on first use only; subsequent jobs reuse the cached weights from the volume.
+The first job run downloads model weights (faster-whisper + NLLB-200) into
+`/config/subtitleai/models` — this can take several minutes and needs outbound network
+access to Hugging Face on first use only; subsequent jobs reuse the cached weights there.
 
 ## What each override file changes
 
 | File | Effect |
 |---|---|
-| `docker-compose.yml` | Base stack: CPU torch wheel, no GPU reservation. Always required. |
-| `docker-compose.nvidia.yml` | Rebuilds the `api` image with the CUDA torch wheel and adds an NVIDIA GPU device reservation (`count: all`). |
-| `docker-compose.rocm.yml` | Rebuilds with the ROCm torch wheel and passes through `/dev/kfd` + `/dev/dri` plus `video`/`render` group membership. **Unverified.** |
+| `docker-compose.yml` | Single-container base stack: nginx, FastAPI, and in-process workers with the CPU torch wheel. |
+| `docker-compose.nvidia.yml` | Rebuilds the combined image with the CUDA torch wheel and adds an NVIDIA GPU device reservation (`count: all`). |
+| `docker-compose.rocm.yml` | Rebuilds the combined image with the ROCm torch wheel and passes through `/dev/kfd` + `/dev/dri` plus `video`/`render` group membership. **Unverified.** |
 
-Only `api`'s build changes between profiles — `frontend` is identical in all three.
+Only the combined `subtitleai` image build changes between profiles; the frontend and
+backend remain in the same container for every profile.
 
 ## Environment variables (`.env`)
 
@@ -92,11 +99,11 @@ See `.env.example` for the full list with defaults. Notable ones:
 
 | Volume | Contents | Notes |
 |---|---|---|
-| `media_data` | Uploaded source media (read-only from the pipeline's perspective — never modified in place) | |
-| `output_data` | Generated `.srt`/`.vtt`/`.webvtt`/burned-in files + provenance sidecars, one subfolder per job | |
-| `db_data` | `subtitles.db` — the SQLite job/state store | Back this up; it's the only stateful thing besides the volumes above |
-| `models_data` | Downloaded Whisper/NLLB weights | Safe to delete to reclaim space; re-downloads on next use |
-| `work_data` | Per-job scratch space (extracted WAVs, intermediate JSON) | Safe to delete when no job is running |
+| `/data` | Uploaded/source media only (read-only from the pipeline's perspective — never modified in place) | Media mount |
+| `/config/subtitleai/output` | Generated `.srt`/`.vtt`/`.webvtt`/burned-in files + provenance sidecars | Persisted application state |
+| `/config/subtitleai/db` | `subtitles.db` — the SQLite job/state store | Back this up |
+| `/config/subtitleai/models` | Downloaded Whisper/NLLB weights and TVDB cache | Safe to delete to reclaim space; re-downloads on next use |
+| `/config/subtitleai/work` | Per-job scratch space (extracted WAVs, intermediate JSON) | Safe to delete when no job is running |
 
 ## Mixed-hardware / multi-node notes
 
@@ -134,7 +141,7 @@ size auto-downgraded from the configured `medium` to `small`.
   Dockerfile already pins `setuptools<81` and uses `--no-build-isolation` to work around
   this — if you're building outside Docker, do the same:
   `pip install "setuptools<81" && pip install --no-build-isolation openai-whisper==20240930`.
-- **Job stuck in `queued` forever**: check `docker compose logs api` for worker thread
+- **Job stuck in `queued` forever**: check `docker compose logs subtitleai` for worker thread
   errors, and confirm `WORKER_THREADS >= 1`. If GPU-bound, confirm `gpu_slots` was
   initialized (`GET /api/hardware` should show `gpu_count > 0`) — a job waits up to 30
   minutes for a free GPU slot (`JobRunner.GPU_SLOT_WAIT_TIMEOUT_S`) before failing loudly
@@ -143,7 +150,7 @@ size auto-downgraded from the configured `medium` to `small`.
   stage log both record every engine's skip/failure reason — check there first. The most
   common cause is a `whisper_cpp`/`vosk` model path that was never provisioned (both are
   optional fallbacks, disabled by default until you supply model files under
-  `/data/models`).
+  `/config/subtitleai/models`).
 - **Translation quality on idioms**: NLLB-200-distilled-600M is a small, fast model and can
   translate idioms too literally (e.g. "smoke test" → literal "smoke" + "test" in the
   target language rather than the idiomatic equivalent). Swap `nllb_model_name` to a larger

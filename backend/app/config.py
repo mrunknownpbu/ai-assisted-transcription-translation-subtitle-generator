@@ -13,10 +13,10 @@ class Settings(BaseSettings):
 
     # --- Storage paths (mounted volumes in Docker) ---
     media_dir: Path = Path("/data/media")
-    output_dir: Path = Path("/data/output")
-    db_path: Path = Path("/data/db/subtitles.db")
-    models_dir: Path = Path("/data/models")
-    work_dir: Path = Path("/data/work")  # scratch space for extracted audio, intermediates
+    output_dir: Path = Path("/config/subtitleai/output")
+    db_path: Path = Path("/config/subtitleai/db/subtitles.db")
+    models_dir: Path = Path("/config/subtitleai/models")
+    work_dir: Path = Path("/config/subtitleai/work")  # scratch space for extracted audio, intermediates
     # Optional read-only media library root (e.g. a shared media-server library mount).
     # Unset by default — the register-by-path/browse endpoints 404 until this is configured,
     # so a deployment with no such mount just never sees the feature.

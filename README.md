@@ -18,17 +18,23 @@ translation" section.
 
 ```bash
 cp .env.example .env
-docker compose up --build -d        # CPU-only, works everywhere
+docker compose up --build -d        # one container, CPU-only
 # or: docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up --build -d
 ```
 
 Open http://localhost:8080.
 
+The single container serves the React frontend through nginx and runs FastAPI plus its
+in-process workers under supervisord. Mount `/data` for media only and `/config` for
+application state; generated outputs, the SQLite database, model cache, and work files
+live under `/config/subtitleai`.
+
 ## Repository layout
 
 ```
 backend/    FastAPI app, the 11 pipeline stages, job queue/worker, SQLite models, tests
-frontend/   React + TypeScript + Vite GUI
+frontend/   React + TypeScript + Vite GUI source
+docker/     Combined-container nginx and supervisord configuration
 docs/       Architecture, deployment, and runbook documentation
 docker-compose*.yml   Base (CPU) stack + NVIDIA/ROCm overrides
 ```
