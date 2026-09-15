@@ -1,0 +1,79 @@
+# Base stack — CPU-only by default, safe on any host. For NVIDIA GPU acceleration, layer
+# docker-compose.nvidia.yml on top (see docs/DEPLOYMENT.md); for AMD ROCm, layer
+# docker-compose.rocm.yml (documented best-effort, unverified on real ROCm hardware).
+#
+#   CPU only:      docker compose up --build
+#   NVIDIA GPU:    docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up --build
+#   AMD ROCm:      docker compose -f docker-compose.yml -f docker-compose.rocm.yml up --build
+#
+# Both services run as non-root users (see each Dockerfile's USER directive).
+
+services:
+  api:
+    build:
+      context: ./backend
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    image: subtitleai-api:cpu
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      SUBTITLE_MEDIA_DIR: /data/media
+      SUBTITLE_OUTPUT_DIR: /data/output
+      SUBTITLE_DB_PATH: /data/db/subtitles.db
+      SUBTITLE_MODELS_DIR: /data/models
+      SUBTITLE_WORK_DIR: /data/work
+      SUBTITLE_WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-large-v3}
+      # SUBTITLE_ASR_ENGINE_CHAIN: '["faster_whisper","openai_whisper","whisper_cpp","whisper_api","vosk"]'
+      # Uncomment above (as a JSON array) in a .env file to customize the ASR fallback
+      # order; left unset here so the code's own default chain applies.
+      # SUBTITLE_NLLB_MODEL_NAME: facebook/nllb-200-distilled-600M   # override for lower-resource hosts (default: distilled-1.3B)
+      SUBTITLE_OPENAI_WHISPER_API_KEY: ${OPENAI_WHISPER_API_KEY:-}
+      SUBTITLE_TRANSLATION_API_KEY: ${TRANSLATION_API_KEY:-}
+      TVDB_API_KEY: ${TVDB_API_KEY:-}
+      TVDB_API_PIN: ${TVDB_API_PIN:-}
+      SUBTITLE_WORKER_THREADS: ${WORKER_THREADS:-1}
+    volumes:
+      - media_data:/data/media
+      - output_data:/data/output
+      - db_data:/data/db
+      - models_data:/data/models
+      - work_data:/data/work
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPU_LIMIT:-4}"
+          memory: "${API_MEM_LIMIT:-12g}"
+    mem_limit: ${API_MEM_LIMIT:-12g}
+    cpus: "${API_CPU_LIMIT:-4}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+    image: subtitleai-frontend:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "256m"
+    mem_limit: 256m
+    cpus: "0.5"
+
+volumes:
+  media_data:
+  output_data:
+  db_data:
+  models_data:
+  work_data:

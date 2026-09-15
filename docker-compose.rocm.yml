@@ -1,0 +1,19 @@
+# AMD ROCm override — documented best-effort, NOT verified against real ROCm hardware in
+# this build (the development host had no AMD GPU). Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up --build
+# Requires the host to have the amdgpu/ROCm kernel driver installed; the container needs
+# /dev/kfd and /dev/dri plus membership in the host's `video`/`render` groups.
+services:
+  api:
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/rocm6.2
+    image: subtitleai-api:rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - render
+    security_opt:
+      - seccomp:unconfined

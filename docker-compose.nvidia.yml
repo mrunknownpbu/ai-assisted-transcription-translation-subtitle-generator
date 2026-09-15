@@ -1,0 +1,16 @@
+# NVIDIA GPU override — requires the NVIDIA Container Toolkit installed on the host
+# (nvidia-container-toolkit) so Docker can see `--gpus`. Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up --build
+services:
+  api:
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu121
+    image: subtitleai-api:nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

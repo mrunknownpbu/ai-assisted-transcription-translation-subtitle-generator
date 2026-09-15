@@ -1,0 +1,50 @@
+# --- Web framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+websockets==14.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# --- Database ---
+SQLAlchemy==2.0.36
+
+# --- Media / hardware ---
+ffmpeg-python==0.2.0
+py-cpuinfo==9.0.0
+psutil==6.1.1
+numpy==2.2.1
+
+# --- ASR engines (fallback chain) ---
+# VAD (Stage 6) reuses the Silero ONNX model bundled inside faster-whisper (faster_whisper.vad) —
+# no separate silero-vad package needed.
+faster-whisper==1.1.1
+openai-whisper==20240930
+vosk==0.3.45
+requests==2.32.3
+
+# --- Translation (NLLB) ---
+transformers==4.47.1
+sentencepiece==0.2.0
+sacremoses==0.1.1
+httpx==0.28.1  # also used for the optional TVDB glossary-enrichment client (production dependency, not test-only)
+
+# --- Direct SRT translation job type ---
+langdetect==1.0.9
+
+# --- ASR/translation quality QC (trigram repetition + related checks) ---
+# (no extra dependency — implemented with stdlib re/collections)
+
+# --- Layered glossary YAML profiles (global -> category -> series) ---
+pyyaml==6.0.3
+
+# NOTE: torch is intentionally NOT pinned here. The Dockerfile installs it as a separate
+# step with a build-arg-selected --index-url (CPU wheel vs. CUDA wheel) so the same
+# requirements.txt serves both the cpu and nvidia Compose profiles. For local/dev setup
+# outside Docker, install it manually first, e.g.:
+#   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+#   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121   # NVIDIA
+
+# --- Testing ---
+pytest==8.3.4
+pytest-asyncio==0.25.0

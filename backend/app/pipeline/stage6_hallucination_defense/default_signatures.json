@@ -1,0 +1,44 @@
+{
+  "signatures": [
+    {
+      "id": "tr-subtitle-credit-altyazi",
+      "language": "tr",
+      "pattern": "\\baltyaz[ıi]\\b",
+      "category": "subtitle_credit",
+      "weight": 0.9,
+      "description": "Confirmed real Whisper hallucination artifact: a Turkish 'altyazı' (subtitle) credit line injected by the model, not present in the actual audio, observed recurring across multiple episodes of real broadcast content during validation of a sibling project (subtitle-ai)."
+    },
+    {
+      "id": "audio-description-disclaimer",
+      "language": "tr",
+      "pattern": "sesli betimleme|betimleme derneğine",
+      "category": "broadcast_boilerplate",
+      "weight": 0.5,
+      "description": "Turkish broadcaster (TRT) audio-description disclaimer boilerplate. Lower weight than the subtitle-credit signature above since it is plausible-but-unconfirmed as a hallucination rather than genuine broadcast audio; combines with other signals rather than suppressing alone."
+    },
+    {
+      "id": "zh-subtitle-credit-zimuzu",
+      "language": "zh",
+      "pattern": "字幕[组組]",
+      "category": "subtitle_credit",
+      "weight": 0.9,
+      "description": "Confirmed real Whisper hallucination artifact, same class as tr-subtitle-credit-altyazi: a Chinese fansub-team self-credit ('字幕组'/'字幕組', \"subtitle group\") injected at low confidence (0.56) during a long real silence in a real episode (Blossom through the Cloud (2026) S01E01, ~2253s), found via the translation-accuracy evaluation harness and confirmed absent from the actual spoken dialogue by cross-checking the embedded human-made Chinese subtitle track for the same file."
+    },
+    {
+      "id": "generic-credit-url",
+      "language": "any",
+      "pattern": "\\bhttps?://\\S+|\\bwww\\.[a-z0-9-]+\\.[a-z]{2,}\\b",
+      "category": "broadcaster_watermark",
+      "weight": 0.85,
+      "description": "Language-agnostic: nobody speaks a URL out loud in dialogue, in any language, so this needs no per-language entry. Confirmed real case: 'MING PAO CANADA www.MINGPAO.com' (a real Chinese-language Canadian newspaper's own credit line) hallucinated into a Chinese-audio episode's end-credits region (Blossom through the Cloud (2026) S01E01, ~2687s), found via the translation-accuracy evaluation harness."
+    },
+    {
+      "id": "generic-credit-vocabulary",
+      "language": "any",
+      "pattern": "\\b(subtitles? by|subtitles? (group|team)|fansub(?:bing)?|timing by|encoded? by|translated by|qc(?:'d)? by|proofread(?:ed)? by|presented by|television series exclusive|all rights reserved)\\b",
+      "category": "broadcaster_watermark",
+      "weight": 0.75,
+      "description": "Language-agnostic: fansub/broadcaster credit conventions keep these phrases in English even in a non-English show, so one English-vocabulary entry covers many source languages rather than needing a per-language guess for each. Confirmed real case: 'Yo-Yo Television Series Exclusive' (a broadcaster self-credit, 5 words stretched across a 24.8s cue) hallucinated into the same episode's end-credits region. Lower weight than generic-credit-url since a couple of these phrases (e.g. 'presented by') are a little more plausible as genuine dialogue in an unusual context. 'subtitles? (group|team)'/'fansub' added after a follow-up run of the same episode hallucinated the same underlying credit concept as English text ('Subtitles group') instead of the Chinese 字幕组 that zh-subtitle-credit-zimuzu already catches -- confirming ASR can hallucinate the same watermark concept in either language for the same audio, so the English mirror needed covering too."
+    }
+  ]
+}
