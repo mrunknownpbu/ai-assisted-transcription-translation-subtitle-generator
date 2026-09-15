@@ -35,7 +35,7 @@ def extract_tvdb_id_from_path(path: str) -> int | None:
     return int(match.group(1)) if match else None
 
 API_BASE = os.environ.get("TVDB_API_BASE", "https://api4.thetvdb.com/v4")
-CACHE_DIR = Path(os.environ.get("TVDB_CACHE_DIR", "/data/models/tvdb_cache"))
+CACHE_DIR = Path(os.environ.get("TVDB_CACHE_DIR", "/config/subtitleai/models/tvdb_cache"))
 CACHE_TTL = 7 * 24 * 3600
 TOKEN_TTL = 23 * 3600
 REQUEST_TIMEOUT = 10.0

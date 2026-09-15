@@ -21,8 +21,7 @@ docker compose down -v               # stop AND wipe all data — destructive, c
 ## Logs
 
 ```bash
-docker compose logs -f api           # API + in-process worker threads (same process)
-docker compose logs -f frontend      # nginx access/error logs
+docker compose logs -f subtitleai    # nginx, API, and in-process worker threads
 ```
 
 Every job's own stage-by-stage log is also queryable without touching container logs:
@@ -34,7 +33,7 @@ Every job's own stage-by-stage log is also queryable without touching container 
 
 **A job is stuck in `queued`**
 1. `GET /api/hardware` — if `gpu_count > 0` but no job is running, check
-   `docker compose logs api` for a GPU-slot timeout (30 min default,
+   `docker compose logs subtitleai` for a GPU-slot timeout (30 min default,
    `JobRunner.GPU_SLOT_WAIT_TIMEOUT_S`) or an exception during a previous job that left a
    slot held. A held slot only releases on the holding job's completion/exception — a
    killed container (not a graceful shutdown) can leave a stale `held_by` row in
@@ -71,8 +70,8 @@ The only thing that needs backing up beyond the media/output files themselves is
 `db_data` (`subtitles.db`, SQLite in WAL mode):
 
 ```bash
-docker compose exec api sqlite3 /data/db/subtitles.db ".backup /data/db/backup.db"
-docker cp $(docker compose ps -q api):/data/db/backup.db ./subtitles-backup-$(date +%F).db
+docker compose exec subtitleai sqlite3 /config/subtitleai/db/subtitles.db ".backup /config/subtitleai/db/backup.db"
+docker cp $(docker compose ps -q subtitleai):/config/subtitleai/db/backup.db ./subtitles-backup-$(date +%F).db
 ```
 
 Using `.backup` (not a raw file copy) is important under WAL mode — a plain `cp` of
@@ -84,7 +83,7 @@ snapshot.
 Everything is reachable via a normal SQLite client if the API can't express what you need:
 
 ```bash
-docker compose exec api python3 -c "
+docker compose exec subtitleai python3 -c "
 from app.db.session import session_scope
 from app.db.models import GpuSlot
 with session_scope() as s:
@@ -94,14 +93,14 @@ with session_scope() as s:
 ```
 
 This forcibly frees every GPU slot — only do this when you've confirmed no job is actually
-using the GPU right now (check `docker compose logs api` for an in-flight ASR/translation
+using the GPU right now (check `docker compose logs subtitleai` for an in-flight ASR/translation
 call first).
 
 ## Resource exhaustion
 
 - The `api` container has hard CPU/memory limits (`API_CPU_LIMIT`/`API_MEM_LIMIT` in
   `.env`) so a runaway job can't take down the host. If jobs are being OOM-killed
-  (`docker compose logs api` shows the process just stops mid-stage, and
+  (`docker compose logs subtitleai` shows the process just stops mid-stage, and
   `docker inspect <container> --format '{{.State.OOMKilled}}'` reports `true`), lower
   `WHISPER_MODEL_SIZE` / the NLLB model size, or raise `API_MEM_LIMIT` if the host has
   headroom.
@@ -135,7 +134,7 @@ first time it tries to write that column. There is no Alembic-style migration to
 - **Real data to preserve**: back up the DB first (see Backups above), then add the missing
   column(s) by hand before restarting, e.g.:
   ```bash
-  docker compose exec api sqlite3 /data/db/subtitles.db \
+  docker compose exec subtitleai sqlite3 /config/subtitleai/db/subtitles.db \
     "ALTER TABLE jobs ADD COLUMN job_type TEXT DEFAULT 'audio_pipeline';"
   ```
   Check `app/db/models.py`'s diff against your running version for the exact columns/types

@@ -23,16 +23,17 @@ RUN pip install --no-cache-dir --upgrade pip "setuptools<81" wheel \
 
 COPY app ./app
 
-RUN mkdir -p /data/media /data/output /data/db /data/models /data/work \
-    && chown -R appuser:appuser /data /app
+RUN mkdir -p /data/media /config/subtitleai/db /config/subtitleai/output \
+    /config/subtitleai/models /config/subtitleai/work \
+    && chown -R appuser:appuser /data /config /app
 
 USER appuser
 
 ENV SUBTITLE_MEDIA_DIR=/data/media \
-    SUBTITLE_OUTPUT_DIR=/data/output \
-    SUBTITLE_DB_PATH=/data/db/subtitles.db \
-    SUBTITLE_MODELS_DIR=/data/models \
-    SUBTITLE_WORK_DIR=/data/work \
+    SUBTITLE_OUTPUT_DIR=/config/subtitleai/output \
+    SUBTITLE_DB_PATH=/config/subtitleai/db/subtitles.db \
+    SUBTITLE_MODELS_DIR=/config/subtitleai/models \
+    SUBTITLE_WORK_DIR=/config/subtitleai/work \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8000
