@@ -150,7 +150,14 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     # None tells faster-whisper to auto-detect from the audio itself --
     # never from filename, folder name, or any existing subtitle.
     asr_language = None if source_lang == AUTO else source_lang
-    asr_config = asr_config or AsrConfig(language=asr_language)
+    # Same per-series entity list translation uses for protection, fed to
+    # ASR too -- faster-whisper's hotwords biases decoding toward the
+    # correct spelling of known character/place names without forcing
+    # them into the output. Built here (flat surface forms, not the
+    # placeholder-keyed glossary_map below) because ASR runs before that
+    # map exists.
+    hotwords = " ".join(sorted({form for e in (glossary_entities or []) for form in e.surface_forms})) or None
+    asr_config = asr_config or AsrConfig(language=asr_language, hotwords=hotwords)
 
     # Cache lookup key is computed BEFORE extraction/ASR so a hit can skip
     # both. AUTO mode uses auto_lookup_key() (no language -- unknown until
@@ -165,7 +172,8 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     if transcript_cache_dir is not None:
         asr_params = {"beam_size": asr_config.beam_size, "temperature": list(asr_config.temperature),
                      "condition_on_previous_text": asr_config.condition_on_previous_text,
-                     "vad_filter": asr_config.vad_filter, "compute_type": asr_config.compute_type}
+                     "vad_filter": asr_config.vad_filter, "compute_type": asr_config.compute_type,
+                     "hotwords": asr_config.hotwords}
         if source_lang == AUTO:
             lookup_key = auto_lookup_key(media_hash, audio_stream_index, selected_stream.codec,
                                          asr_config.model_name, asr_params, None, PIPELINE_VERSION)

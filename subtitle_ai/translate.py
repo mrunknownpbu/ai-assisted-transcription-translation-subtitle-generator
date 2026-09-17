@@ -45,7 +45,17 @@ _SENTENCE_END = re.compile(r"[.!?…]['\"»)\]]*$")
 @dataclass
 class TranslationConfig:
     repo: str = NLLB_REPO
-    device: str = "cuda"
+    # cpu, not cuda: this deployment's GPU (Tesla P4, 8GB) is shared with
+    # other real GPU consumers on the same host (Ollama, Tdarr/Plex
+    # hardware transcode) -- confirmed present via nvidia-smi during this
+    # deployment's own validation. Translation is a much smaller fraction
+    # of total job time than ASR (~3 of ~49 minutes on a real completed
+    # episode), so trading its speed for not exclusively pinning the
+    # shared GPU for that window is a reasonable default here. The host
+    # has 24 CPU cores / 125GB RAM idle, comfortably enough for a 1.3B
+    # model. ASR (asr.AsrConfig) stays on cuda -- it's the stage that
+    # actually needs GPU speed.
+    device: str = "cpu"
     max_new_tokens: int = 256
     num_beams: int = 4
     batch_size: int = 12   # confirmed necessary by a real CUDA OOM on a 48-span clip; see translate_batch()
@@ -166,7 +176,12 @@ def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
     owns_model = model is None
     from contextlib import nullcontext
     from gpu import gpu_lock
-    with gpu_lock() if owns_model else nullcontext():
+    # gpu_lock() serializes GPU contention (see gpu.py's module docstring)
+    # -- holding it for a CPU-only stage protects nothing and needlessly
+    # blocks the Analyze endpoint's stream-sampler (a real GPU consumer)
+    # for the duration of CPU translation.
+    needs_gpu_lock = owns_model and config.device == "cuda"
+    with gpu_lock() if needs_gpu_lock else nullcontext():
         try:
             if owns_model:
                 # Construction inside the try for the same reason as

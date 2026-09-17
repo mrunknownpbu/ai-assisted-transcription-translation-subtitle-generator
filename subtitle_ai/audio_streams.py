@@ -197,7 +197,17 @@ def default_sampler(model_name: str = "large-v3"):
     def sample(wav_path: Path) -> tuple[str, float]:
         if "model" not in state:
             from faster_whisper import WhisperModel
-            state["model"] = WhisperModel(model_name, device="cuda", compute_type="float16",
+            # compute_type sourced from asr.AsrConfig's own default, not a
+            # second hardcoded "float16" -- real defect (2026-09-17): this
+            # function used to hardcode float16 independently of asr.py's
+            # AsrConfig, so fixing the ASR stage's float16/Tesla-P4
+            # mismatch here still left THIS model construction broken,
+            # confirmed by a real job's AUDIO_STREAM_RECOMMENDED falling
+            # back to "language sampling failed" and a weaker default
+            # disposition instead of real per-stream language detection.
+            from asr import AsrConfig
+            state["model"] = WhisperModel(model_name, device="cuda",
+                                          compute_type=AsrConfig().compute_type,
                                           download_root="/models")
         model = state["model"]
         _segments, info = model.transcribe(str(wav_path), beam_size=1, vad_filter=True)

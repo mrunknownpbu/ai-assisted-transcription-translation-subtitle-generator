@@ -7,7 +7,6 @@ from __future__ import annotations
 import os
 
 import api
-import glossary_profile
 from worker import Worker
 
 DB_PATH = os.environ.get("SUBTITLE_AI_DB", "/cache/jobs.db")
@@ -21,12 +20,10 @@ TRANSCRIPT_CACHE_DIR = os.environ.get("SUBTITLE_AI_TRANSCRIPT_CACHE", "/cache/tr
 
 app = api.create_app(DB_PATH, MEDIA_ROOT)
 
-try:
-    _profile = glossary_profile.load_profile(GLOSSARY_DIR)
-    _entities = _profile.entities
-except FileNotFoundError:
-    _entities = []
-
-_worker = Worker(api.get_store(), MEDIA_ROOT, WORK_ROOT, glossary_entities=_entities,
+# Glossary is loaded PER JOB, keyed by that job's own tvdb_id -- see
+# Worker._load_glossary_entities(). A one-time load here (as this used to
+# do, with no tvdb_id) could only ever see the global/category layer; a
+# series-specific file would never be selected regardless of its content.
+_worker = Worker(api.get_store(), MEDIA_ROOT, WORK_ROOT, glossary_dir=GLOSSARY_DIR,
                 transcript_cache_dir=TRANSCRIPT_CACHE_DIR)
 _worker.start()

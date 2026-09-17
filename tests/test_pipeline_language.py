@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pipeline
+from glossary import Entity
 from transcript import CanonicalTranscript, ModelInfo, Segment, Word
 
 
@@ -144,6 +145,44 @@ class AutoDetectLanguageTests(unittest.TestCase):
         result_manual = self._run(_fake_transcript("ja", 1.0), source_lang="ja")
         result_auto = self._run(_fake_transcript("ja", 0.9), source_lang="auto")
         self.assertEqual(result_manual.detected_source_language, result_auto.detected_source_language)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not available")
+class GlossaryHotwordsTests(unittest.TestCase):
+    """The same per-series glossary translation uses for entity
+    protection is also fed to ASR as hotwords, biasing decoding toward
+    correct name spelling -- built before glossary_map exists, since ASR
+    runs first."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.video = Path(self.tmp.name) / "video.mkv"
+        _make_fixture_video(self.video)
+        self.work_dir = Path(self.tmp.name) / "work"
+
+    def _run_and_capture_config(self, glossary_entities):
+        fake_translate = lambda cues, spans, src_lang, **_kw: ["translated"] * len(spans)
+        with patch.object(pipeline, "asr_transcribe",
+                          return_value=_fake_transcript("tr", 0.95)) as mock_asr, \
+             patch.object(pipeline.translate, "translate_spans", side_effect=fake_translate):
+            pipeline.run(video_path=str(self.video), media_root=str(self.tmp.name),
+                        work_dir=str(self.work_dir), write_output=False,
+                        stream_sampler=lambda wav: ("tr", 0.9),
+                        glossary_entities=glossary_entities)
+        return mock_asr.call_args.kwargs["config"]
+
+    def test_glossary_surface_forms_become_hotwords(self):
+        entities = [Entity(canonical="Eda", surface_forms=["Eda"]),
+                   Entity(canonical="Serkan", surface_forms=["Serkan", "Serkan Bolat"])]
+        config = self._run_and_capture_config(entities)
+        hotwords = set(config.hotwords.split(" "))
+        self.assertIn("Eda", hotwords)
+        self.assertIn("Serkan", hotwords)
+
+    def test_no_glossary_entities_leaves_hotwords_unset(self):
+        config = self._run_and_capture_config(None)
+        self.assertIsNone(config.hotwords)
 
 
 if __name__ == "__main__":

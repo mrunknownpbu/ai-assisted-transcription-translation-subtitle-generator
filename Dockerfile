@@ -27,6 +27,11 @@ RUN uv pip install --python /app/.venv/bin/python --no-deps \
     find /opt/cudnn8 -name "*.so.9*" -delete
 
 ENV PATH="/app/.venv/bin:$PATH"
+# Declared via ARG first, not left implicit: silences Docker's own
+# "undefined variable" build lint on the ${LD_LIBRARY_PATH} reference
+# below with zero behavior change -- this base image never sets it, so
+# the default was always effectively "".
+ARG LD_LIBRARY_PATH=""
 ENV LD_LIBRARY_PATH="/opt/cudnn8/nvidia/cudnn/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cublas/lib:${LD_LIBRARY_PATH}"
 
 COPY subtitle_ai /app

@@ -17,6 +17,7 @@ import traceback
 from pathlib import Path
 
 import api
+import glossary_profile
 import gpu
 import pipeline
 from jobstore import JobStore
@@ -29,16 +30,36 @@ class JobCancelled(RuntimeError):
 
 class Worker(threading.Thread):
     def __init__(self, store: JobStore, media_root: str, work_root: str,
-                 glossary_entities=None, poll_interval: float = 1.0,
+                 glossary_dir: str | None = None, poll_interval: float = 1.0,
                  transcript_cache_dir: str | None = None):
         super().__init__(name="subtitle-ai-worker", daemon=True)
         self.store = store
         self.media_root = media_root
         self.work_root = Path(work_root)
-        self.glossary_entities = glossary_entities or []
+        self.glossary_dir = glossary_dir
         self.poll_interval = poll_interval
         self.transcript_cache_dir = transcript_cache_dir
         self._stop_event = threading.Event()
+
+    def _load_glossary_entities(self, video_path: str) -> list:
+        """Real defect (2026-09-17): the glossary used to be loaded ONCE
+        at process startup with no tvdb_id (see the prior main.py), so
+        load_profile() could only ever pick up the global/category layer
+        -- a series-specific glossary file, keyed by tvdb_id, would sit in
+        the glossary directory and silently never be selected, regardless
+        of what it contained. Loading per-job, keyed by THIS job's own
+        tvdb_id (extracted from its path -- see glossary_profile.
+        find_tvdb_id()), is what actually lets a per-series glossary take
+        effect. Never fails a job: a missing directory, a missing/
+        malformed series file, or no tvdb_id in the path all degrade to
+        "no series-specific entities", same as before this existed."""
+        if not self.glossary_dir:
+            return []
+        try:
+            tvdb_id = glossary_profile.find_tvdb_id(video_path)
+            return glossary_profile.load_profile(self.glossary_dir, tvdb_id=tvdb_id).entities
+        except (FileNotFoundError, OSError):
+            return []
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -95,6 +116,7 @@ class Worker(threading.Thread):
             # which govern only the final on-disk SRT write, below --
             # neither one substitutes for the other.
             cache_dir = None if job.get("retry_of_job_id") else self.transcript_cache_dir
+            glossary_entities = self._load_glossary_entities(job["video_path"])
 
             # Evict the API's cached Analyze-sampler before this job's own
             # GPU-heavy work starts. Confirmed by direct reproduction: the
@@ -131,7 +153,7 @@ class Worker(threading.Thread):
                     video_path=str(Path(self.media_root) / job["video_path"]),
                     media_root=self.media_root, work_dir=str(work_dir),
                     source_lang=source_lang, audio_stream_index=job.get("requested_audio_stream"),
-                    glossary_entities=self.glossary_entities,
+                    glossary_entities=glossary_entities,
                     transcript_cache_dir=cache_dir,
                     write_output=True, allow_overwrite=True,   # scratch dir only -- always safe to overwrite
                     on_event=on_event,

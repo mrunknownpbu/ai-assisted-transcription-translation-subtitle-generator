@@ -58,9 +58,13 @@ Each job moves through the following stages:
 
 ## Status
 
-Production-deployed, running on a single NVIDIA RTX 3070 GPU. Test suite
-currently at 328 passing tests covering the pipeline stages, QC
-categories, caching, job store, and API layer.
+Production-deployed, running on a single NVIDIA Tesla P4 GPU (Pascal,
+`int8` compute -- this card has no efficient `float16` tensor
+throughput; see `asr.AsrConfig.compute_type`'s docstring). Translation
+(NLLB) runs on CPU, not GPU, to avoid pinning the shared card during
+that stage -- see `translate.TranslationConfig.device`'s docstring. Test
+suite currently at 365 passing tests covering the pipeline stages, QC
+categories, caching, job store, glossary loading, and API layer.
 
 ## Running it
 

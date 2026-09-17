@@ -83,6 +83,65 @@ class SuccessfulJobTests(WorkerTestCase):
         self.assertFalse((self.media_root / "Show" / "S01E01.en.srt").exists())
 
 
+class GlossaryLoadingTests(unittest.TestCase):
+    """Real defect (2026-09-17): the glossary used to be loaded ONCE at
+    process startup with no tvdb_id, so a series-specific glossary file
+    could never be selected regardless of its content. These confirm it's
+    now loaded per job, keyed by that job's own tvdb_id."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.media_root = Path(self.tmp.name) / "data"
+        self.work_root = Path(self.tmp.name) / "work"
+        self.glossary_dir = Path(self.tmp.name) / "glossary"
+        self.glossary_dir.mkdir(parents=True)
+        show_dir = self.media_root / "Show {tvdb-383383}"
+        show_dir.mkdir(parents=True)
+        (show_dir / "S01E01.mkv").touch()
+        (self.glossary_dir / "show.yaml").write_text(
+            "tvdb_id: 383383\n"
+            "title: Show\n"
+            "entities:\n"
+            "  - canonical: Eda\n"
+            "    protected: true\n",
+            encoding="utf-8")
+        self.store = JobStore(Path(self.tmp.name) / "jobs.db")
+
+    def test_series_specific_glossary_reaches_pipeline_run(self):
+        worker = Worker(self.store, str(self.media_root), str(self.work_root),
+                        glossary_dir=str(self.glossary_dir))
+        job = self.store.create("Show {tvdb-383383}/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        entities = mock_run.call_args.kwargs["glossary_entities"]
+        self.assertEqual([e.canonical for e in entities], ["Eda"])
+
+    def test_no_glossary_dir_configured_yields_no_entities(self):
+        worker = Worker(self.store, str(self.media_root), str(self.work_root))
+        job = self.store.create("Show {tvdb-383383}/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        self.assertEqual(mock_run.call_args.kwargs["glossary_entities"], [])
+
+    def test_a_different_series_tvdb_id_does_not_get_this_glossary(self):
+        worker = Worker(self.store, str(self.media_root), str(self.work_root),
+                        glossary_dir=str(self.glossary_dir))
+        other_dir = self.media_root / "Other {tvdb-999}"
+        other_dir.mkdir(parents=True)
+        (other_dir / "S01E01.mkv").touch()
+        job = self.store.create("Other {tvdb-999}/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        self.assertEqual(mock_run.call_args.kwargs["glossary_entities"], [])
+
+
 class KeepReplaceTests(WorkerTestCase):
     def test_keep_does_not_overwrite_existing_output(self):
         target = self.media_root / "Show" / "S01E01.en.srt"
