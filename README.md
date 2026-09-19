@@ -1,18 +1,33 @@
 # AI-Assisted Transcription & Translation Subtitle Generator
 
-An automated pipeline that takes a video file with embedded or external
-audio, transcribes the spoken dialogue, translates it, and produces a
-timed, quality-checked subtitle file — with no manual transcription or
-translation step.
+An automated pipeline that takes a video file with embedded audio,
+transcribes the spoken dialogue, translates it, and produces a timed,
+quality-checked subtitle file — with no manual transcription or
+translation step. A second, independent workflow translates an
+already-transcribed original-language `.srt` straight to English,
+without any ASR step (see "Workflows" below).
 
 It's built for long-form video (TV episodes, films) where subtitles either
 don't exist in the target language or need to be regenerated, and is
 tuned to avoid the two failure modes that make machine-generated
 subtitles unusable in practice: hallucinated text and mistimed lines.
 
+## Workflows
+
+- **Workflow A — video transcription** (the pipeline below): video → audio
+  → ASR → translation → English subtitle. Audio is the sole source of
+  truth here; no subtitle file is ever read as transcription input.
+- **Workflow B — subtitle translation**: an existing original-language
+  `.srt` (e.g. a downloaded fansub) → translation → English subtitle. No
+  ASR, no audio extraction -- the uploaded/selected `.srt` is already the
+  transcription, and is never treated as though it came from ASR. Started
+  from the "Translate Subtitle" page, it reuses the same translation
+  engine, glossary, GPU lock, and job queue as Workflow A, but is a
+  structurally separate pipeline (`srt_translation.py`).
+
 ## Pipeline
 
-Each job moves through the following stages:
+Workflow A (video transcription) moves through the following stages:
 
 1. **Audio inspection** — probe the container for available audio streams
    and their properties.
@@ -61,10 +76,14 @@ Each job moves through the following stages:
 Production-deployed, running on a single NVIDIA Tesla P4 GPU (Pascal,
 `int8` compute -- this card has no efficient `float16` tensor
 throughput; see `asr.AsrConfig.compute_type`'s docstring). Translation
-(NLLB) runs on CPU, not GPU, to avoid pinning the shared card during
-that stage -- see `translate.TranslationConfig.device`'s docstring. Test
-suite currently at 365 passing tests covering the pipeline stages, QC
-categories, caching, job store, glossary loading, and API layer.
+(NLLB) runs on GPU, serialized against ASR via the same per-job GPU lock
+(see `translate.TranslationConfig.device`'s docstring for the real
+VRAM-headroom analysis behind this and the safety margin tuned into
+`num_beams`/`batch_size`) -- this does mean real, ongoing GPU contention
+with any other process sharing the card (e.g. a hardware-transcode tool),
+which is not eliminated. Run `python -m pytest tests -q` (see `.github/
+workflows/test.yml` for the exact CPU-only setup) rather than trusting a
+hardcoded number here, since it drifts with every change.
 
 ## Running it
 

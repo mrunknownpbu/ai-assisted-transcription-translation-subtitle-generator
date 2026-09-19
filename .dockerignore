@@ -1,0 +1,54 @@
+# Never needed inside the build context -- keeps `docker compose build`
+# from uploading multi-GB dev fixtures/media to the daemon on every build.
+
+.git/
+.github/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Frontend build tooling -- the Dockerfile's frontend-build stage installs
+# and builds these fresh; node_modules/dist from a host-side `npm install`
+# must never be copied in as stale/wrong-platform artifacts.
+frontend/node_modules/
+frontend/dist/
+
+# Model weights / cache / runtime data (mounted volumes in compose.yml,
+# never baked into the image)
+models/
+cache/
+transcripts/
+*.db
+*.db-shm
+*.db-wal
+
+# Dev fixtures, scratch, copyrighted reference corpus, benchmark output,
+# old zipped snapshots -- large, not shipped code
+dev-sandbox/
+dev-scratch/
+srt-output/
+benchmark-results/
+archive/
+
+# Media fixtures (defensive)
+*.mkv
+*.mp4
+*.avi
+*.wav
+*.mp3
+
+# Secrets
+.env
+.env.*
+*secret*
+*token*
+*credential*
+
+# Editor/OS cruft
+.DS_Store
+*.swp

@@ -51,8 +51,37 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(result, [])
         mock_gen.assert_not_called()
 
-    def test_default_batch_size_is_12(self):
-        self.assertEqual(TranslationConfig().batch_size, 12)
+    def test_default_batch_size_is_8(self):
+        # Lowered from 12 (2026-09-19, real S01E04 OOM -- see
+        # TranslationConfig's docstring) for GPU-translation safety margin.
+        self.assertEqual(TranslationConfig().batch_size, 8)
+
+    def test_default_num_beams_is_2(self):
+        # Halved from 4 (2026-09-19, same real OOM) for the same reason.
+        self.assertEqual(TranslationConfig().num_beams, 2)
+
+
+class GpuMemoryReleaseTests(unittest.TestCase):
+    """Real production evidence (2026-09-19, a full episode on GPU
+    translation): without a release after every chunk, PyTorch's caching
+    allocator visibly grew across ~51 chunks of one translation stage
+    (5442MiB -> 7530MiB on a 7680MiB card, 71MiB free at the low point)
+    even though every chunk was the same shape. One free_gpu() per chunk
+    keeps peak usage from climbing toward the card's ceiling."""
+
+    def test_free_gpu_called_after_each_cuda_batch(self):
+        sentences = [f"s{i}" for i in range(25)]
+        with patch.object(translate, "_generate_one_batch", return_value=["t"]), \
+             patch("gpu.free_gpu") as mock_free:
+            translate_batch(None, None, 0, sentences, "cuda", TranslationConfig(batch_size=10))
+        self.assertEqual(mock_free.call_count, 3)  # 10 + 10 + 5
+
+    def test_free_gpu_not_called_for_cpu_translation(self):
+        sentences = ["a", "b"]
+        with patch.object(translate, "_generate_one_batch", return_value=["t"]), \
+             patch("gpu.free_gpu") as mock_free:
+            translate_batch(None, None, 0, sentences, "cpu", TranslationConfig(batch_size=10))
+        mock_free.assert_not_called()
 
 
 class FakeEncoding(dict):

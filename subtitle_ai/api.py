@@ -5,24 +5,45 @@ guess a backend field name.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import shutil
 import tempfile
+import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+import yaml
+from fastapi import FastAPI, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import audio_streams
+import glossary_profile
 import media
+import translate
+from events import EventBus
 from jobstore import JobStore, JobStoreError
 from media import VIDEO_EXTENSIONS
-from output import OutputSafetyError, resolve_media_path, resolve_output_path
+from output import OutputSafetyError, resolve_media_path, resolve_output_path, write_srt_atomic
 
 STATIC_DIR = Path(__file__).parent / "static"
-STATIC_FILES = {"app.js", "style.css"}
 
-app = FastAPI(title="Subtitle AI v2", docs_url=None, redoc_url=None)
+_event_bus = EventBus()
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # asyncio.Queue.put_nowait() (inside EventBus.publish) is only safe to
+    # call from the thread running the loop it belongs to -- publish() is
+    # called from worker.py's background threading.Thread, so the bus
+    # needs a handle on the loop that's actually serving requests, bound
+    # once uvicorn's loop is running (not importable/available earlier).
+    _event_bus.bind_loop(asyncio.get_running_loop())
+    yield
+
+
+app = FastAPI(title="Subtitle AI v2", docs_url=None, redoc_url=None, lifespan=_lifespan)
 
 
 def get_store() -> JobStore:
@@ -38,14 +59,51 @@ def get_media_root() -> str:
     return _media_root
 
 
+def get_glossary_dir() -> str | None:
+    global _glossary_dir
+    return _glossary_dir
+
+
+def get_glossary_suggestions_dir() -> str | None:
+    global _glossary_suggestions_dir
+    return _glossary_suggestions_dir
+
+
+def get_srt_upload_dir() -> str | None:
+    global _srt_upload_dir
+    return _srt_upload_dir
+
+
+def get_event_bus() -> EventBus:
+    return _event_bus
+
+
+def get_static_dir() -> Path:
+    global _static_dir
+    return _static_dir
+
+
 _store: JobStore | None = None
 _media_root: str = "/data"
+_glossary_dir: str | None = None
+_glossary_suggestions_dir: str | None = None
+_srt_upload_dir: str | None = None
+_static_dir: Path = STATIC_DIR
 
 
-def create_app(db_path: str | Path, media_root: str = "/data") -> FastAPI:
-    global _store, _media_root
-    _store = JobStore(db_path)
+def create_app(db_path: str | Path, media_root: str = "/data", *,
+               glossary_dir: str | None = None,
+               glossary_suggestions_dir: str | None = None,
+               srt_upload_dir: str | None = None,
+               static_dir: str | Path | None = None) -> FastAPI:
+    global _store, _media_root, _glossary_dir, _glossary_suggestions_dir, _srt_upload_dir, _static_dir
+    _store = JobStore(db_path, on_change=lambda job_id: _event_bus.publish(
+        {"type": "job_changed", "job_id": job_id}))
     _media_root = media_root
+    _glossary_dir = glossary_dir
+    _glossary_suggestions_dir = glossary_suggestions_dir
+    _srt_upload_dir = srt_upload_dir
+    _static_dir = Path(static_dir) if static_dir else STATIC_DIR
     return app
 
 
@@ -62,9 +120,33 @@ class JobRequest(BaseModel):
     overwrite_english: bool = False
 
 
-class RetryRequest(BaseModel):
-    overwrite_original: bool = False
+class SrtTranslationRequest(BaseModel):
+    # REQUIRED, not optional: the destination is DERIVED from this (see
+    # create_srt_translation_job -- resolve_output_path(), the exact same
+    # function create_job() already uses for the video workflow), and
+    # tvdb_id (hence which series-specific glossary applies during
+    # translation) is derived from it too. There is no independent
+    # destination field a client can set directly.
+    video_path: str
+    # Exactly one of these two must be given -- a library-relative path,
+    # or the id returned by POST /api/srt-uploads. Both default to None
+    # so the handler can tell "neither" from "both" apart.
+    source_srt_path: str | None = None
+    source_upload_id: str | None = None
+    # "auto" (the default) means detect the language from the subtitle
+    # text itself (see srt_translation.py) -- an explicit 2-3 letter code
+    # is a manual override. Same pattern/validator as JobRequest.source_lang.
+    source_lang: str = Field(default="auto", pattern=r"^(auto|[a-z]{2,3})$")
+    target_lang: str = Field(default="en", pattern=r"^[a-z]{2,3}$")
     overwrite_english: bool = False
+
+
+class RetryRequest(BaseModel):
+    # None (the default) means "not specified, inherit the original job's
+    # value" -- see retry_job()'s model_fields_set handling below. An
+    # explicit true/false always wins over inheritance.
+    overwrite_original: bool | None = None
+    overwrite_english: bool | None = None
     source_lang: str | None = Field(default=None, pattern=r"^(auto|[a-z]{2,3})$")
     audio_stream_index: int | None = Field(default=None, ge=0)
 
@@ -74,22 +156,13 @@ def health() -> dict:
     return {"ok": True, "queue": "sqlite"}
 
 
-@app.get("/")
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
-
-
-@app.get("/static/{filename}")
-def static_file(filename: str) -> FileResponse:
-    # Whitelist, not a raw filesystem join -- a filename is never used to
-    # build a path, only to select one of two known-safe files.
-    if filename not in STATIC_FILES:
-        raise HTTPException(status_code=404)
-    return FileResponse(STATIC_DIR / filename)
-
-
 @app.get("/api/browse")
-def browse(path: str = Query("")) -> dict:
+def browse(path: str = Query(""), file_type: str = Query("video", pattern=r"^(video|srt)$")) -> dict:
+    """file_type="video" (the default, unchanged from before this param
+    existed) lists directories + video files, for the existing video-job
+    workflow. file_type="srt" lists directories + .srt files instead, for
+    the SRT-translation workflow's source-file picker -- a directory is
+    always listed either way so both pickers can navigate the same tree."""
     try:
         directory = resolve_media_path(get_media_root(), path, must_exist=True)
     except OutputSafetyError as exc:
@@ -97,6 +170,7 @@ def browse(path: str = Query("")) -> dict:
     if not directory.is_dir():
         raise HTTPException(status_code=400, detail="not a directory")
     root = Path(get_media_root()).resolve()
+    wanted_suffix = ".srt" if file_type == "srt" else None
     entries = []
     for entry in sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
         try:
@@ -106,7 +180,10 @@ def browse(path: str = Query("")) -> dict:
         rel = str(resolved.relative_to(root))
         if resolved.is_dir():
             entries.append({"name": entry.name, "path": rel, "type": "directory"})
-        elif resolved.is_file() and resolved.suffix.lower() in VIDEO_EXTENSIONS:
+        elif resolved.is_file() and wanted_suffix is not None and resolved.suffix.lower() == wanted_suffix:
+            entries.append({"name": entry.name, "path": rel, "type": "srt",
+                            "size": resolved.stat().st_size})
+        elif resolved.is_file() and wanted_suffix is None and resolved.suffix.lower() in VIDEO_EXTENSIONS:
             entries.append({"name": entry.name, "path": rel, "type": "video",
                             "size": resolved.stat().st_size})
     return {"path": str(directory.relative_to(root)) if directory != root else "", "entries": entries}
@@ -247,6 +324,119 @@ def create_job(request: JobRequest) -> dict:
     return {"job": job}
 
 
+@app.get("/api/languages")
+def list_languages() -> dict:
+    """Single source of truth for source-language choices: translate.
+    NLLB_LANG's own keys, not a second hardcoded list -- a language this
+    deployment's NLLB build can't actually translate should never appear
+    as a selectable option."""
+    return {"languages": sorted(translate.NLLB_LANG.keys())}
+
+
+MAX_SRT_UPLOAD_BYTES = 2 * 1024 * 1024  # 2 MiB -- generous for any real subtitle file
+
+
+@app.post("/api/srt-uploads", status_code=201)
+async def upload_srt(file: UploadFile) -> dict:
+    """Real browser upload for the SRT-translation workflow. The client
+    filename is NEVER trusted as a path -- it's stored only for display,
+    and a fresh uuid names the file on disk. Staged under
+    get_srt_upload_dir() (app-owned /cache state), never the media root --
+    an uploaded file is transient input, not part of the user's library."""
+    upload_dir = get_srt_upload_dir()
+    if not upload_dir:
+        raise HTTPException(status_code=503, detail="SRT upload is not configured")
+    original_name = Path(file.filename or "").name  # strip any path components, display-only
+    if not original_name.lower().endswith(".srt"):
+        raise HTTPException(status_code=400, detail="uploaded file must have a .srt extension")
+
+    chunks = []
+    total = 0
+    while True:
+        chunk = await file.read(65536)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_SRT_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="uploaded file exceeds the 2 MiB limit")
+        chunks.append(chunk)
+    raw = b"".join(chunks)
+    try:
+        content = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="uploaded file is not valid UTF-8 text") from exc
+
+    upload_id = uuid.uuid4().hex
+    target = Path(upload_dir) / f"{upload_id}.srt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    write_srt_atomic(target, content, allow_overwrite=False)
+    return {"upload_id": upload_id, "filename": original_name}
+
+
+@app.post("/api/srt-translations", status_code=201)
+def create_srt_translation_job(request: SrtTranslationRequest) -> dict:
+    """Original-language .srt -> English .srt, no ASR involved -- see
+    srt_translation.py's module docstring. video_path is REQUIRED: the
+    destination is derived from it (resolve_output_path(), the identical
+    function create_job() uses for the video workflow) and so is tvdb_id
+    (via JobStore.create_srt_translation() -> glossary_profile.
+    find_tvdb_id()) -- there is no way to submit this job without a real
+    episode association, by design (see this session's plan: an optional
+    association was silently degrading translation accuracy)."""
+    try:
+        video = resolve_media_path(get_media_root(), request.video_path, must_exist=True)
+    except OutputSafetyError as exc:
+        raise HTTPException(status_code=400, detail=f"video_path: {exc}") from exc
+
+    try:
+        destination = resolve_output_path(get_media_root(), request.video_path, request.target_lang)
+    except OutputSafetyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if bool(request.source_srt_path) == bool(request.source_upload_id):
+        raise HTTPException(
+            status_code=400,
+            detail="exactly one of source_srt_path or source_upload_id must be given")
+
+    source_is_uploaded = request.source_upload_id is not None
+    if source_is_uploaded:
+        upload_dir = get_srt_upload_dir()
+        if not upload_dir:
+            raise HTTPException(status_code=503, detail="SRT upload is not configured")
+        try:
+            source = resolve_media_path(upload_dir, f"{request.source_upload_id}.srt", must_exist=True)
+        except OutputSafetyError as exc:
+            raise HTTPException(status_code=400, detail=f"source_upload_id: {exc}") from exc
+        source_root = Path(upload_dir).resolve()
+    else:
+        try:
+            source = resolve_media_path(get_media_root(), request.source_srt_path, must_exist=True)
+        except OutputSafetyError as exc:
+            raise HTTPException(status_code=400, detail=f"source_srt_path: {exc}") from exc
+        source_root = Path(get_media_root()).resolve()
+    if source.suffix.lower() != ".srt":
+        raise HTTPException(status_code=400, detail="source must be a .srt file")
+
+    if source == destination:
+        raise HTTPException(status_code=400,
+                            detail="source subtitle and destination must not be identical")
+
+    if request.source_lang != "auto" and request.source_lang not in translate.NLLB_LANG:
+        raise HTTPException(status_code=400,
+                            detail=f"unsupported source_lang: {request.source_lang!r}")
+
+    media_root = Path(get_media_root()).resolve()
+    try:
+        job = get_store().create_srt_translation(
+            str(source.relative_to(source_root)), str(destination.relative_to(media_root)),
+            source_lang=request.source_lang, target_lang=request.target_lang,
+            video_path=str(video.relative_to(media_root)), overwrite_english=request.overwrite_english,
+            source_is_uploaded=source_is_uploaded)
+    except JobStoreError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"job": job}
+
+
 @app.get("/api/jobs")
 def list_jobs(status: str | None = Query(None), limit: int = Query(50, ge=1, le=500),
              offset: int = Query(0, ge=0)) -> dict:
@@ -257,6 +447,184 @@ def list_jobs(status: str | None = Query(None), limit: int = Query(50, ge=1, le=
 @app.get("/api/queue")
 def queue_counts() -> dict:
     return get_store().counts()
+
+
+def _series_title(tvdb_id: int | None) -> str | None:
+    if tvdb_id is None or not get_glossary_dir():
+        return None
+    return glossary_profile.load_profile(get_glossary_dir(), tvdb_id=tvdb_id).title
+
+
+@app.get("/api/series")
+def list_series() -> dict:
+    return {"series": [{**s, "title": _series_title(s["tvdb_id"])}
+                       for s in get_store().list_series()]}
+
+
+@app.get("/api/series/{tvdb_id}")
+def series_detail(tvdb_id: int) -> dict:
+    """tvdb_id-less ("Ungrouped") jobs have no series page -- they already
+    surface in the flat /api/jobs listing; there is nothing series-shaped
+    to show for a job with no series identity."""
+    jobs = get_store().list_by_tvdb_id(tvdb_id)
+    manual_entities = []
+    if get_glossary_dir():
+        profile = glossary_profile.load_profile(get_glossary_dir(), tvdb_id=tvdb_id)
+        manual_entities = [{"canonical": e.canonical, "surface_forms": e.surface_forms}
+                           for e in profile.entities]
+    suggestions = []
+    suggestions_dir = get_glossary_suggestions_dir()
+    if suggestions_dir:
+        path = Path(suggestions_dir) / f"{tvdb_id}.yaml"
+        if path.is_file():
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            suggestions = data.get("entities", [])
+    return {"tvdb_id": tvdb_id, "title": _series_title(tvdb_id), "jobs": jobs,
+            "manual_glossary": manual_entities, "auto_suggestions": suggestions}
+
+
+class PromoteGlossaryEntityRequest(BaseModel):
+    canonical: str = Field(min_length=1)
+    aliases: list[str] = []
+
+
+@app.post("/api/series/{tvdb_id}/glossary/promote")
+def promote_glossary_entity(tvdb_id: int, request: PromoteGlossaryEntityRequest) -> dict:
+    """Turns a mined suggestion (or any name) into a real,
+    translation-affecting protected entity -- the one deliberate human
+    action auto_glossary.py's own safety framing requires (see its
+    module docstring, updated 2026-09-19): a mined name is never
+    auto-applied to translation on its own, only ever via this explicit,
+    one-click-from-the-GUI action. Content-addressed by tvdb_id inside
+    the file, never by filename (matches glossary_profile.load_profile()'s
+    own rule) -- creating a brand new file when this series has no
+    series-specific glossary yet is exactly as valid as updating one."""
+    glossary_dir = get_glossary_dir()
+    if not glossary_dir:
+        raise HTTPException(status_code=503, detail="glossary directory is not configured")
+    directory = Path(glossary_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    path = glossary_profile.find_series_glossary_path(directory, tvdb_id)
+    if path is not None:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    else:
+        path = directory / f"{tvdb_id}.yaml"
+        data = {"tvdb_id": tvdb_id, "title": _series_title(tvdb_id), "entities": []}
+
+    entities = data.setdefault("entities", [])
+    existing = next((e for e in entities if e.get("canonical") == request.canonical), None)
+    if existing is not None:
+        existing["protected"] = True
+        if request.aliases:
+            existing["aliases"] = sorted(set(existing.get("aliases", [])) | set(request.aliases))
+    else:
+        entities.append({"canonical": request.canonical, "aliases": request.aliases, "protected": True})
+
+    # Atomic tmp-then-replace -- identical pattern to
+    # auto_glossary.write_suggestions()'s own write.
+    tmp = path.with_suffix(".yaml.tmp")
+    tmp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    tmp.replace(path)
+
+    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id)
+    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms}
+                                for e in profile.entities]}
+
+
+class UpdateGlossaryEntityRequest(BaseModel):
+    original_canonical: str = Field(min_length=1)
+    canonical: str = Field(min_length=1)
+    aliases: list[str] = []
+
+
+def _load_series_glossary_or_404(directory: Path, tvdb_id: int) -> tuple[Path, dict]:
+    path = glossary_profile.find_series_glossary_path(directory, tvdb_id)
+    if path is None:
+        raise HTTPException(status_code=404,
+                            detail="no series-specific glossary file for this series")
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return path, data
+
+
+def _write_series_glossary(path: Path, data: dict) -> None:
+    # Atomic tmp-then-replace -- identical pattern to
+    # promote_glossary_entity's own write.
+    tmp = path.with_suffix(".yaml.tmp")
+    tmp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+@app.post("/api/series/{tvdb_id}/glossary/update")
+def update_glossary_entity(tvdb_id: int, request: UpdateGlossaryEntityRequest) -> dict:
+    """Edits an EXISTING entry's canonical spelling and/or aliases.
+    Scoped to the series-specific file only (never the global/Turkish
+    tiers, which apply to every series) -- 404s if this series has no
+    series-specific file yet, or if original_canonical isn't in it."""
+    glossary_dir = get_glossary_dir()
+    if not glossary_dir:
+        raise HTTPException(status_code=503, detail="glossary directory is not configured")
+    directory = Path(glossary_dir)
+    path, data = _load_series_glossary_or_404(directory, tvdb_id)
+
+    entities = data.setdefault("entities", [])
+    entry = next((e for e in entities if e.get("canonical") == request.original_canonical), None)
+    if entry is None:
+        raise HTTPException(status_code=404,
+                            detail=f"{request.original_canonical!r} not found in this series' glossary")
+    entry["canonical"] = request.canonical
+    entry["aliases"] = request.aliases
+
+    _write_series_glossary(path, data)
+    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id)
+    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms}
+                                for e in profile.entities]}
+
+
+class DeleteGlossaryEntityRequest(BaseModel):
+    canonical: str = Field(min_length=1)
+
+
+@app.post("/api/series/{tvdb_id}/glossary/delete")
+def delete_glossary_entity(tvdb_id: int, request: DeleteGlossaryEntityRequest) -> dict:
+    """Removes an entry from the series-specific glossary file entirely
+    (un-protects it). Same scoping/404 rules as update above."""
+    glossary_dir = get_glossary_dir()
+    if not glossary_dir:
+        raise HTTPException(status_code=503, detail="glossary directory is not configured")
+    directory = Path(glossary_dir)
+    path, data = _load_series_glossary_or_404(directory, tvdb_id)
+
+    entities = data.setdefault("entities", [])
+    entry = next((e for e in entities if e.get("canonical") == request.canonical), None)
+    if entry is None:
+        raise HTTPException(status_code=404,
+                            detail=f"{request.canonical!r} not found in this series' glossary")
+    entities.remove(entry)
+
+    _write_series_glossary(path, data)
+    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id)
+    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms}
+                                for e in profile.entities]}
+
+
+@app.get("/api/events")
+async def event_stream():
+    """Server-Sent Events: a bare change signal (`{"type", "job_id"}`),
+    never a duplicate of the job payload -- GET /api/jobs*/api/series*
+    stay the only place response shape is decided. A subscriber reacts by
+    refetching, not by trusting this event body as authoritative."""
+    queue = get_event_bus().subscribe()
+
+    async def gen():
+        try:
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            get_event_bus().unsubscribe(queue)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @app.get("/api/jobs/{job_id}")
@@ -285,9 +653,17 @@ def retry_job(job_id: str, request: RetryRequest = RetryRequest()) -> dict:
     # distinguishable -- a plain `is None` check couldn't tell them apart.
     stream_override = (request.audio_stream_index if "audio_stream_index" in request.model_fields_set
                        else "unset")
+    # Same omitted-vs-explicit distinction as audio_stream_index above:
+    # an overwrite flag not mentioned in the request body inherits the
+    # original job's value (JobStore.retry()'s own "unset" sentinel);
+    # an explicit true/false in the body always overrides it.
+    overwrite_original = (request.overwrite_original
+                          if "overwrite_original" in request.model_fields_set else "unset")
+    overwrite_english = (request.overwrite_english
+                         if "overwrite_english" in request.model_fields_set else "unset")
     try:
-        job = get_store().retry(job_id, overwrite_original=request.overwrite_original,
-                                overwrite_english=request.overwrite_english,
+        job = get_store().retry(job_id, overwrite_original=overwrite_original,
+                                overwrite_english=overwrite_english,
                                 source_lang=request.source_lang,
                                 audio_stream_index=stream_override)
     except JobStoreError as exc:
@@ -301,12 +677,40 @@ def delete_job(job_id: str) -> dict:
     """Removes only the jobs-table row. Never touches a media file --
     verified by test_api.py; the media root is never imported into this
     module at all."""
-    store = get_store()
-    job = store.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="job not found")
-    if job["status"] not in ("completed", "failed", "skipped", "cancelled"):
-        raise HTTPException(status_code=409, detail="cannot delete an active job")
-    with store._immediate() as conn:
-        conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+    try:
+        get_store().delete(job_id)
+    except JobStoreError as exc:
+        code = 404 if "not found" in str(exc) else 409
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
     return {"deleted": job_id}
+
+
+# --- Frontend serving -- MUST stay below every /api/* route above: a
+# catch-all path matches whatever isn't matched by an earlier, more
+# specific route, so registering it first would shadow the real API. ---
+
+@app.get("/assets/{filename:path}")
+def static_asset(filename: str) -> FileResponse:
+    # Path-traversal guard, not a raw filesystem join -- the equivalent
+    # of the old hardcoded {"app.js", "style.css"} whitelist, generalized
+    # for Vite's nested, content-hashed assets/ output (unpredictable
+    # filenames, so a fixed whitelist no longer applies).
+    directory = (get_static_dir() / "assets").resolve()
+    target = (directory / filename).resolve()
+    if directory != target and directory not in target.parents:
+        raise HTTPException(status_code=404)
+    if not target.is_file():
+        raise HTTPException(status_code=404)
+    return FileResponse(target)
+
+
+@app.get("/{full_path:path}")
+def spa_fallback(full_path: str) -> FileResponse:
+    # Every client-side React Router route (e.g. /series/383383,
+    # /jobs/<id>) serves the same index.html; react-router-dom takes
+    # over from there. full_path is only ever used to reach this
+    # branch -- never to build a filesystem path. A mistyped/removed
+    # /api/* path must still 404, not silently return the app shell.
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404)
+    return FileResponse(get_static_dir() / "index.html")

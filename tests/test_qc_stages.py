@@ -53,6 +53,26 @@ class TranslationQcTests(unittest.TestCase):
         result = translation_qc.run(["source"], ["Xaa arrived"])
         self.assertEqual(result.findings[0].category, QcCategory.ENTITY_ERROR)
 
+    def test_finding_evidence_carries_source_and_translated_text(self):
+        # Real gap this closes (2026-09-19): a "substitution"/
+        # "translation_error" finding used to carry only an index into a
+        # coordinate space never persisted after the job finishes,
+        # making it impossible to tell after the fact whether a flagged
+        # instance was a genuine defect or a coincidental short-phrase
+        # collision -- see qc/translation_qc.py's module docstring.
+        result = translation_qc.run(["Merhaba dunya nasilsin"], [""])
+        self.assertEqual(result.findings[0].evidence["source"], "Merhaba dunya nasilsin")
+        self.assertEqual(result.findings[0].evidence["translated"], "")
+
+    def test_substitution_finding_evidence_includes_the_other_matched_sentence(self):
+        result = translation_qc.run(
+            ["Tamam gidiyorum simdi", "Baska bir seyler burada"],
+            ["okay going now", "okay going now"])
+        finding = next(f for f in result.findings if f.category == QcCategory.SUBSTITUTION)
+        self.assertEqual(finding.evidence["matches_source_of"], "Tamam gidiyorum simdi")
+        self.assertEqual(finding.evidence["source"], "Baska bir seyler burada")
+        self.assertEqual(finding.evidence["translated"], "okay going now")
+
 
 class EntityQcTests(unittest.TestCase):
     def test_matching_occurrence_counts_clean(self):
@@ -67,6 +87,17 @@ class EntityQcTests(unittest.TestCase):
         result = entity_qc.run(source, "Someone arrived.", g)
         self.assertEqual(result.flagged, 1)
         self.assertEqual(result.findings[0].category, QcCategory.ENTITY_ERROR)
+
+    def test_over_generation_is_not_flagged(self):
+        # Real case (Love Is In The Air S01E01/E02, 2026-09-19): NLLB
+        # expanding a pronoun to the character's name legitimately
+        # produces MORE mentions in translation than source -- the
+        # opposite of a dropped entity, and not something
+        # entity_recovery() has any mechanism to (or should) undo.
+        g = build_glossary([Entity("Eda", ["Eda"])])
+        source = protect("Eda geldi.", g)
+        result = entity_qc.run(source, "Eda arrived. Eda smiled.", g)
+        self.assertEqual(result.flagged, 0)
 
 
 class ReadabilityQcTests(unittest.TestCase):

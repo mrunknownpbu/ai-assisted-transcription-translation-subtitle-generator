@@ -90,13 +90,17 @@ def _recurrence_score(segment: Segment, all_segments: list[Segment], episode_dur
     phrase recurring across a third or more of the episode's runtime, with
     no dramatic reason to repeat, is the shape a decoder fixation takes.
 
-    Single-word text is deliberately exempted (`>= 2 words` gate below):
-    common acknowledgements ("Evet.", "Tamam.", "Hayır.") are expected to
+    Text under 3 words is deliberately exempted (`>= 3 words` gate below):
+    common acknowledgements and short exchanges ("Evet.", "Tamam.",
+    "Hayır.", "Teşekkür Ederim", "Öyle Mi", "İyi Misin") are expected to
     recur dozens of times across any episode of ordinary dialogue -- real
-    measured case, 15 occurrences of "Evet." in one real episode -- and
-    are never what this heuristic is meant to catch."""
+    measured cases: 15 occurrences of "Evet." in one real episode, and
+    (Love Is In The Air S01E01/E02, 2026-09-19) "Teşekkür Ederim"/"Öyle
+    Mi"/"İyi Misin" each recurring 3x with hallucination_score=0.00 on
+    every other signal, flagged only by recurrence under the old `>= 2
+    words` gate -- and are never what this heuristic is meant to catch."""
     text = re.sub(r"\s+", " ", segment.text.strip().casefold())
-    if len(text.split()) < 2:
+    if len(text.split()) < 3:
         return 0.0
     matches = [s for s in all_segments if s.index != segment.index
               and re.sub(r"\s+", " ", s.text.strip().casefold()) == text]

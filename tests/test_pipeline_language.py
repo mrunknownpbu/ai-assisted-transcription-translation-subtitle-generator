@@ -161,7 +161,7 @@ class GlossaryHotwordsTests(unittest.TestCase):
         _make_fixture_video(self.video)
         self.work_dir = Path(self.tmp.name) / "work"
 
-    def _run_and_capture_config(self, glossary_entities):
+    def _run_and_capture_config(self, glossary_entities, extra_hotwords=None):
         fake_translate = lambda cues, spans, src_lang, **_kw: ["translated"] * len(spans)
         with patch.object(pipeline, "asr_transcribe",
                           return_value=_fake_transcript("tr", 0.95)) as mock_asr, \
@@ -169,7 +169,8 @@ class GlossaryHotwordsTests(unittest.TestCase):
             pipeline.run(video_path=str(self.video), media_root=str(self.tmp.name),
                         work_dir=str(self.work_dir), write_output=False,
                         stream_sampler=lambda wav: ("tr", 0.9),
-                        glossary_entities=glossary_entities)
+                        glossary_entities=glossary_entities,
+                        extra_hotwords=extra_hotwords)
         return mock_asr.call_args.kwargs["config"]
 
     def test_glossary_surface_forms_become_hotwords(self):
@@ -179,6 +180,34 @@ class GlossaryHotwordsTests(unittest.TestCase):
         hotwords = set(config.hotwords.split(" "))
         self.assertIn("Eda", hotwords)
         self.assertIn("Serkan", hotwords)
+
+    def test_extra_hotwords_merge_with_glossary_hotwords(self):
+        entities = [Entity(canonical="Eda", surface_forms=["Eda"])]
+        config = self._run_and_capture_config(entities, extra_hotwords=["Melek"])
+        hotwords = set(config.hotwords.split(" "))
+        self.assertIn("Eda", hotwords)
+        self.assertIn("Melek", hotwords)
+
+    def test_extra_hotwords_alone_still_populate_hotwords(self):
+        config = self._run_and_capture_config(None, extra_hotwords=["Melek"])
+        self.assertEqual(config.hotwords, "Melek")
+
+    def test_extra_hotwords_never_reach_translation_protection(self):
+        entities = [Entity(canonical="Eda", surface_forms=["Eda"])]
+        fake_translate = lambda cues, spans, src_lang, **_kw: ["translated"] * len(spans)
+        with patch.object(pipeline, "asr_transcribe",
+                          return_value=_fake_transcript("tr", 0.95)), \
+             patch.object(pipeline.translate, "translate_spans", side_effect=fake_translate), \
+             patch.object(pipeline.glossary_mod, "build_glossary",
+                         wraps=pipeline.glossary_mod.build_glossary) as spy_build_glossary:
+            pipeline.run(video_path=str(self.video), media_root=str(self.tmp.name),
+                        work_dir=str(self.work_dir), write_output=False,
+                        stream_sampler=lambda wav: ("tr", 0.9),
+                        glossary_entities=entities, extra_hotwords=["Melek"])
+        (called_entities,), _ = spy_build_glossary.call_args
+        self.assertEqual(called_entities, entities)
+        all_forms = {form for e in called_entities for form in e.surface_forms}
+        self.assertNotIn("Melek", all_forms)
 
     def test_no_glossary_entities_leaves_hotwords_unset(self):
         config = self._run_and_capture_config(None)

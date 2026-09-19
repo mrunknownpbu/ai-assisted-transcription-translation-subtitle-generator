@@ -12,7 +12,7 @@ import gc
 import re
 from dataclasses import dataclass
 
-from glossary import protect, restore
+from glossary import _phrase_key, bare_entity_translation, protect, restore
 from transcript import BoundaryReason, MERGEABLE_BOUNDARIES, Segment
 
 NLLB_REPO = "facebook/nllb-200-distilled-1.3B"
@@ -45,20 +45,44 @@ _SENTENCE_END = re.compile(r"[.!?…]['\"»)\]]*$")
 @dataclass
 class TranslationConfig:
     repo: str = NLLB_REPO
-    # cpu, not cuda: this deployment's GPU (Tesla P4, 8GB) is shared with
-    # other real GPU consumers on the same host (Ollama, Tdarr/Plex
-    # hardware transcode) -- confirmed present via nvidia-smi during this
-    # deployment's own validation. Translation is a much smaller fraction
-    # of total job time than ASR (~3 of ~49 minutes on a real completed
-    # episode), so trading its speed for not exclusively pinning the
-    # shared GPU for that window is a reasonable default here. The host
-    # has 24 CPU cores / 125GB RAM idle, comfortably enough for a 1.3B
-    # model. ASR (asr.AsrConfig) stays on cuda -- it's the stage that
-    # actually needs GPU speed.
-    device: str = "cpu"
+    # cuda, not cpu: revisited this session with real nvidia-smi
+    # measurements during a live job (ASR + Tdarr's hardware-transcode
+    # containers, the other real GPU consumer on this host, both active
+    # concurrently). Mechanically safe because worker.py already wraps a
+    # whole job's stream-selection/ASR/translation in ONE outer
+    # gpu.gpu_lock() (see gpu.py) -- ASR and translation can never hold
+    # GPU memory at the same time within a job, and translate_batch()
+    # calls free_gpu() after every chunk, not just once at the end.
+    # Accepted tradeoff, not hidden: this does add real, ongoing GPU
+    # contention with Tdarr during every translation phase going
+    # forward, previously avoided on purpose -- judged worth it for the
+    # throughput win (translation was ~3 of ~49 minutes on a real
+    # episode on CPU).
+    #
+    # IMPORTANT, learned the hard way: _generate_one_batch's OOM-halving
+    # retry is NOT a complete safety net. Real failure (Love Is In The
+    # Air S01E04, 2026-09-19): Tdarr's hardware-transcode containers hit
+    # their own peak (4 concurrent, ~1.66GB) at the same moment
+    # translation's very first batch ran, and the card was ALREADY at
+    # capacity before that batch even started -- halving retries a
+    # too-large CURRENT batch, but there is no smaller batch that helps
+    # when the problem is zero headroom before generate() is even
+    # called. That job failed outright (PIPELINE_ERROR), not a graceful
+    # degradation. num_beams/batch_size below were lowered specifically
+    # to leave enough real margin that Tdarr's worst case doesn't
+    # exhaust the card before a batch starts, not just to reduce the
+    # common-case footprint.
+    device: str = "cuda"
     max_new_tokens: int = 256
-    num_beams: int = 4
-    batch_size: int = 12   # confirmed necessary by a real CUDA OOM on a 48-span clip; see translate_batch()
+    # Halved from 4 (2026-09-19, see IMPORTANT note above) -- beam count
+    # scales the number of concurrently-tracked sequences linearly
+    # (batch_size * num_beams), so this alone roughly halves peak
+    # generation-time activation memory versus the original default.
+    num_beams: int = 2
+    # Lowered from 12 (2026-09-19, see IMPORTANT note above) -- combined
+    # with num_beams=2, peak concurrent sequences drop from 48 (12*4) to
+    # 16 (8*2), around a third of the original footprint.
+    batch_size: int = 8
     # Guards against degenerate repetition loops (confirmed real: a Japanese
     # span mentioning "zombie" 3 times produced ~13x "if you're a zombie,
     # you're all zombies" instead of one sentence). 4 was chosen empirically
@@ -151,12 +175,25 @@ def translate_batch(model, tok, bos: int, sentences: list[str], device: str,
     an entire job's worth of spans -- see _generate_one_batch's docstring)
     with OOM-halving retry per chunk. `on_progress(done, total)` fires
     after each chunk -- a long job (hundreds of sentences) previously gave
-    no visibility until it finished entirely."""
+    no visibility until it finished entirely.
+
+    free_gpu() runs after EVERY chunk, not just once at the end -- real
+    production evidence (a full episode, GPU translation, 2026-09-19):
+    without this, PyTorch's caching allocator visibly grew across the
+    ~51 chunks of one translation stage (5442MiB -> 7530MiB measured via
+    nvidia-smi on a 7680MiB card, down to 71MiB free at the low point,
+    despite every individual chunk being the same shape/size). One
+    empty_cache() per chunk keeps peak usage near the early-run
+    steady-state instead of climbing toward the card's ceiling by the
+    end of a long episode."""
     if not sentences:
         return []
     out = []
     for i in range(0, len(sentences), batch_size):
         out.extend(_generate_one_batch(model, tok, bos, sentences[i:i + batch_size], device, config))
+        if device == "cuda":
+            from gpu import free_gpu
+            free_gpu(device)
         if on_progress:
             on_progress(len(out), len(sentences))
     return out
@@ -164,14 +201,58 @@ def translate_batch(model, tok, bos: int, sentences: list[str], device: str,
 
 def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
                     glossary_map: dict[str, tuple[str, str]] | None = None,
+                    phrase_map: dict[str, str] | None = None,
                     config: TranslationConfig | None = None, model=None, tok=None, bos: int = None,
                     on_progress=None) -> list[str]:
     """One translated string per span, entity-protected if a glossary is
     supplied. `model`/`tok`/`bos` injectable so pipeline.py controls model
-    lifecycle/GPU lock across the whole job, not this function."""
+    lifecycle/GPU lock across the whole job, not this function.
+
+    `phrase_map` (glossary.build_phrase_map's output) short-circuits the
+    model entirely for a span whose whole joined text exactly matches a
+    known phrase (see glossary.PhraseEntry's docstring for why: a short,
+    context-free utterance gives NLLB nothing to ground on and it
+    fabricates a continuation). Matched spans never go through
+    protect()/translate_batch()/restore() at all -- their text is already
+    the final answer.
+
+    A second, independent short-circuit catches a span that entity-
+    protection reduces to nothing but a placeholder plus punctuation (a
+    bare name-call, e.g. "Cenk." or "Sirius!") -- see
+    glossary.bare_entity_translation()'s docstring for the real evidence
+    that protecting the entity is not enough on its own to stop this
+    class of hallucination. Both kinds of resolved spans are spliced back
+    into the right positions among the spans that DO need the model.
+    `on_progress` reports over only the spans actually sent to the model,
+    consistent with its existing meaning (progress of real translation
+    work)."""
     config = config or TranslationConfig()
     sentences = [" ".join(cues[i].text for i in span) for span in spans]
-    payload = [protect(s, glossary_map) for s in sentences] if glossary_map else sentences
+
+    phrase_map = phrase_map or {}
+    resolved: dict[int, str] = {}
+    remaining_idx: list[int] = []
+    remaining_sentences: list[str] = []
+    for i, s in enumerate(sentences):
+        key = _phrase_key(s)
+        if key in phrase_map:
+            resolved[i] = phrase_map[key]
+        else:
+            remaining_idx.append(i)
+            remaining_sentences.append(s)
+
+    protected = ([protect(s, glossary_map) for s in remaining_sentences]
+                if glossary_map else remaining_sentences)
+
+    nllb_idx: list[int] = []
+    payload: list[str] = []
+    for i, p in zip(remaining_idx, protected):
+        bare = bare_entity_translation(p, glossary_map) if glossary_map else None
+        if bare is not None:
+            resolved[i] = bare
+        else:
+            nllb_idx.append(i)
+            payload.append(p)
 
     owns_model = model is None
     from contextlib import nullcontext
@@ -180,20 +261,28 @@ def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
     # -- holding it for a CPU-only stage protects nothing and needlessly
     # blocks the Analyze endpoint's stream-sampler (a real GPU consumer)
     # for the duration of CPU translation.
-    needs_gpu_lock = owns_model and config.device == "cuda"
+    needs_gpu_lock = owns_model and config.device == "cuda" and payload
     with gpu_lock() if needs_gpu_lock else nullcontext():
-        try:
-            if owns_model:
-                # Construction inside the try for the same reason as
-                # asr.py: a failed load_model() must still reach `finally`.
-                model, tok, bos = load_model(config, NLLB_LANG[src_lang])
-            translations = translate_batch(model, tok, bos, payload, config.device, config,
-                                           batch_size=config.batch_size, on_progress=on_progress)
-        finally:
-            if owns_model:
-                del model
-                from gpu import free_gpu
-                free_gpu(config.device)
+        translations: list[str] = []
+        if payload:
+            try:
+                if owns_model:
+                    # Construction inside the try for the same reason as
+                    # asr.py: a failed load_model() must still reach `finally`.
+                    model, tok, bos = load_model(config, NLLB_LANG[src_lang])
+                translations = translate_batch(model, tok, bos, payload, config.device, config,
+                                               batch_size=config.batch_size, on_progress=on_progress)
+            finally:
+                if owns_model:
+                    del model
+                    from gpu import free_gpu
+                    free_gpu(config.device)
     if glossary_map:
         translations = [restore(t, glossary_map) for t in translations]
-    return translations
+
+    result: list[str | None] = [None] * len(sentences)
+    for i, t in zip(nllb_idx, translations):
+        result[i] = t
+    for i, t in resolved.items():
+        result[i] = t
+    return result

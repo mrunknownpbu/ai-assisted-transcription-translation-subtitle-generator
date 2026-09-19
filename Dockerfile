@@ -1,3 +1,13 @@
+FROM node:22-slim AS frontend-build
+WORKDIR /frontend
+# package.json + package-lock.json copied (and `npm ci` run) BEFORE the
+# rest of the source, so this layer only rebuilds when dependencies
+# actually change, not on every source edit.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
@@ -9,6 +19,15 @@ RUN apt-get update && \
         curl \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+
+# Created here, while /app doesn't exist yet, instead of via a `chown -R
+# /app` after the uv sync/cudnn installs below -- overlayfs has to copy
+# every touched file into a new layer, so a late chown over an already-
+# ~6.7GB tree cost another ~5.6GB in the image for a directory that's
+# read-only at runtime anyway (nothing in this app writes under /app; see
+# the USER note below for what actually needs matching ownership).
+RUN groupadd -g 1000 subtitle && \
+    useradd -u 1000 -g 1000 -M -s /usr/sbin/nologin subtitle
 
 COPY --from=ghcr.io/astral-sh/uv:0.10.4 /uv /bin/uv
 
@@ -34,18 +53,22 @@ ENV PATH="/app/.venv/bin:$PATH"
 ARG LD_LIBRARY_PATH=""
 ENV LD_LIBRARY_PATH="/opt/cudnn8/nvidia/cudnn/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cublas/lib:${LD_LIBRARY_PATH}"
 
-COPY subtitle_ai /app
+COPY --chown=subtitle:subtitle subtitle_ai /app
+# The React SPA build (see frontend/) -- only its compiled output lands
+# here, never node_modules or the JS toolchain, so the frontend-build
+# stage's size never reaches this final runtime image.
+COPY --chown=subtitle:subtitle --from=frontend-build /frontend/dist /app/static
 
-# Runs as a fixed non-root uid/gid (1000:1000) matching this host's
-# operator account, which already owns the bind-mounted appdata cache
-# directories -- NOT the v1 default of implicit root. /data (media root)
-# is host-side world-writable (777, unRAID/linuxserver.io convention) so
-# any non-root uid can write output SRTs there; /models is world-readable
-# so a non-owning uid can still load weights. Only /cache (job db, work
-# dir) needs the uid to actually match, since it is not world-writable.
-RUN groupadd -g 1000 subtitle && \
-    useradd -u 1000 -g 1000 -M -s /usr/sbin/nologin subtitle && \
-    chown -R subtitle:subtitle /app
+# Runs as a fixed non-root uid/gid (1000:1000, created earlier above)
+# matching this host's operator account, which already owns the bind-
+# mounted appdata cache directories -- NOT the v1 default of implicit
+# root. /data (media root) is host-side world-writable (777, unRAID/
+# linuxserver.io convention) so any non-root uid can write output SRTs
+# there; /models and the uv-installed venv under /app are world-readable
+# (root:root, default umask) so a non-owning uid can still load weights/
+# import packages -- neither is ever written to at runtime. Only /cache
+# (job db, work dir) needs the uid to actually match, since it is not
+# world-writable.
 USER subtitle
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

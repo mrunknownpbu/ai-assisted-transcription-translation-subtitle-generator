@@ -25,17 +25,20 @@ def _unbalanced_brackets(text: str) -> bool:
 
 
 def assess(source: str, translated: str) -> QcFinding | None:
+    evidence = {"source": source, "translated": translated}
     if not translated.strip():
-        return QcFinding(QcCategory.TRANSLATION_ERROR, "empty translation", 1.0)
+        return QcFinding(QcCategory.TRANSLATION_ERROR, "empty translation", 1.0, evidence=evidence)
     if _PLACEHOLDER.search(translated):
-        return QcFinding(QcCategory.ENTITY_ERROR, "leaked glossary placeholder", 0.9)
+        return QcFinding(QcCategory.ENTITY_ERROR, "leaked glossary placeholder", 0.9, evidence=evidence)
     if _unbalanced_brackets(translated):
-        return QcFinding(QcCategory.TRANSLATION_ERROR, "unbalanced brackets", 0.6)
+        return QcFinding(QcCategory.TRANSLATION_ERROR, "unbalanced brackets", 0.6, evidence=evidence)
     src_len, tgt_len = len(source), len(translated)
     if src_len >= 15 and tgt_len < src_len * 0.25:
-        return QcFinding(QcCategory.SUBSTITUTION, "suspiciously short vs. source length", 0.5)
+        return QcFinding(QcCategory.SUBSTITUTION, "suspiciously short vs. source length", 0.5,
+                         evidence=evidence)
     if src_len >= 5 and tgt_len > src_len * 3.5:
-        return QcFinding(QcCategory.TRANSLATION_ERROR, "suspiciously long vs. source length", 0.5)
+        return QcFinding(QcCategory.TRANSLATION_ERROR, "suspiciously long vs. source length", 0.5,
+                         evidence=evidence)
     return None
 
 
@@ -54,7 +57,9 @@ def run(sources: list[str], translations: list[str]) -> QcResult:
             if prior is not None and sources[prior].strip().casefold() != s.strip().casefold():
                 findings.append(QcFinding(QcCategory.SUBSTITUTION,
                                           f"repeated translation matches unrelated sentence {prior}",
-                                          0.5, index=i))
+                                          0.5, index=i,
+                                          evidence={"source": s, "translated": t,
+                                                    "matches_source_of": sources[prior]}))
             seen[key] = i
     return QcResult(stage=QcStage.TRANSLATION, population=len(sources), flagged=len(findings),
                     findings=findings)

@@ -22,15 +22,34 @@ import re
 
 from transcript import Correction, CorrectionKind, Word
 
-# rule_id -> (compiled whole-word pattern, correct spelling, evidence note).
-# Adding a new rule here is the ONLY step required -- no code change
-# elsewhere reads or needs to know about individual words.
-_RULES: dict[str, tuple[re.Pattern, str, str]] = {
+# A correction below this confidence is a candidate, not a decision: the
+# word is preserved unchanged. Added 2026-09-19 alongside a real Turkish
+# entity-protection bug fix (glossary.py's İ-casefold defect) found while
+# scoping broader Turkish-language work -- this module's own rule (below)
+# already only ever adds a correction backed by independent confirmation
+# (a real reference transcript), so every rule that meets THIS module's
+# bar naturally clears a high threshold too. The gate exists so a lower-
+# confidence rule can be added later (e.g. a spoken/colloquial form seen
+# in real output but not yet independently confirmed the way the petunya
+# case was) without it silently behaving as an unconditional rewrite.
+MIN_NORMALIZATION_CONFIDENCE = 0.85
+
+# rule_id -> (compiled whole-word pattern, correct spelling, evidence note,
+# confidence). Adding a new rule here is the ONLY step required -- no code
+# change elsewhere reads or needs to know about individual words. See this
+# module's docstring: a rule here is a name/word TRANSLITERATION
+# correction requiring the same independent confirmation the petunya case
+# had (a real reference transcript proving the intended spelling) -- never
+# guessed, never a general "normalize colloquial speech" mechanism. A
+# confidence below MIN_NORMALIZATION_CONFIDENCE preserves the original
+# text instead of applying the rule.
+_RULES: dict[str, tuple[re.Pattern, str, str, float]] = {
     "tr-petunia-petunya": (
         re.compile(r"\bpetunia\b", re.IGNORECASE), "petunya",
         "Confirmed against srt-output/Sen Çal Kapimi 1. Bölüm.srt: human "
         "reference spells this word 'petunya' at 136.27-140.48s, the exact "
         "timestamp Whisper renders 'Petunia'.",
+        1.0,
     ),
 }
 
@@ -51,7 +70,9 @@ def normalize_word(word: Word, language: str) -> Word:
     if language != "tr":
         return word
     text = word.text
-    for rule_id, (pattern, replacement, evidence) in _RULES.items():
+    for rule_id, (pattern, replacement, evidence, confidence) in _RULES.items():
+        if confidence < MIN_NORMALIZATION_CONFIDENCE:
+            continue
         match = pattern.search(text)
         if not match:
             continue
@@ -59,7 +80,7 @@ def normalize_word(word: Word, language: str) -> Word:
         text = pattern.sub(corrected, text)
         word.corrections.append(Correction(
             kind=CorrectionKind.NORMALIZATION, rule_id=rule_id,
-            evidence=evidence, confidence=1.0))
+            evidence=evidence, confidence=confidence))
     word.text = text
     return word
 

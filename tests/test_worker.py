@@ -141,6 +141,132 @@ class GlossaryLoadingTests(unittest.TestCase):
             worker._process(claimed)
         self.assertEqual(mock_run.call_args.kwargs["glossary_entities"], [])
 
+    def test_glossary_phrases_reach_pipeline_run(self):
+        # PhraseEntry (2026-09-19): a Turkish-tier phrase file (no
+        # tvdb_id) must reach pipeline.run() alongside glossary_entities.
+        (self.glossary_dir / "turkish.yaml").write_text(
+            'language: tr\nphrases:\n  - source: "Peki."\n    translation: "Okay."\n',
+            encoding="utf-8")
+        worker = Worker(self.store, str(self.media_root), str(self.work_root),
+                        glossary_dir=str(self.glossary_dir))
+        job = self.store.create("Show {tvdb-383383}/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        phrases = mock_run.call_args.kwargs["glossary_phrases"]
+        self.assertEqual([(p.source, p.translation) for p in phrases], [("Peki.", "Okay.")])
+
+
+def _write_srt_pair(show_dir: Path, stem: str, lines: list[str]):
+    tr_cues = "\n\n".join(
+        f"{i}\n00:00:{i:02d},000 --> 00:00:{i+1:02d},000\n{line}"
+        for i, line in enumerate(lines, 1))
+    (show_dir / f"{stem}.tr.srt").write_text(tr_cues, encoding="utf-8")
+    (show_dir / f"{stem}.en.srt").write_text(
+        "1\n00:00:01,000 --> 00:00:02,000\nSome translation.", encoding="utf-8")
+
+
+class AutoHotwordsTests(unittest.TestCase):
+    """auto_glossary.py mining, wired through Worker -- see that module's
+    docstring for the safety framing (hotwords only, never translation
+    protection)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.media_root = Path(self.tmp.name) / "data"
+        self.work_root = Path(self.tmp.name) / "work"
+        self.show_dir = self.media_root / "Show {tvdb-383383}"
+        self.show_dir.mkdir(parents=True)
+        (self.show_dir / "S01E01.mkv").touch()
+        self.store = JobStore(Path(self.tmp.name) / "jobs.db")
+
+    def test_auto_hotwords_reach_pipeline_run(self):
+        lines = ["Melek geldi.", "Nerede Melek?", "Melek çok mutlu."]
+        for i in (2, 3, 4):
+            _write_srt_pair(self.show_dir, f"S01E0{i}", lines)
+        worker = Worker(self.store, str(self.media_root), str(self.work_root))
+        job = self.store.create("Show {tvdb-383383}/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        self.assertIn("Melek", mock_run.call_args.kwargs["extra_hotwords"])
+
+    def test_no_series_root_match_yields_no_auto_hotwords(self):
+        plain_dir = self.media_root / "Plain Show"
+        plain_dir.mkdir(parents=True)
+        (plain_dir / "S01E01.mkv").touch()
+        worker = Worker(self.store, str(self.media_root), str(self.work_root))
+        job = self.store.create("Plain Show/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        self.assertEqual(mock_run.call_args.kwargs["extra_hotwords"], [])
+
+    def test_current_episode_own_prior_output_excluded_from_its_own_mining(self):
+        # The current job's own (e.g. prior-attempt) S01E01 output has the
+        # artifact too -- without self-exclusion this would be a 3rd
+        # qualifying episode and cross MIN_DISTINCT_EPISODES.
+        artifact = ["Xyzzy burada.", "Xyzzy orada.", "Xyzzy her yerde."]
+        _write_srt_pair(self.show_dir, "S01E01", artifact)
+        for i in (2, 3):
+            _write_srt_pair(self.show_dir, f"S01E0{i}", artifact)
+        worker = Worker(self.store, str(self.media_root), str(self.work_root))
+        job = self.store.create("Show {tvdb-383383}/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        self.assertNotIn("Xyzzy", mock_run.call_args.kwargs["extra_hotwords"])
+
+    def test_names_already_in_manual_glossary_not_duplicated_via_auto_path(self):
+        glossary_dir = Path(self.tmp.name) / "glossary"
+        glossary_dir.mkdir(parents=True)
+        (glossary_dir / "show.yaml").write_text(
+            "tvdb_id: 383383\ntitle: Show\nentities:\n  - canonical: Eda\n    protected: true\n",
+            encoding="utf-8")
+        lines = ["Eda geldi.", "Eda nerede?", "Eda çok mutlu."]
+        for i in (2, 3, 4):
+            _write_srt_pair(self.show_dir, f"S01E0{i}", lines)
+        worker = Worker(self.store, str(self.media_root), str(self.work_root),
+                        glossary_dir=str(glossary_dir))
+        job = self.store.create("Show {tvdb-383383}/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        self.assertNotIn("Eda", mock_run.call_args.kwargs["extra_hotwords"])
+
+    def test_glossary_suggestions_file_written_when_configured(self):
+        lines = ["Melek geldi.", "Melek nerede?", "Melek çok mutlu."]
+        for i in (2, 3, 4):
+            _write_srt_pair(self.show_dir, f"S01E0{i}", lines)
+        suggestions_dir = Path(self.tmp.name) / "suggestions"
+        worker = Worker(self.store, str(self.media_root), str(self.work_root),
+                        glossary_suggestions_dir=str(suggestions_dir))
+        job = self.store.create("Show {tvdb-383383}/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        self.assertTrue((suggestions_dir / "383383.yaml").exists())
+
+    def test_no_suggestions_written_when_dir_not_configured(self):
+        lines = ["Melek geldi.", "Melek nerede?", "Melek çok mutlu."]
+        for i in (2, 3, 4):
+            _write_srt_pair(self.show_dir, f"S01E0{i}", lines)
+        suggestions_dir = Path(self.tmp.name) / "suggestions"
+        worker = Worker(self.store, str(self.media_root), str(self.work_root))
+        job = self.store.create("Show {tvdb-383383}/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        self.assertFalse(suggestions_dir.exists())
+
 
 class KeepReplaceTests(WorkerTestCase):
     def test_keep_does_not_overwrite_existing_output(self):
@@ -375,6 +501,269 @@ class CancellationTests(WorkerTestCase):
         final = self.store.get(claimed["id"])
         self.assertEqual(final["status"], "cancelled")
         self.assertFalse((self.media_root / "Show" / "S01E01.en.srt").exists())
+
+
+def fake_srt_result(work_dir: Path, *, valid=True, detected_language="tr",
+                    with_source_language_copy=False):
+    work_dir.mkdir(parents=True, exist_ok=True)
+    target_path = work_dir / "ep.tr.en.srt"
+    target_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
+    from qc.types import JobQc, QcResult, QcStage
+    qc = JobQc(timing=QcResult(QcStage.TIMING, population=1, flagged=0 if valid else 1))
+
+    class Result:
+        pass
+    r = Result()
+    r.source_srt_path = work_dir / "source.srt"
+    r.target_srt_path = target_path
+    r.qc = qc
+    r.valid = valid
+    r.events = []
+    r.requested_source_language = "tr"
+    r.detected_source_language = detected_language
+    r.language_probability = 0.9
+    r.target_language = "en"
+    if with_source_language_copy:
+        source_language_path = work_dir / f"ep.{detected_language}.srt"
+        source_language_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nMerhaba\n", encoding="utf-8")
+        r.source_language_srt_path = source_language_path
+    else:
+        r.source_language_srt_path = None
+    return r
+
+
+class SrtTranslationWorkerTestCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.media_root = Path(self.tmp.name) / "data"
+        self.work_root = Path(self.tmp.name) / "work"
+        (self.media_root / "in").mkdir(parents=True)
+        (self.media_root / "out").mkdir(parents=True)
+        (self.media_root / "Show").mkdir(parents=True)
+        (self.media_root / "Show" / "S01E01.mkv").touch()
+        (self.media_root / "in" / "ep.tr.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nMerhaba\n", encoding="utf-8")
+        self.store = JobStore(Path(self.tmp.name) / "jobs.db")
+        self.worker = Worker(self.store, str(self.media_root), str(self.work_root))
+
+
+class SrtTranslationWorkerTests(SrtTranslationWorkerTestCase):
+    def test_completed_job_writes_destination(self):
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["status"], "completed")
+        self.assertTrue((self.media_root / "out" / "ep.en.srt").exists())
+        self.assertEqual(
+            (self.media_root / "out" / "ep.en.srt").read_text(encoding="utf-8"),
+            "1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+        self.assertEqual(len(final["outputs"]), 1)
+
+    def test_commits_source_language_sibling_beside_the_video(self):
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "Show/S01E01.en.srt", video_path="Show/S01E01.mkv")
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(
+                Path(kw["work_dir"]), with_source_language_copy=True)
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["status"], "completed")
+        sibling = self.media_root / "Show" / "S01E01.tr.srt"
+        self.assertTrue(sibling.exists())
+        self.assertEqual(sibling.read_text(encoding="utf-8"),
+                         "1\n00:00:00,000 --> 00:00:01,000\nMerhaba\n")
+        self.assertEqual(len(final["outputs"]), 2)
+
+    def test_source_language_sibling_respects_overwrite_original_keep(self):
+        (self.media_root / "Show" / "S01E01.tr.srt").write_text("stale", encoding="utf-8")
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "Show/S01E01.en.srt", video_path="Show/S01E01.mkv")
+        self.assertFalse(job["overwrite_original"])
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(
+                Path(kw["work_dir"]), with_source_language_copy=True)
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["status"], "completed")
+        self.assertEqual(
+            (self.media_root / "Show" / "S01E01.tr.srt").read_text(encoding="utf-8"), "stale")
+        self.assertEqual(len(final["outputs"]), 1)  # only the English output committed
+
+    def test_refreshes_glossary_suggestions_for_srt_translation_jobs(self):
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "Show/S01E01.en.srt", video_path="Show/S01E01.mkv")
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run, \
+             patch.object(self.worker, "_refresh_glossary_suggestions") as mock_refresh:
+            mock_run.side_effect = lambda **kw: fake_srt_result(Path(kw["work_dir"]))
+            mock_refresh.return_value = []
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        mock_refresh.assert_called_once_with("Show/S01E01.mkv", [])
+
+    def test_dispatches_to_srt_pipeline_not_video_pipeline(self):
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_srt, \
+             patch.object(worker_mod.pipeline, "run") as mock_video:
+            mock_srt.side_effect = lambda **kw: fake_srt_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        mock_srt.assert_called_once()
+        mock_video.assert_not_called()
+
+    def test_invalid_result_fails_without_writing_destination(self):
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(Path(kw["work_dir"]), valid=False)
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["status"], "failed")
+        self.assertEqual(final["error_category"], "VALIDATION_ERROR")
+        self.assertFalse((self.media_root / "out" / "ep.en.srt").exists())
+
+    def test_srt_validation_error_fails_the_job_with_its_own_category(self):
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = worker_mod.srt_translation.SrtValidationError("bad timestamp")
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["status"], "failed")
+        self.assertEqual(final["error_category"], "SRT_VALIDATION_ERROR")
+        self.assertFalse((self.media_root / "out" / "ep.en.srt").exists())
+
+    def test_missing_source_srt_fails_with_output_error(self):
+        job = self.store.create_srt_translation("in/does-not-exist.srt", "out/ep.en.srt")
+        claimed = self.store.claim()
+        self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["status"], "failed")
+        self.assertEqual(final["error_category"], "OUTPUT_ERROR")
+
+    def test_overwrite_english_false_keeps_existing_destination(self):
+        (self.media_root / "out" / "ep.en.srt").write_text("stale content", encoding="utf-8")
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "out/ep.en.srt", overwrite_english=False)
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["status"], "completed")
+        self.assertEqual(final["outputs"], [])
+        self.assertEqual((self.media_root / "out" / "ep.en.srt").read_text(encoding="utf-8"),
+                         "stale content")
+
+    def test_cancel_requested_during_translation_stops_the_job_leaving_destination_untouched(self):
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        claimed = self.store.claim()
+
+        def fake_run(**kw):
+            self.store.request_cancel(claimed["id"])
+            kw["on_event"]("SRT_TRANSLATION_PROGRESS", {"done": 1, "total": 5})
+            return fake_srt_result(Path(kw["work_dir"]))
+
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline",
+                         side_effect=fake_run):
+            self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["status"], "cancelled")
+        self.assertFalse((self.media_root / "out" / "ep.en.srt").exists())
+
+    def test_glossary_entities_reach_the_srt_pipeline(self):
+        glossary_dir = Path(self.tmp.name) / "glossary"
+        glossary_dir.mkdir()
+        (glossary_dir / "show.yaml").write_text(
+            "tvdb_id: 111\ntitle: Show\nentities:\n  - canonical: Eda\n    protected: true\n",
+            encoding="utf-8")
+        worker = Worker(self.store, str(self.media_root), str(self.work_root),
+                        glossary_dir=str(glossary_dir))
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "out/ep.en.srt", video_path="Show {tvdb-111}/S01E01.mkv")
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        entities = mock_run.call_args.kwargs["glossary_entities"]
+        self.assertEqual([e.canonical for e in entities], ["Eda"])
+
+    def test_glossary_phrases_reach_the_srt_pipeline(self):
+        glossary_dir = Path(self.tmp.name) / "glossary"
+        glossary_dir.mkdir()
+        (glossary_dir / "turkish.yaml").write_text(
+            'language: tr\nphrases:\n  - source: "Peki."\n    translation: "Okay."\n',
+            encoding="utf-8")
+        worker = Worker(self.store, str(self.media_root), str(self.work_root),
+                        glossary_dir=str(glossary_dir))
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "out/ep.en.srt", video_path="Show {tvdb-111}/S01E01.mkv")
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        phrases = mock_run.call_args.kwargs["glossary_phrases"]
+        self.assertEqual([(p.source, p.translation) for p in phrases], [("Peki.", "Okay.")])
+
+    def test_no_video_association_yields_no_glossary_entities(self):
+        glossary_dir = Path(self.tmp.name) / "glossary"
+        glossary_dir.mkdir()
+        (glossary_dir / "show.yaml").write_text(
+            "tvdb_id: 111\ntitle: Show\nentities:\n  - canonical: Eda\n    protected: true\n",
+            encoding="utf-8")
+        worker = Worker(self.store, str(self.media_root), str(self.work_root),
+                        glossary_dir=str(glossary_dir))
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            worker._process(claimed)
+        self.assertEqual(mock_run.call_args.kwargs["glossary_entities"], [])
+
+
+class SrtUploadSourceResolutionTests(unittest.TestCase):
+    """An uploaded source lives under srt_upload_dir, deliberately absent
+    from media_root entirely -- proving the worker resolves against the
+    correct root rather than always defaulting to media_root."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.media_root = Path(self.tmp.name) / "data"
+        self.upload_dir = Path(self.tmp.name) / "srt_uploads"
+        self.media_root.mkdir(parents=True)
+        self.upload_dir.mkdir(parents=True)
+        (self.media_root / "out").mkdir()
+        (self.upload_dir / "abc123.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nMerhaba\n", encoding="utf-8")
+        self.store = JobStore(Path(self.tmp.name) / "jobs.db")
+        self.worker = Worker(self.store, str(self.media_root), str(self.tmp.name) + "/work",
+                             srt_upload_dir=str(self.upload_dir))
+
+    def test_uploaded_source_resolves_against_upload_dir_not_media_root(self):
+        job = self.store.create_srt_translation(
+            "abc123.srt", "out/ep.en.srt", source_is_uploaded=True)
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(Path(kw["work_dir"]))
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["status"], "completed")
+        self.assertTrue((self.media_root / "out" / "ep.en.srt").exists())
+
+    def test_worker_with_no_upload_dir_configured_fails_an_uploaded_job_cleanly(self):
+        worker = Worker(self.store, str(self.media_root), str(self.tmp.name) + "/work")
+        job = self.store.create_srt_translation(
+            "abc123.srt", "out/ep.en.srt", source_is_uploaded=True)
+        claimed = self.store.claim()
+        worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["status"], "failed")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,9 @@ import inspect
 import unittest
 
 import glossary as glossary_mod
-from glossary import (Entity, build_glossary, entity_occurrence_report, protect,
+from glossary import (Entity, PhraseEntry, bare_entity_translation,
+                      build_glossary, build_phrase_map,
+                      entity_occurrence_report, protect,
                       recover_dropped_entities, restore)
 
 
@@ -95,6 +97,101 @@ class CjkBoundaryTests(unittest.TestCase):
         protected = protect("Cenkiz geldi.", g)
         self.assertIn("Cenk", protected)
         self.assertNotIn(list(g.values())[0][0], protected)
+
+
+class TurkishCapitalDottedITests(unittest.TestCase):
+    """Real defect (2026-09-19): str.casefold() maps Turkish capital
+    dotted "İ" (U+0130) to a two-codepoint sequence ("i" + combining dot
+    above, U+0307), a different string than the real "İ". build_glossary()
+    used to key its dict by the casefolded form and protect() regex-
+    matched directly against that key, so an entity like "İstanbul"
+    silently never matched real "İstanbul" text at all."""
+
+    def test_entity_with_capital_dotted_i_is_protected(self):
+        g = build_glossary([Entity("İstanbul", ["İstanbul"])])
+        protected = protect("İstanbul'da yaşıyorum.", g)
+        self.assertNotIn("İstanbul", protected)
+
+    def test_lowercase_and_uppercase_variants_still_match_case_insensitively(self):
+        g = build_glossary([Entity("İstanbul", ["İstanbul"])])
+        protected = protect("istanbul'a gittim. İSTANBUL çok güzel.", g)
+        self.assertNotIn("istanbul", protected.casefold())
+
+    def test_restore_still_reinserts_the_canonical_spelling(self):
+        g = build_glossary([Entity("İstanbul", ["İstanbul"])])
+        protected = protect("İstanbul'da yaşıyorum.", g)
+        self.assertIn("İstanbul", restore(protected, g))
+
+
+class BuildPhraseMapTests(unittest.TestCase):
+    """PhraseEntry/build_phrase_map (added 2026-09-19): a forced whole-
+    segment translation, distinct from Entity's name-protection -- see
+    real QC evidence in glossary.PhraseEntry's docstring."""
+
+    def test_language_matched_phrase_is_included(self):
+        phrases = [PhraseEntry(source="Peki.", translation="Okay.", language="tr")]
+        m = build_phrase_map(phrases, "tr")
+        self.assertEqual(m["peki"], "Okay.")
+
+    def test_language_mismatched_phrase_is_excluded(self):
+        phrases = [PhraseEntry(source="Peki.", translation="Okay.", language="tr")]
+        m = build_phrase_map(phrases, "es")
+        self.assertEqual(m, {})
+
+    def test_universal_language_none_applies_regardless_of_detected_language(self):
+        phrases = [PhraseEntry(source="OK", translation="OK", language=None)]
+        self.assertEqual(build_phrase_map(phrases, "tr")["ok"], "OK")
+        self.assertEqual(build_phrase_map(phrases, "es")["ok"], "OK")
+
+    def test_phrase_key_normalizes_trailing_punctuation_and_case(self):
+        phrases = [PhraseEntry(source="Peki.", translation="Okay.", language="tr")]
+        m = build_phrase_map(phrases, "tr")
+        self.assertIn("peki", m)
+        self.assertNotIn("peki.", m)
+
+
+class BareEntityTranslationTests(unittest.TestCase):
+    """Real evidence (S01E02 QC run, 2026-09-20): NLLB hallucinated
+    "Cenk, what's going on?" from bare "Cenk." despite Cenk already being
+    a protected entity -- protection alone doesn't stop the model padding
+    out a placeholder-only input. bare_entity_translation() lets the
+    caller detect that shape and skip the model entirely."""
+
+    def test_bare_single_mention_returns_restored_text(self):
+        g = build_glossary([Entity("Cenk", ["Cenk"])])
+        protected = protect("Cenk.", g)
+        self.assertEqual(bare_entity_translation(protected, g), "Cenk.")
+
+    def test_bare_mention_with_exclamation_returns_restored_text(self):
+        g = build_glossary([Entity("Sirius", ["Sirius"])])
+        protected = protect("Sirius!", g)
+        self.assertEqual(bare_entity_translation(protected, g), "Sirius!")
+
+    def test_two_bare_mentions_together_are_still_bare(self):
+        g = build_glossary([Entity("Cenk", ["Cenk"]), Entity("Sirius", ["Sirius"])])
+        protected = protect("Cenk, Sirius!", g)
+        self.assertEqual(bare_entity_translation(protected, g), "Cenk, Sirius!")
+
+    def test_real_sentence_containing_a_protected_name_is_not_bare(self):
+        g = build_glossary([Entity("Cenk", ["Cenk"])])
+        protected = protect("Cenk'in haberi var mı?", g)
+        self.assertIsNone(bare_entity_translation(protected, g))
+
+    def test_no_placeholder_present_returns_none(self):
+        g = build_glossary([Entity("Cenk", ["Cenk"])])
+        protected = protect("Merhaba.", g)
+        self.assertIsNone(bare_entity_translation(protected, g))
+
+    def test_empty_glossary_returns_none(self):
+        self.assertIsNone(bare_entity_translation("Cenk.", {}))
+
+    def test_phrase_key_matches_variant_trailing_punctuation(self):
+        # "Peki." / "Peki!" / "Peki?" -- real subtitle punctuation varies
+        # on short interjections; all must hit the same glossary entry.
+        phrases = [PhraseEntry(source="Peki.", translation="Okay.", language="tr")]
+        m = build_phrase_map(phrases, "tr")
+        self.assertEqual(m[glossary_mod._phrase_key("Peki!")], "Okay.")
+        self.assertEqual(m[glossary_mod._phrase_key("peki?")], "Okay.")
 
 
 if __name__ == "__main__":

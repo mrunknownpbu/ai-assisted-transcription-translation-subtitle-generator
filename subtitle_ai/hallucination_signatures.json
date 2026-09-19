@@ -15,6 +15,14 @@
       "category": "broadcast_boilerplate",
       "weight": 0.5,
       "description": "Turkish broadcaster (TRT) audio-description disclaimer. Lower weight than the credit pattern: this text is plausibly genuinely spoken by an announcer in some broadcasts, not purely hallucinated -- treat as suspect, not certain, pending audio confirmation."
+    },
+    {
+      "id": "tr-thanks-for-watching",
+      "language": "tr",
+      "pattern": "zlediğiniz\\s+için\\s+teşekkür",
+      "category": "outro_boilerplate",
+      "weight": 0.9,
+      "description": "faster-whisper large-v3's well-documented 'thanks for watching' hallucination family (this module's own docstring names it), Turkish form. Confirmed artifact (Love Is In The Air S01E01-E02 audit, 2026-09-17): 'Izlediginiz icin tesekkurler'/'...tesekkur ederim' appears mid-episode with no corresponding dialogue, at points acoustic evidence alone can't catch -- low no_speech_prob and compression_ratio, avg_logprob above the low-confidence threshold, and only 2-3 occurrences per episode (below the >=3 recurrence-heuristic gate). Leading vowel of 'Izlediginiz'/'izlediginiz' is deliberately left out of the pattern since Turkish dotted/dotless I casing is unreliable under Python's re.IGNORECASE; 'zlediginiz' alone is distinctive enough to avoid false positives."
     }
   ]
 }

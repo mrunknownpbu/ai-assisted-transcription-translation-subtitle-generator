@@ -145,9 +145,53 @@ class SchemaMigrationTests(unittest.TestCase):
             self.assertIsNone(job["requested_audio_stream"])
             self.assertIsNone(job["selected_audio_stream"])
             self.assertEqual(job["stream_selection_mode"], "AUTO")
+            self.assertIsNone(job["tvdb_id"])
             # And new jobs on the migrated database work normally.
             new_job = store.create("Show/S01E02.mkv")
             self.assertEqual(new_job["source_lang"], "auto")
+
+    def test_tvdb_id_backfilled_from_video_path_on_migration(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "jobs.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute("""
+                CREATE TABLE jobs (
+                    id TEXT PRIMARY KEY, video_path TEXT NOT NULL, status TEXT NOT NULL,
+                    stage TEXT NOT NULL DEFAULT 'QUEUED', progress REAL NOT NULL DEFAULT 0,
+                    source_lang TEXT, overwrite_original INTEGER NOT NULL DEFAULT 0,
+                    overwrite_english INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL,
+                    started_at REAL, finished_at REAL, updated_at REAL NOT NULL, error TEXT,
+                    error_category TEXT, outputs TEXT NOT NULL DEFAULT '[]',
+                    qc TEXT NOT NULL DEFAULT '{}', cancel_requested INTEGER NOT NULL DEFAULT 0,
+                    retry_of_job_id TEXT, attempt INTEGER NOT NULL DEFAULT 1,
+                    log TEXT NOT NULL DEFAULT '[]'
+                )""")
+            conn.execute(
+                "INSERT INTO jobs (id, video_path, status, created_at, updated_at) VALUES "
+                "('tagged', 'Show (2020) {tvdb-383383}/S01E01.mkv', 'completed', 0, 0), "
+                "('untagged', 'Some Show/S01E01.mkv', 'completed', 0, 0)")
+            conn.commit()
+            conn.close()
+
+            store = JobStore(db_path)
+            self.assertEqual(store.get("tagged")["tvdb_id"], 383383)
+            self.assertIsNone(store.get("untagged")["tvdb_id"])
+
+    def test_backfill_runs_even_when_column_already_existed_with_null_rows(self):
+        # Real deploy sequence this guards against: the tvdb_id column
+        # shipped in one release, the backfill logic in a later one --
+        # gating backfill on "column just added" would silently skip
+        # every row created in between.
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "jobs.db"
+            store = JobStore(db_path)
+            with store._immediate() as conn:
+                conn.execute(
+                    "INSERT INTO jobs (id, video_path, status, created_at, updated_at, tvdb_id) "
+                    "VALUES ('old', 'Show {tvdb-555}/S01E01.mkv', 'completed', 0, 0, NULL)")
+            store2 = JobStore(db_path)  # re-opening re-runs _migrate()
+            self.assertEqual(store2.get("old")["tvdb_id"], 555)
 
 
 class ClaimRaceSafetyTests(JobStoreTestCase):
@@ -300,6 +344,65 @@ class CountsTests(JobStoreTestCase):
         self.assertEqual(counts["QUEUED"], 1)
 
 
+class SeriesGroupingTests(JobStoreTestCase):
+    """tvdb_id is extracted once at create() time (glossary_profile.
+    find_tvdb_id(), already used elsewhere for the same purpose) and
+    persisted, so series grouping never re-parses video_path per query."""
+
+    def test_tvdb_id_extracted_from_path_on_create(self):
+        job = self.store.create("Show (2020) {tvdb-383383}/Season 01/S01E01.mkv")
+        self.assertEqual(job["tvdb_id"], 383383)
+
+    def test_no_tvdb_tag_leaves_tvdb_id_none(self):
+        job = self.store.create("Some Show/Season 01/S01E01.mkv")
+        self.assertIsNone(job["tvdb_id"])
+
+    def test_list_series_groups_by_tvdb_id(self):
+        self.store.create("Show A {tvdb-111}/S01E01.mkv")
+        self.store.create("Show A {tvdb-111}/S01E02.mkv")
+        self.store.create("Show B {tvdb-222}/S01E01.mkv")
+        series = {s["tvdb_id"]: s for s in self.store.list_series()}
+        self.assertEqual(series[111]["total"], 2)
+        self.assertEqual(series[222]["total"], 1)
+
+    def test_list_series_buckets_untagged_jobs_under_none(self):
+        self.store.create("Show A {tvdb-111}/S01E01.mkv")
+        self.store.create("Untagged Show/S01E01.mkv")
+        series = {s["tvdb_id"]: s for s in self.store.list_series()}
+        self.assertIn(None, series)
+        self.assertEqual(series[None]["total"], 1)
+
+    def test_list_series_counts_split_by_status(self):
+        j1 = self.store.create("Show A {tvdb-111}/S01E01.mkv")
+        self.store.create("Show A {tvdb-111}/S01E02.mkv")
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "completed")
+        series = {s["tvdb_id"]: s for s in self.store.list_series()}
+        self.assertEqual(series[111]["counts"]["COMPLETED"], 1)
+        self.assertEqual(series[111]["counts"]["QUEUED"], 1)
+
+    def test_list_by_tvdb_id_returns_only_matching_jobs(self):
+        self.store.create("Show A {tvdb-111}/S01E01.mkv")
+        self.store.create("Show B {tvdb-222}/S01E01.mkv")
+        jobs = self.store.list_by_tvdb_id(111)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["tvdb_id"], 111)
+
+    def test_list_by_tvdb_id_none_returns_untagged_jobs(self):
+        self.store.create("Show A {tvdb-111}/S01E01.mkv")
+        self.store.create("Untagged Show/S01E01.mkv")
+        jobs = self.store.list_by_tvdb_id(None)
+        self.assertEqual(len(jobs), 1)
+        self.assertIsNone(jobs[0]["tvdb_id"])
+
+    def test_list_by_tvdb_id_orders_by_video_path(self):
+        self.store.create("Show A {tvdb-111}/S01E02.mkv")
+        self.store.create("Show A {tvdb-111}/S01E01.mkv")
+        jobs = self.store.list_by_tvdb_id(111)
+        self.assertEqual([j["video_path"] for j in jobs],
+                         ["Show A {tvdb-111}/S01E01.mkv", "Show A {tvdb-111}/S01E02.mkv"])
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -348,3 +451,225 @@ class DuplicateJobPreventionTests(JobStoreTestCase):
 
         self.assertEqual(len(results), 1, "exactly one concurrent create() must succeed")
         self.assertEqual(len(errors), 7)
+
+
+class RetryOverwriteInheritanceTests(JobStoreTestCase):
+    """Real bug (2026-09-19): a plain bool=False default on retry()'s
+    overwrite_original/overwrite_english meant every retry submitted with
+    no explicit overwrite choice (the GUI's one-click Retry button does
+    exactly this) silently reset both flags, keeping stale pre-existing
+    output instead of replacing it."""
+
+    def test_retry_without_override_inherits_true_overwrite_original(self):
+        self.store.create("Show/S01E01.mkv", "tr", overwrite_original=True)
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"])
+        self.assertTrue(retried["overwrite_original"])
+
+    def test_retry_without_override_inherits_false_overwrite_original(self):
+        self.store.create("Show/S01E01.mkv", "tr", overwrite_original=False)
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"])
+        self.assertFalse(retried["overwrite_original"])
+
+    def test_retry_without_override_inherits_true_overwrite_english(self):
+        self.store.create("Show/S01E01.mkv", "tr", overwrite_english=True)
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"])
+        self.assertTrue(retried["overwrite_english"])
+
+    def test_retry_without_override_inherits_false_overwrite_english(self):
+        self.store.create("Show/S01E01.mkv", "tr", overwrite_english=False)
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"])
+        self.assertFalse(retried["overwrite_english"])
+
+    def test_explicit_override_still_wins_over_inheritance(self):
+        self.store.create("Show/S01E01.mkv", "tr", overwrite_original=True, overwrite_english=True)
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"], overwrite_original=False, overwrite_english=False)
+        self.assertFalse(retried["overwrite_original"])
+        self.assertFalse(retried["overwrite_english"])
+
+
+class OrphanRecoveryTests(JobStoreTestCase):
+    def test_single_orphaned_running_job_becomes_queued(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        self.store.claim()
+        recovered = self.store.recover_orphaned_jobs()
+        self.assertEqual(recovered, [job["id"]])
+        after = self.store.get(job["id"])
+        self.assertEqual(after["status"], "queued")
+        self.assertIsNone(after["started_at"])
+
+    def test_multiple_orphaned_jobs_all_recovered(self):
+        self.store.create("Show/S01E01.mkv", "tr")
+        self.store.create("Show/S01E02.mkv", "tr")
+        self.store.claim()
+        self.store.claim()
+        recovered = self.store.recover_orphaned_jobs()
+        self.assertEqual(len(recovered), 2)
+        statuses = {j["video_path"]: j["status"] for j in self.store.list()[0]}
+        self.assertEqual(statuses["Show/S01E01.mkv"], "queued")
+        self.assertEqual(statuses["Show/S01E02.mkv"], "queued")
+
+    def test_queued_job_is_left_untouched(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        self.store.recover_orphaned_jobs()
+        self.assertEqual(self.store.get(job["id"])["status"], "queued")
+
+    def test_completed_job_is_left_untouched(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "completed")
+        self.store.recover_orphaned_jobs()
+        self.assertEqual(self.store.get(job["id"])["status"], "completed")
+
+    def test_failed_job_is_left_untouched(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        self.store.recover_orphaned_jobs()
+        self.assertEqual(self.store.get(job["id"])["status"], "failed")
+
+    def test_cancelled_job_is_left_untouched(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        self.store.request_cancel(job["id"])
+        self.store.recover_orphaned_jobs()
+        self.assertEqual(self.store.get(job["id"])["status"], "cancelled")
+
+    def test_recovery_is_idempotent(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        self.store.claim()
+        first = self.store.recover_orphaned_jobs()
+        second = self.store.recover_orphaned_jobs()
+        self.assertEqual(first, [job["id"]])
+        self.assertEqual(second, [])
+
+    def test_recovered_job_can_be_claimed_and_finished_normally(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        self.store.claim()
+        self.store.recover_orphaned_jobs()
+        reclaimed = self.store.claim()
+        self.assertEqual(reclaimed["id"], job["id"])
+        self.assertEqual(reclaimed["status"], "running")
+        finished = self.store.finish(reclaimed["id"], "completed")
+        self.assertEqual(finished["status"], "completed")
+
+    def test_recovery_is_job_type_agnostic(self):
+        # A stuck SRT-translation job must be recovered exactly like a
+        # stuck video job -- recover_orphaned_jobs() has no job_type
+        # filter, by construction.
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        self.store.claim()
+        recovered = self.store.recover_orphaned_jobs()
+        self.assertEqual(recovered, [job["id"]])
+        self.assertEqual(self.store.get(job["id"])["status"], "queued")
+
+
+class SrtTranslationJobCreationTests(JobStoreTestCase):
+    def test_create_returns_queued_srt_translation_job(self):
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        self.assertEqual(job["status"], "queued")
+        self.assertEqual(job["job_type"], "srt_translation")
+        self.assertEqual(job["source_srt_path"], "in/ep.tr.srt")
+        self.assertEqual(job["destination_srt_path"], "out/ep.en.srt")
+        self.assertEqual(job["source_lang"], "auto")
+        self.assertEqual(job["target_lang"], "en")
+        self.assertFalse(job["overwrite_english"])
+
+    def test_video_jobs_default_to_job_type_video(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        self.assertEqual(job["job_type"], "video")
+
+    def test_optional_video_association_derives_tvdb_id(self):
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "out/ep.en.srt",
+            video_path="Show (2020) {tvdb-383383}/Season 01/S01E01.mkv")
+        self.assertEqual(job["tvdb_id"], 383383)
+        self.assertEqual(job["video_path"], "Show (2020) {tvdb-383383}/Season 01/S01E01.mkv")
+
+    def test_no_video_association_leaves_tvdb_id_none(self):
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        self.assertIsNone(job["tvdb_id"])
+        self.assertEqual(job["video_path"], "")
+
+    def test_duplicate_destination_while_active_is_refused(self):
+        self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        with self.assertRaises(JobStoreError):
+            self.store.create_srt_translation("in/other.tr.srt", "out/ep.en.srt")
+
+    def test_same_destination_allowed_again_once_terminal(self):
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        second = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        self.assertNotEqual(second["id"], job["id"])
+
+    def test_video_job_and_srt_translation_job_do_not_collide_on_video_path(self):
+        # Real scoping requirement: create()'s duplicate check must be
+        # job_type='video'-scoped so an unrelated srt_translation job
+        # referencing the same episode never trips it, and vice versa.
+        self.store.create_srt_translation(
+            "in/ep.tr.srt", "out/ep.en.srt", video_path="Show/S01E01.mkv")
+        self.store.create("Show/S01E01.mkv", "tr")  # must not raise
+
+    def test_claim_and_finish_work_for_srt_translation_jobs(self):
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        claimed = self.store.claim()
+        self.assertEqual(claimed["id"], job["id"])
+        self.assertEqual(claimed["status"], "running")
+        finished = self.store.finish(claimed["id"], "completed", outputs=["out/ep.en.srt"])
+        self.assertEqual(finished["status"], "completed")
+
+    def test_retry_stays_an_srt_translation_job_with_same_paths(self):
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "out/ep.en.srt", overwrite_english=True)
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"])
+        self.assertEqual(retried["job_type"], "srt_translation")
+        self.assertEqual(retried["source_srt_path"], "in/ep.tr.srt")
+        self.assertEqual(retried["destination_srt_path"], "out/ep.en.srt")
+        self.assertTrue(retried["overwrite_english"])
+        self.assertEqual(retried["retry_of_job_id"], claimed["id"])
+        self.assertEqual(retried["attempt"], 2)
+
+    def test_retry_of_srt_translation_job_inherits_overwrite_english(self):
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "out/ep.en.srt", overwrite_english=False)
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"])
+        self.assertFalse(retried["overwrite_english"])
+
+    def test_source_is_uploaded_defaults_to_false(self):
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        self.assertFalse(job["source_is_uploaded"])
+
+    def test_source_is_uploaded_persists_when_true(self):
+        job = self.store.create_srt_translation(
+            "abc123.srt", "out/ep.en.srt", source_is_uploaded=True)
+        self.assertTrue(job["source_is_uploaded"])
+        self.assertTrue(self.store.get(job["id"])["source_is_uploaded"])
+
+    def test_retry_of_uploaded_source_job_inherits_source_is_uploaded(self):
+        job = self.store.create_srt_translation(
+            "abc123.srt", "out/ep.en.srt", source_is_uploaded=True)
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"])
+        self.assertTrue(retried["source_is_uploaded"])
+        self.assertEqual(retried["source_srt_path"], "abc123.srt")
+
+    def test_retry_of_library_source_job_keeps_source_is_uploaded_false(self):
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"])
+        self.assertFalse(retried["source_is_uploaded"])

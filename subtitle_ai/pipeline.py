@@ -78,6 +78,8 @@ def _emit(on_event, events, name: str, **data):
 def run(video_path: str, media_root: str, work_dir: str, *,
        source_lang: str = AUTO, audio_stream_index: int | None = None,
        glossary_entities: list[glossary_mod.Entity] | None = None,
+       glossary_phrases: list[glossary_mod.PhraseEntry] | None = None,
+       extra_hotwords: list[str] | None = None,
        asr_config: AsrConfig | None = None, translation_config=None,
        whisper_model=None, translation_model=None, translation_tok=None, translation_bos=None,
        stream_sampler=None, transcript_cache_dir: str | None = None,
@@ -99,8 +101,11 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     identity + stream + ASR config + pipeline version (see
     transcript.auto_lookup_key() for AUTO mode, transcript.cache_key() for
     MANUAL mode, and transcript.validate_cached_transcript() for the
-    post-load safety check) -- not yet wired into worker.py/api.py for
-    real jobs, dev/test use only for now."""
+    post-load safety check). IS wired into main.py/worker.py for real
+    jobs (SUBTITLE_AI_TRANSCRIPT_CACHE, passed through Worker's
+    constructor) -- worker.py deliberately bypasses it on a retry (see
+    Worker._process_video's own comment on why), so this only ever
+    serves a first attempt at a job, never masking a genuine re-run."""
     events: list[tuple[str, dict]] = []
     video = Path(video_path)
     work = Path(work_dir)
@@ -156,7 +161,16 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     # them into the output. Built here (flat surface forms, not the
     # placeholder-keyed glossary_map below) because ASR runs before that
     # map exists.
-    hotwords = " ".join(sorted({form for e in (glossary_entities or []) for form in e.surface_forms})) or None
+    # extra_hotwords (auto-mined, see auto_glossary.py) feeds ASR bias
+    # ONLY -- unioned here with the manually-curated surface forms, but
+    # never reaching glossary_map/build_glossary() below, which is what
+    # actually drives translation-time protect()/restore(). A false-
+    # positive here is a mild decoding bias; a false-positive there would
+    # silently corrupt genuine dialogue translation with no human review
+    # -- see auto_glossary.py module docstring.
+    hotwords = " ".join(sorted(
+        {form for e in (glossary_entities or []) for form in e.surface_forms} | set(extra_hotwords or [])
+    )) or None
     asr_config = asr_config or AsrConfig(language=asr_language, hotwords=hotwords)
 
     # Cache lookup key is computed BEFORE extraction/ASR so a hit can skip
@@ -252,6 +266,8 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     _emit(on_event, events, "SOURCE_SEGMENTATION_COMPLETED", cues=len(source_cues))
 
     glossary_map = glossary_mod.build_glossary(glossary_entities) if glossary_entities else {}
+    phrase_map = (glossary_mod.build_phrase_map(glossary_phrases, transcript.language)
+                 if glossary_phrases else {})
     spans = translate.build_context_spans(source_cues)
     sentences = [join_words([source_cues[i].text for i in span], transcript.language) for span in spans]
     protected_sentences = [glossary_mod.protect(s, glossary_map) for s in sentences] if glossary_map else sentences
@@ -273,7 +289,7 @@ def run(video_path: str, media_root: str, work_dir: str, *,
                 f"language {transcript.language!r}")
         _emit(on_event, events, "TRANSLATION_STARTED", spans=len(spans))
         translations = translate.translate_spans(
-            source_cues, spans, transcript.language, glossary_map=glossary_map,
+            source_cues, spans, transcript.language, glossary_map=glossary_map, phrase_map=phrase_map,
             config=translation_config, model=translation_model, tok=translation_tok, bos=translation_bos,
             on_progress=lambda done, total: _emit(on_event, events, "TRANSLATION_PROGRESS",
                                                   done=done, total=total))

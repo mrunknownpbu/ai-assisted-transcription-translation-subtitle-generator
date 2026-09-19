@@ -42,7 +42,14 @@ services:
       # subtitle-ai; renaming a live job db/work dir is a data-migration
       # operation, not part of an image rename.
       - ${CONFIG_PATH}/subtitle-ai-v2/cache:/cache
-      - ${CONFIG_PATH}/subtitle-ai/glossary:/glossary:ro
+      # Read-write (changed 2026-09-19): the app now writes here itself --
+      # POST /api/series/{tvdb_id}/glossary/promote (one-click promotion
+      # of a mined suggestion into a real, translation-affecting entity)
+      # needs to create/update series glossary files. Still fully
+      # contained to this app's own dedicated config folder, owned by the
+      # same uid (1000) the container already runs as -- no broader
+      # permission granted.
+      - ${CONFIG_PATH}/subtitle-ai/glossary:/glossary
     ports:
       - "8099:8080"
     deploy:

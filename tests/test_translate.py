@@ -62,5 +62,94 @@ class TranslateSpansGpuLockTests(unittest.TestCase):
         self._run("cuda").assert_called_once()
 
 
+class PhraseMapShortCircuitTests(unittest.TestCase):
+    """phrase_map (added 2026-09-19, see glossary.PhraseEntry) skips the
+    model entirely for a span whose whole text exact-matches a known
+    phrase -- fixes real hallucination on short, context-free utterances
+    (e.g. "Bekle." -> "Wait, wait, wait. I got it.")."""
+
+    def test_phrase_match_skips_the_model_and_uses_forced_translation(self):
+        cues = [cue(0, 0.0, 1.0, "Peki.")]
+        spans = [[0]]
+        with patch("translate.load_model") as mock_load, \
+             patch("translate.translate_batch") as mock_batch:
+            result = translate_spans(cues, spans, "tr", phrase_map={"peki": "Okay."})
+        mock_load.assert_not_called()
+        mock_batch.assert_not_called()
+        self.assertEqual(result, ["Okay."])
+
+    def test_phrase_match_is_spliced_back_at_the_correct_index(self):
+        cues = [cue(0, 0.0, 1.0, "Peki."), cue(1, 1.0, 2.0, "Merhaba nasılsın")]
+        spans = [[0], [1]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", return_value=["Hello, how are you"]) as mock_batch:
+            result = translate_spans(cues, spans, "tr", phrase_map={"peki": "Okay."})
+        # Only the non-matched span's text is ever sent to the model.
+        mock_batch.assert_called_once()
+        self.assertEqual(mock_batch.call_args[0][3], ["Merhaba nasılsın"])
+        self.assertEqual(result, ["Okay.", "Hello, how are you"])
+
+    def test_no_phrase_map_behaves_exactly_as_before(self):
+        cues = [cue(0, 0.0, 1.0, "Merhaba")]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", return_value=["Hello"]):
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(result, ["Hello"])
+
+
+class BareEntityShortCircuitTests(unittest.TestCase):
+    """Real evidence (S01E02 QC run, 2026-09-20): bare "Cenk." (Cenk
+    already protected) hallucinated to "Cenk, what's going on?" under
+    NLLB. A span that entity-protection reduces to nothing but a
+    placeholder plus punctuation must skip the model entirely."""
+
+    def test_bare_entity_mention_skips_the_model(self):
+        from glossary import Entity, build_glossary
+        g = build_glossary([Entity("Cenk", ["Cenk"])])
+        cues = [cue(0, 0.0, 1.0, "Cenk.")]
+        spans = [[0]]
+        with patch("translate.load_model") as mock_load, \
+             patch("translate.translate_batch") as mock_batch:
+            result = translate_spans(cues, spans, "tr", glossary_map=g)
+        mock_load.assert_not_called()
+        mock_batch.assert_not_called()
+        self.assertEqual(result, ["Cenk."])
+
+    def test_bare_entity_mention_spliced_back_at_correct_index(self):
+        from glossary import Entity, build_glossary
+        g = build_glossary([Entity("Cenk", ["Cenk"])])
+        cues = [cue(0, 0.0, 1.0, "Cenk."), cue(1, 1.0, 2.0, "Cenk'in haberi var mı?")]
+        spans = [[0], [1]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", return_value=["Xaa's news, is there?"]) as mock_batch:
+            result = translate_spans(cues, spans, "tr", glossary_map=g)
+        # Only the non-bare span's protected text is ever sent to the model.
+        mock_batch.assert_called_once()
+        self.assertEqual(mock_batch.call_args[0][3], ["Xaa'in haberi var mı?"])
+        self.assertEqual(result, ["Cenk.", "Cenk's news, is there?"])
+
+    def test_real_sentence_with_protected_name_still_goes_through_the_model(self):
+        from glossary import Entity, build_glossary
+        g = build_glossary([Entity("Cenk", ["Cenk"])])
+        cues = [cue(0, 0.0, 1.0, "Cenk'in haberi var mı?")]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", return_value=["Xaa's news, is there?"]) as mock_batch:
+            result = translate_spans(cues, spans, "tr", glossary_map=g)
+        mock_batch.assert_called_once()
+        self.assertEqual(result, ["Cenk's news, is there?"])
+
+
+class DefaultConfigTests(unittest.TestCase):
+    def test_default_device_is_cuda(self):
+        # Flipped this session (real nvidia-smi headroom measured on a
+        # live job: 3972MiB free of 7680MiB total with ASR + Tdarr both
+        # active, comfortably above NLLB-200-distilled-1.3B's ~2.6GB
+        # fp16 footprint) -- see translate.py's TranslationConfig
+        # docstring for the full reasoning and accepted tradeoff.
+        self.assertEqual(TranslationConfig().device, "cuda")
+
+
 if __name__ == "__main__":
     unittest.main()

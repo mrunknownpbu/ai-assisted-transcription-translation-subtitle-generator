@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from glossary_profile import find_tvdb_id, load_profile
+from glossary_profile import find_series_glossary_path, find_series_root, find_tvdb_id, load_profile
 
 GLOBAL_YAML = """
 entities:
@@ -90,6 +90,105 @@ class FindTvdbIdTests(unittest.TestCase):
 
     def test_no_tag_returns_none(self):
         self.assertIsNone(find_tvdb_id("/data/drama/turkish/Some Show/Season 01/S01E01.mkv"))
+
+
+class FindSeriesRootTests(unittest.TestCase):
+    def test_finds_ancestor_directory_matching_tvdb_pattern(self):
+        path = "/data/drama/turkish/Love Is In The Air (2020) {tvdb-383383}/Season 01/S01E01.mkv"
+        root = find_series_root(path)
+        self.assertEqual(root.name, "Love Is In The Air (2020) {tvdb-383383}")
+
+    def test_returns_none_when_no_tvdb_tag_in_path(self):
+        self.assertIsNone(find_series_root("/data/drama/turkish/Some Show/Season 01/S01E01.mkv"))
+
+    def test_returns_nearest_matching_ancestor(self):
+        # A coincidental further ancestor also matching must not win over
+        # the nearer, correct series root.
+        path = ("/data/{tvdb-999999}/drama/Love Is In The Air (2020) {tvdb-383383}"
+               "/Season 01/S01E01.mkv")
+        root = find_series_root(path)
+        self.assertEqual(root.name, "Love Is In The Air (2020) {tvdb-383383}")
+
+
+class FindSeriesGlossaryPathTests(unittest.TestCase):
+    def test_finds_file_matching_tvdb_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "show.yaml"
+            path.write_text("tvdb_id: 383383\ntitle: Show\nentities: []\n", encoding="utf-8")
+            self.assertEqual(find_series_glossary_path(tmp, 383383), path)
+
+    def test_returns_none_when_no_file_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "global.yaml").write_text("entities: []\n", encoding="utf-8")
+            self.assertIsNone(find_series_glossary_path(tmp, 999999))
+
+    def test_ignores_global_layer_with_no_tvdb_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "global.yaml").write_text("entities: []\n", encoding="utf-8")
+            self.assertIsNone(find_series_glossary_path(tmp, 383383))
+
+
+TURKISH_PHRASE_YAML = """
+language: tr
+phrases:
+  - source: "Peki."
+    translation: "Okay."
+  - source: "Bekle."
+    translation: "Wait."
+"""
+
+SERIES_PHRASE_OVERRIDE_YAML = """
+tvdb_id: 383383
+title: "Test Series"
+phrases:
+  - source: "Peki."
+    translation: "Alright, boss."
+"""
+
+
+class LoadProfilePhrasesTests(unittest.TestCase):
+    """phrases: (added 2026-09-19, see glossary.PhraseEntry) -- additive
+    to the existing entities: loading, same layering rules (global/
+    category layers, keyed by file `language:`, then series layer wins)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def test_phrases_loaded_from_no_tvdb_id_file(self):
+        (self.dir / "turkish.yaml").write_text(TURKISH_PHRASE_YAML, encoding="utf-8")
+        profile = load_profile(self.dir, tvdb_id=None)
+        by_source = {p.source: p.translation for p in profile.phrases}
+        self.assertEqual(by_source["Peki."], "Okay.")
+        self.assertEqual(by_source["Bekle."], "Wait.")
+
+    def test_file_level_language_attached_to_every_phrase_from_that_file(self):
+        (self.dir / "turkish.yaml").write_text(TURKISH_PHRASE_YAML, encoding="utf-8")
+        profile = load_profile(self.dir, tvdb_id=None)
+        self.assertTrue(all(p.language == "tr" for p in profile.phrases))
+
+    def test_no_language_key_means_universal_phrase(self):
+        (self.dir / "global.yaml").write_text('phrases:\n  - source: "OK"\n    translation: "OK"\n',
+                                               encoding="utf-8")
+        profile = load_profile(self.dir, tvdb_id=None)
+        self.assertIsNone(profile.phrases[0].language)
+
+    def test_series_layer_phrase_overrides_same_key_from_earlier_layer(self):
+        (self.dir / "turkish.yaml").write_text(TURKISH_PHRASE_YAML, encoding="utf-8")
+        (self.dir / "series.yaml").write_text(SERIES_PHRASE_OVERRIDE_YAML, encoding="utf-8")
+        profile = load_profile(self.dir, tvdb_id=383383)
+        by_source = {p.source: p.translation for p in profile.phrases}
+        self.assertEqual(by_source["Peki."], "Alright, boss.")
+        # The un-overridden phrase from the earlier layer is untouched.
+        self.assertEqual(by_source["Bekle."], "Wait.")
+
+    def test_series_layer_not_applied_when_tvdb_id_does_not_match(self):
+        (self.dir / "turkish.yaml").write_text(TURKISH_PHRASE_YAML, encoding="utf-8")
+        (self.dir / "series.yaml").write_text(SERIES_PHRASE_OVERRIDE_YAML, encoding="utf-8")
+        profile = load_profile(self.dir, tvdb_id=999999)
+        by_source = {p.source: p.translation for p in profile.phrases}
+        self.assertEqual(by_source["Peki."], "Okay.")
 
 
 class TvdbEnrichmentTests(unittest.TestCase):

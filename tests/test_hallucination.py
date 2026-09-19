@@ -43,6 +43,24 @@ class KnownSignatureTests(unittest.TestCase):
         self.assertFalse(findings[0].suppress)
         self.assertEqual(findings[0].reasons, [])
 
+    def test_thanks_for_watching_is_caught_by_registry(self):
+        # Real measured case (Love Is In The Air S01E01, 2026-09-17 audit):
+        # acoustic evidence alone misses this -- low no_speech_prob and
+        # compression_ratio, avg_logprob above the low-confidence threshold,
+        # and only 2 occurrences in the episode (below the recurrence gate).
+        segments = [
+            make_segment(0, 60.0, 70.0, "Eda kızım hadi kalk dükkana gidiyoruz",
+                        avg_logprob=-0.2, no_speech_prob=0.02, compression_ratio=1.5),
+            make_segment(1, 71.41, 74.21, "İzlediğiniz için teşekkürler.",
+                        avg_logprob=-0.396, no_speech_prob=0.0045, compression_ratio=0.79),
+        ]
+        findings = detect(segments, language="tr")
+        hit = findings[1]
+        self.assertGreaterEqual(hit.score, 0.9)
+        self.assertTrue(any("signature:tr-thanks-for-watching" in r for r in hit.reasons))
+        self.assertTrue(hit.suppress)
+        self.assertEqual(findings[0].score, 0.0)   # unrelated dialogue untouched
+
     def test_signature_is_language_scoped(self):
         # An English segment containing the Turkish word "altyazı" would be
         # bizarre -- but the signature must not fire outside its declared
@@ -102,6 +120,21 @@ class RecurrenceTests(unittest.TestCase):
         for f in findings:
             self.assertFalse(any("recurrence_score" in r for r in f.reasons), f.reasons)
             self.assertFalse(f.suppress)
+
+    def test_common_two_word_phrase_is_never_flagged_by_recurrence(self):
+        # Real measured case (Love Is In The Air S01E01/E02, 2026-09-19):
+        # "Teşekkür Ederim" ("thank you"), "Öyle Mi" ("is that so?"), and
+        # "İyi Misin" ("are you okay?") each recurred 3x in a real episode
+        # with hallucination_score=0.00 on every other signal, yet were
+        # flagged by recurrence alone under the old `>= 2 words` gate.
+        for phrase in ("Teşekkür Ederim", "Öyle Mi", "İyi Misin"):
+            segments = [make_segment(i, t, t + 1.0, phrase) for i, t in
+                       enumerate([100.0, 1500.0, 2800.0])]
+            findings = detect(segments, language="tr")
+            for f in findings:
+                self.assertFalse(any("recurrence_score" in r for r in f.reasons),
+                                 (phrase, f.reasons))
+                self.assertFalse(f.suppress)
 
     def test_a_name_mentioned_several_times_is_not_suppressed(self):
         # A character's name recurring across a scene is completely normal

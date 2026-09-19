@@ -42,6 +42,12 @@ dev-scratch/
 *.wav
 *.mp3
 
+# Frontend build tooling / output -- installed and built fresh by both
+# `npm run build` (dev) and the Dockerfile's frontend-build stage; never
+# shipped as source.
+frontend/node_modules/
+frontend/dist/
+
 # Editor/OS cruft
 .DS_Store
 *.swp

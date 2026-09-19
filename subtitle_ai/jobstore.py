@@ -20,6 +20,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+import glossary_profile
+
 STATUSES = ("queued", "running", "completed", "failed", "skipped", "cancelled")
 TERMINAL_STATUSES = frozenset({"completed", "failed", "skipped", "cancelled"})
 ACTIVE_STATUSES = frozenset({"queued", "running"})
@@ -27,6 +29,7 @@ ACTIVE_STATUSES = frozenset({"queued", "running"})
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
+    job_type TEXT NOT NULL DEFAULT 'video',
     video_path TEXT NOT NULL,
     status TEXT NOT NULL,
     stage TEXT NOT NULL DEFAULT 'QUEUED',
@@ -54,7 +57,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     retry_of_job_id TEXT,
     attempt INTEGER NOT NULL DEFAULT 1,
-    log TEXT NOT NULL DEFAULT '[]'
+    log TEXT NOT NULL DEFAULT '[]',
+    tvdb_id INTEGER,
+    source_srt_path TEXT,
+    destination_srt_path TEXT,
+    source_is_uploaded INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
@@ -75,10 +82,19 @@ class JobStoreError(Exception):
 
 
 class JobStore:
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, on_change=None):
+        # on_change(job_id: str), if given, fires after every commit that
+        # mutates a job row (create/update/claim -- finish/append_log/
+        # request_cancel/retry all funnel through create()/update(), so a
+        # hook in exactly those two plus claim() covers every mutation
+        # path with no call site able to forget it). Kept as a plain
+        # optional callable, not an import of events.EventBus, so this
+        # module stays decoupled from the GUI push mechanism entirely --
+        # main.py wires the real EventBus.publish in.
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._on_change = on_change
         with self._connect() as conn:
             conn.executescript(SCHEMA)
             self._migrate(conn)
@@ -101,10 +117,30 @@ class JobStore:
             "stream_selection_mode":
                 "ALTER TABLE jobs ADD COLUMN stream_selection_mode TEXT NOT NULL DEFAULT 'AUTO'",
             "selected_stream_reason": "ALTER TABLE jobs ADD COLUMN selected_stream_reason TEXT",
+            "tvdb_id": "ALTER TABLE jobs ADD COLUMN tvdb_id INTEGER",
+            # 'video' default backfills every pre-existing row as a video
+            # job -- exactly what they all were before job_type existed.
+            "job_type": "ALTER TABLE jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'video'",
+            "source_srt_path": "ALTER TABLE jobs ADD COLUMN source_srt_path TEXT",
+            "destination_srt_path": "ALTER TABLE jobs ADD COLUMN destination_srt_path TEXT",
+            "source_is_uploaded":
+                "ALTER TABLE jobs ADD COLUMN source_is_uploaded INTEGER NOT NULL DEFAULT 0",
         }
         for column, ddl in migrations.items():
             if column not in existing:
                 conn.execute(ddl)
+        # Deliberately NOT gated on "column just added": a real deploy
+        # sequence caught this the hard way -- the column can already
+        # exist (added by an earlier release) with rows still NULL
+        # because the backfill logic itself shipped later. Re-deriving
+        # via the same pure find_tvdb_id(video_path) create() uses is
+        # cheap (a regex match) and idempotent (a legitimately-untagged
+        # row stays NULL every time), so it's safe to run on every
+        # startup rather than try to gate a one-time migration correctly.
+        for row in conn.execute("SELECT id, video_path FROM jobs WHERE tvdb_id IS NULL").fetchall():
+            tvdb_id = glossary_profile.find_tvdb_id(row["video_path"])
+            if tvdb_id is not None:
+                conn.execute("UPDATE jobs SET tvdb_id=? WHERE id=?", (tvdb_id, row["id"]))
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
@@ -126,29 +162,63 @@ class JobStore:
         finally:
             conn.close()
 
+    def _notify(self, job_id: str) -> None:
+        if self._on_change:
+            self._on_change(job_id)
+
     def _row_to_dict(self, row: sqlite3.Row) -> dict:
         d = dict(row)
         d["overwrite_original"] = bool(d["overwrite_original"])
         d["overwrite_english"] = bool(d["overwrite_english"])
         d["cancel_requested"] = bool(d["cancel_requested"])
+        d["source_is_uploaded"] = bool(d["source_is_uploaded"])
         d["outputs"] = json.loads(d["outputs"])
         d["qc"] = json.loads(d["qc"])
         d["log"] = json.loads(d["log"])
         d["elapsed_seconds"] = _elapsed(d)
         return d
 
+    def _insert_job(self, conn: sqlite3.Connection, *, job_id: str, job_type: str,
+                    video_path: str, source_lang: str, target_lang: str,
+                    source_language_mode: str, requested_audio_stream: int | None,
+                    stream_selection_mode: str, overwrite_original: bool, overwrite_english: bool,
+                    created_at: float, updated_at: float, retry_of_job_id: str | None,
+                    attempt: int, tvdb_id: int | None, source_srt_path: str | None = None,
+                    destination_srt_path: str | None = None,
+                    source_is_uploaded: bool = False) -> None:
+        """The one INSERT statement for the jobs table -- shared by
+        create() and create_srt_translation() so the two job types never
+        drift into two subtly-different SQL statements for the same
+        table. Must run inside the caller's own BEGIN IMMEDIATE block
+        (see create()/create_srt_translation()), not its own -- the
+        duplicate-active-job check and the insert have to be atomic
+        together, and this helper doesn't own that transaction."""
+        conn.execute(
+            "INSERT INTO jobs (id, job_type, video_path, status, stage, progress, source_lang, "
+            "target_lang, source_language_mode, requested_audio_stream, stream_selection_mode, "
+            "overwrite_original, overwrite_english, created_at, updated_at, retry_of_job_id, "
+            "attempt, tvdb_id, source_srt_path, destination_srt_path, source_is_uploaded) "
+            "VALUES (?, ?, ?, 'queued', 'QUEUED', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (job_id, job_type, video_path, source_lang, target_lang, source_language_mode,
+             requested_audio_stream, stream_selection_mode, int(overwrite_original),
+             int(overwrite_english), created_at, updated_at, retry_of_job_id, attempt, tvdb_id,
+             source_srt_path, destination_srt_path, int(source_is_uploaded)))
+
     def create(self, video_path: str, source_lang: str | None = "auto", *,
               target_lang: str = "en", audio_stream_index: int | None = None,
               overwrite_original: bool = False, overwrite_english: bool = False,
               retry_of_job_id: str | None = None, attempt: int = 1) -> dict:
-        """Refuses to create a second QUEUED/RUNNING job for the same
+        """Refuses to create a second QUEUED/RUNNING VIDEO job for the same
         video -- a real gap an adversarial test caught: nothing previously
         stopped two concurrent API calls (or a double-click) from
         enqueueing the same video twice, wasting GPU time on a duplicate
         run. The existence check and the insert happen inside the same
         BEGIN IMMEDIATE transaction as claim() uses, for the same reason:
         two concurrent create() calls for the same video must not both
-        pass the check before either commits.
+        pass the check before either commits. Scoped to job_type='video'
+        so it never collides with an unrelated srt_translation job that
+        happens to reference the same episode (see create_srt_translation(),
+        which has its own, separately-scoped duplicate check).
 
         source_lang="auto" (the default) means "detect from the audio" --
         the job stores the *requested* language here; the actually
@@ -163,23 +233,73 @@ class JobStore:
         source_lang = source_lang or "auto"
         source_language_mode = "MANUAL" if source_lang != "auto" else "AUTO"
         stream_selection_mode = "MANUAL" if audio_stream_index is not None else "AUTO"
+        tvdb_id = glossary_profile.find_tvdb_id(video_path)
         with self._immediate() as conn:
             existing = conn.execute(
-                "SELECT id FROM jobs WHERE video_path=? AND status IN ('queued','running')",
-                (video_path,)).fetchone()
+                "SELECT id FROM jobs WHERE job_type='video' AND video_path=? "
+                "AND status IN ('queued','running')", (video_path,)).fetchone()
             if existing:
                 raise JobStoreError(
                     f"an active job already exists for this video (id={existing['id']})")
-            conn.execute(
-                "INSERT INTO jobs (id, video_path, status, stage, progress, source_lang, target_lang, "
-                "source_language_mode, requested_audio_stream, stream_selection_mode, "
-                "overwrite_original, overwrite_english, created_at, updated_at, "
-                "retry_of_job_id, attempt) "
-                "VALUES (?, ?, 'queued', 'QUEUED', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (job_id, video_path, source_lang, target_lang, source_language_mode,
-                 audio_stream_index, stream_selection_mode,
-                 int(overwrite_original), int(overwrite_english),
-                 now, now, retry_of_job_id, attempt))
+            self._insert_job(conn, job_id=job_id, job_type="video", video_path=video_path,
+                             source_lang=source_lang, target_lang=target_lang,
+                             source_language_mode=source_language_mode,
+                             requested_audio_stream=audio_stream_index,
+                             stream_selection_mode=stream_selection_mode,
+                             overwrite_original=overwrite_original, overwrite_english=overwrite_english,
+                             created_at=now, updated_at=now, retry_of_job_id=retry_of_job_id,
+                             attempt=attempt, tvdb_id=tvdb_id)
+        self._notify(job_id)
+        return self.get(job_id)
+
+    def create_srt_translation(self, source_srt_path: str, destination_srt_path: str, *,
+                               source_lang: str | None = "auto", target_lang: str = "en",
+                               video_path: str | None = None, overwrite_english: bool = False,
+                               source_is_uploaded: bool = False,
+                               retry_of_job_id: str | None = None, attempt: int = 1) -> dict:
+        """A job that translates an already-transcribed original-language
+        .srt straight to English -- no ASR, no audio, no video processing.
+        `video_path`, if given, is only the ASSOCIATED episode (for series
+        grouping / tvdb_id lookup / display on the Series pages), never
+        the file this job actually processes -- that's source_srt_path.
+        Stored as '' (never NULL, since the column is NOT NULL) when no
+        association is given, matching how AUTO/None is represented
+        elsewhere in this table rather than introducing a second way to
+        say "no value".
+
+        Deliberately reuses target_lang/overwrite_english/tvdb_id exactly
+        as video jobs do; overwrite_original and every audio-stream field
+        stay at their schema defaults, unused, since there is no
+        "original" audio track being kept or replaced here -- only ever
+        one output file, destination_srt_path.
+
+        Duplicate-active-job check is scoped to job_type='srt_translation'
+        and keyed on destination_srt_path (not video_path, which two
+        different source subtitles could legitimately share): two jobs
+        must never race to write the same destination concurrently."""
+        job_id = uuid.uuid4().hex
+        now = time.time()
+        source_lang = source_lang or "auto"
+        source_language_mode = "MANUAL" if source_lang != "auto" else "AUTO"
+        tvdb_id = glossary_profile.find_tvdb_id(video_path) if video_path else None
+        with self._immediate() as conn:
+            existing = conn.execute(
+                "SELECT id FROM jobs WHERE job_type='srt_translation' AND destination_srt_path=? "
+                "AND status IN ('queued','running')", (destination_srt_path,)).fetchone()
+            if existing:
+                raise JobStoreError(
+                    "an active SRT-translation job already exists for this destination "
+                    f"(id={existing['id']})")
+            self._insert_job(conn, job_id=job_id, job_type="srt_translation",
+                             video_path=video_path or "", source_lang=source_lang,
+                             target_lang=target_lang, source_language_mode=source_language_mode,
+                             requested_audio_stream=None, stream_selection_mode="AUTO",
+                             overwrite_original=False, overwrite_english=overwrite_english,
+                             created_at=now, updated_at=now, retry_of_job_id=retry_of_job_id,
+                             attempt=attempt, tvdb_id=tvdb_id, source_srt_path=source_srt_path,
+                             destination_srt_path=destination_srt_path,
+                             source_is_uploaded=source_is_uploaded)
+        self._notify(job_id)
         return self.get(job_id)
 
     def get(self, job_id: str) -> dict | None:
@@ -211,6 +331,39 @@ class JobStore:
             counts["ALL"] += r["n"]
         return counts
 
+    def list_series(self) -> list[dict]:
+        """One summary row per distinct tvdb_id, plus a single row for
+        `tvdb_id IS NULL` (jobs whose video_path carries no `{tvdb-<id>}`
+        tag) -- every job lands in exactly one bucket, mirroring
+        counts()'s ALL semantics but grouped by series instead of by
+        status."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT tvdb_id, status, COUNT(*) as n, MAX(updated_at) as last_updated "
+                "FROM jobs GROUP BY tvdb_id, status").fetchall()
+        series: dict[int | None, dict] = {}
+        for r in rows:
+            key = r["tvdb_id"]
+            entry = series.setdefault(key, {"tvdb_id": key, "counts": {s.upper(): 0 for s in STATUSES},
+                                            "total": 0, "last_updated": 0.0})
+            entry["counts"][r["status"].upper()] = r["n"]
+            entry["total"] += r["n"]
+            entry["last_updated"] = max(entry["last_updated"], r["last_updated"] or 0.0)
+        return sorted(series.values(), key=lambda e: e["last_updated"], reverse=True)
+
+    def list_by_tvdb_id(self, tvdb_id: int | None) -> list[dict]:
+        # video_path sorts naturally today because every real filename in
+        # this deployment's library is zero-padded (S01E01, S01E02, ...,
+        # S01E10) -- see media naming convention throughout this project.
+        with self._connect() as conn:
+            if tvdb_id is None:
+                rows = conn.execute(
+                    "SELECT * FROM jobs WHERE tvdb_id IS NULL ORDER BY video_path").fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM jobs WHERE tvdb_id=? ORDER BY video_path", (tvdb_id,)).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
     def claim(self) -> dict | None:
         """Race-safe: BEGIN IMMEDIATE takes the write lock before the
         SELECT, so two workers can never both claim the same row -- the
@@ -225,7 +378,41 @@ class JobStore:
             conn.execute(
                 "UPDATE jobs SET status='running', stage='RUNNING', started_at=?, updated_at=? WHERE id=?",
                 (now, now, row["id"]))
+        self._notify(row["id"])
         return self.get(row["id"])
+
+    def recover_orphaned_jobs(self) -> list[str]:
+        """Call once at startup, after _migrate() and before the worker
+        starts claiming. Real gap this closes (2026-09-19 audit): a
+        `running` row means "a worker thread in SOME process is actively
+        inside pipeline.run() for this job" -- that invariant silently
+        breaks the moment the process holding that thread dies (crash,
+        OOM-kill, redeploy) without ever reaching worker.py's `finally`/
+        `except` handling, since claim() only ever selects
+        status='queued' rows. Without this, such a job's row is stuck
+        `running` forever: never reclaimed, its elapsed-time display
+        climbing indefinitely, invisible to any log or alert.
+
+        Resetting straight back to 'queued' (not a new terminal
+        'interrupted' status) is safe specifically because this process
+        is single-worker/single-thread (see worker.py's module
+        docstring): by the time this method runs, at startup, no
+        pipeline.run() call from a PRIOR process instance can still be
+        executing -- there is no live worker to race against a row this
+        call touches. A currently-running job in a live process is never
+        affected: this only ever runs once, at construction-adjacent
+        startup, before Worker.start() is ever called (see main.py)."""
+        with self._immediate() as conn:
+            rows = conn.execute("SELECT id FROM jobs WHERE status='running'").fetchall()
+            if rows:
+                now = time.time()
+                conn.execute(
+                    "UPDATE jobs SET status='queued', stage='QUEUED', started_at=NULL, "
+                    "updated_at=? WHERE status='running'", (now,))
+        job_ids = [r["id"] for r in rows]
+        for job_id in job_ids:
+            self._notify(job_id)
+        return job_ids
 
     def update(self, job_id: str, **fields) -> None:
         if not fields:
@@ -238,6 +425,7 @@ class JobStore:
         assignments = ", ".join(f"{k}=?" for k in fields)
         with self._immediate() as conn:
             conn.execute(f"UPDATE jobs SET {assignments} WHERE id=?", (*fields.values(), job_id))
+        self._notify(job_id)
 
     def append_log(self, job_id: str, message: str) -> None:
         job = self.get(job_id)
@@ -261,6 +449,16 @@ class JobStore:
         self.update(job_id, **fields)
         return self.get(job_id)
 
+    def delete(self, job_id: str) -> None:
+        job = self.get(job_id)
+        if not job:
+            raise JobStoreError("job not found")
+        if job["status"] not in TERMINAL_STATUSES:
+            raise JobStoreError(f"cannot delete an active job (status={job['status']})")
+        with self._immediate() as conn:
+            conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+        self._notify(job_id)
+
     def request_cancel(self, job_id: str) -> dict:
         job = self.get(job_id)
         if not job:
@@ -277,8 +475,8 @@ class JobStore:
         job = self.get(job_id)
         return bool(job and job["cancel_requested"])
 
-    def retry(self, job_id: str, *, overwrite_original: bool = False,
-             overwrite_english: bool = False, source_lang: str | None = None,
+    def retry(self, job_id: str, *, overwrite_original: bool | str = "unset",
+             overwrite_english: bool | str = "unset", source_lang: str | None = None,
              audio_stream_index: int | None = "unset") -> dict:
         """Creates a NEW job row -- never mutates the original. The
         original's terminal timestamps/status remain exactly as they
@@ -291,12 +489,39 @@ class JobStore:
         `audio_stream_index` works the same way for stream selection; its
         default sentinel ("unset", not None) lets a caller explicitly
         pass None to force AUTO stream re-selection on retry, distinct
-        from "didn't specify, carry the original forward"."""
+        from "didn't specify, carry the original forward".
+
+        `overwrite_original`/`overwrite_english` use the identical
+        "unset" sentinel: real bug this fixes (2026-09-19) -- a plain
+        `bool = False` default here meant every retry submitted with an
+        empty request body (the GUI's one-click Retry button does exactly
+        this) silently reset both flags to False, so a retry of a job
+        that had already written real output would KEEP those stale
+        files instead of replacing them, with no error or indication.
+        Omitted now means "inherit the original job's own flag";
+        explicit True/False always overrides it, same as source_lang.
+
+        `job_type` is never a caller-supplied parameter here -- a retry
+        always stays the same job type as the job it retries, read off
+        `original` itself, so an srt_translation retry can never
+        accidentally become a video job or vice versa."""
         original = self.get(job_id)
         if not original:
             raise JobStoreError("job not found")
         if original["status"] not in TERMINAL_STATUSES:
             raise JobStoreError(f"cannot retry a non-terminal job (status={original['status']})")
+        overwrite_original = (original["overwrite_original"] if overwrite_original == "unset"
+                              else overwrite_original)
+        overwrite_english = (original["overwrite_english"] if overwrite_english == "unset"
+                             else overwrite_english)
+        if original["job_type"] == "srt_translation":
+            return self.create_srt_translation(
+                original["source_srt_path"], original["destination_srt_path"],
+                source_lang=source_lang or original["source_lang"],
+                target_lang=original.get("target_lang") or "en",
+                video_path=original["video_path"] or None, overwrite_english=overwrite_english,
+                source_is_uploaded=original["source_is_uploaded"],
+                retry_of_job_id=job_id, attempt=original["attempt"] + 1)
         stream_override = (original.get("requested_audio_stream") if audio_stream_index == "unset"
                           else audio_stream_index)
         return self.create(original["video_path"], source_lang or original["source_lang"],

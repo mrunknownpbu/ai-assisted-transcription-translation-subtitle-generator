@@ -34,19 +34,69 @@ class Entity:
     surface_forms: list[str]  # every spelling/inflection worth protecting
 
 
+@dataclass
+class PhraseEntry:
+    """A forced whole-segment translation, distinct from Entity above:
+    Entity protects a NAME (verbatim reinsertion via protect()/restore());
+    PhraseEntry forces a fixed OUTPUT for an exact short source phrase.
+    Added 2026-09-19 -- real QC evidence (jobs against a human-authored
+    source .srt) showed NLLB hallucinating fabricated continuations for
+    short, common, context-free utterances (e.g. "Bekle." -> "Wait, wait,
+    wait. I got it.") because srt_translation.py translates one cue per
+    span with no surrounding context. A glossary can't fix that by
+    protecting a name; it can fix it by short-circuiting the model
+    entirely for a known-exact phrase (see build_phrase_map/translate.py's
+    translate_spans)."""
+    source: str            # exact source-language phrase, e.g. "Peki."
+    translation: str       # the forced English output, e.g. "Okay."
+    language: str | None   # None = applies regardless of detected language
+
+
+def _phrase_key(text: str) -> str:
+    return text.strip().rstrip(".!?").casefold()
+
+
+def build_phrase_map(phrases: list[PhraseEntry], detected_language: str | None) -> dict[str, str]:
+    """_phrase_key(...) match -> forced translation, filtered to entries
+    whose language is universal (None) or matches THIS job's detected
+    source language. Trailing .!? is stripped before comparing (and is
+    not part of the key), since real subtitle punctuation on short
+    interjections varies ("Peki." / "Peki!" / "Peki?")."""
+    return {_phrase_key(p.source): p.translation
+           for p in phrases if p.language is None or p.language == detected_language}
+
+
 def _placeholder(k: int) -> str:
     return "X" + chr(97 + k // 26) + chr(97 + k % 26)
 
 
 def build_glossary(entities: list[Entity]) -> dict[str, tuple[str, str]]:
-    """surface_form(casefolded) -> (placeholder, canonical)."""
+    """surface_form(ORIGINAL spelling) -> (placeholder, canonical),
+    deduplicated case-insensitively via a separate casefold() tracker --
+    never keyed by the casefolded form itself.
+
+    Real defect (Turkish validation, 2026-09-19): Python's str.casefold()
+    maps the Turkish capital dotted "İ" (U+0130) to a TWO-codepoint
+    sequence "i̇" (i + combining dot above, U+0307) -- a different string
+    than the real "İ" text. protect() below regex-matches directly
+    against this dict's keys (relying on re.IGNORECASE for case-
+    insensitivity, which does its own internal folding and never needed a
+    pre-casefolded pattern) -- so when the key was the casefolded form,
+    an entity like "İstanbul" silently never matched real "İstanbul" text
+    at all: confirmed live, protect("İstanbul'da ...", glossary) left the
+    name completely unprotected. An identical ASCII name worked fine,
+    proving this was specifically the Turkish-İ casefold expansion, not
+    the apostrophe boundary handling (already correct -- see _bounded()).
+    """
     glossary: dict[str, tuple[str, str]] = {}
+    seen_casefolded: set[str] = set()
     counter = 0
     for entity in entities:
         for form in entity.surface_forms:
             key = form.casefold()
-            if key not in glossary:
-                glossary[key] = (_placeholder(counter), entity.canonical)
+            if key not in seen_casefolded:
+                seen_casefolded.add(key)
+                glossary[form] = (_placeholder(counter), entity.canonical)
                 counter += 1
     return glossary
 
@@ -61,6 +111,43 @@ def restore(text: str, glossary: dict[str, tuple[str, str]]) -> str:
     for _form, (placeholder, canonical) in glossary.items():
         text = re.sub(_bounded(re.escape(placeholder)), canonical, text, flags=re.IGNORECASE)
     return text
+
+
+def bare_entity_translation(protected_text: str, glossary: dict[str, tuple[str, str]]) -> str | None:
+    """If `protected_text` (already protect()-ed) is nothing but one or
+    more protected-entity placeholders plus punctuation/whitespace --
+    real content = zero -- return the fully-restored text and let the
+    caller skip the model entirely. Returns None the moment any word
+    character survives after every placeholder is stripped out, so this
+    only ever intercepts a genuinely bare name-call, never a real sentence
+    that happens to also contain a protected name.
+
+    Real evidence (S01E02 QC run, 2026-09-20): NLLB hallucinated
+    "Cenk, what's going on?" from bare "Cenk." even though Cenk IS already
+    a protected entity in that series' glossary -- protect()/restore()
+    only guarantees the canonical spelling survives in whatever the model
+    returns, it does nothing to stop the model padding out a placeholder-
+    only input with invented text. Confirmed twice in the same run
+    ("Sirius!" -> "Sirius, what are you doing?"). The fix is to never hand
+    the model a degenerate input in the first place -- same reasoning as
+    build_phrase_map's short-circuit for short context-free utterances,
+    just triggered by shape (placeholder + punctuation only) instead of an
+    exact-phrase match.
+
+    `\\w` (not `[A-Za-z0-9]`) is used to detect leftover real content so
+    this is correct for every source language this project supports, not
+    just Latin-script ones (Python's `\\w` is Unicode-aware by default)."""
+    if not glossary:
+        return None
+    residual = protected_text
+    matched = False
+    for placeholder, _canonical in glossary.values():
+        residual, n = re.subn(_bounded(re.escape(placeholder)), "", residual, flags=re.IGNORECASE)
+        if n:
+            matched = True
+    if not matched or re.search(r"\w", residual):
+        return None
+    return restore(protected_text, glossary)
 
 
 def occurrence_count(text: str, canonical: str) -> int:
