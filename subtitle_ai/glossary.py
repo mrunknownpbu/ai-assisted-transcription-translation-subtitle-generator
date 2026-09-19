@@ -113,6 +113,51 @@ def restore(text: str, glossary: dict[str, tuple[str, str]]) -> str:
     return text
 
 
+_PLACEHOLDER_SHAPE = re.compile(r"X[a-z]{2}")
+
+
+def _one_edit_away(a: str, b: str) -> bool:
+    return len(a) == len(b) and sum(1 for x, y in zip(a, b) if x != y) <= 1
+
+
+def repair_corrupted_placeholders(candidate: str, source_protected: str) -> str:
+    """NLLB has never seen an invented placeholder like "Xac" -- it is
+    out-of-vocabulary, decomposed into subword pieces on the way in, and
+    generation is not guaranteed to reproduce those pieces verbatim on the
+    way out. Real evidence (S01E05 QC, 2026-09-20): Serkan's real
+    placeholder "Xac" came back from the model as "Xax" -- a single-
+    character substitution -- and restore()'s exact-match regex left the
+    corrupted token sitting raw in the final subtitle ("... jealous she
+    was of Xax.") since it never matched any known placeholder.
+
+    Called on raw model output BEFORE restore(), given the SAME sentence's
+    already-protect()-ed source text. Deliberately scoped to only the
+    placeholders that actually appear in `source_protected` -- not every
+    placeholder in the job's whole glossary -- because _placeholder()'s
+    counter scheme puts every entity from index 0-25 under the same first
+    letter ("Xaa".."Xaz"), so on a show with a double-digit cast, a
+    corrupted token is often one edit away from several UNRELATED
+    characters' placeholders at once; scoping to this sentence's own
+    handful of active mentions avoids most of that collision. Still only
+    fixes an unambiguous single nearest match within that scope -- if two
+    placeholders active in the SAME sentence are both one edit away
+    (e.g. two names mentioned together), it is left alone rather than
+    guessing wrong, since a wrong guess would insert the wrong
+    character's name."""
+    active = set(re.findall(_bounded(_PLACEHOLDER_SHAPE.pattern), source_protected))
+    if not active:
+        return candidate
+
+    def _fix(m: re.Match) -> str:
+        token = m.group(0)
+        if token in active:
+            return token
+        nearest = [p for p in active if _one_edit_away(token, p)]
+        return nearest[0] if len(nearest) == 1 else token
+
+    return re.sub(_bounded(_PLACEHOLDER_SHAPE.pattern), _fix, candidate)
+
+
 def bare_entity_translation(protected_text: str, glossary: dict[str, tuple[str, str]]) -> str | None:
     """If `protected_text` (already protect()-ed) is nothing but one or
     more protected-entity placeholders plus punctuation/whitespace --

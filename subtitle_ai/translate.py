@@ -12,7 +12,8 @@ import gc
 import re
 from dataclasses import dataclass
 
-from glossary import _phrase_key, bare_entity_translation, protect, restore
+from glossary import (_phrase_key, bare_entity_translation, protect,
+                      repair_corrupted_placeholders, restore)
 from transcript import BoundaryReason, MERGEABLE_BOUNDARIES, Segment
 
 NLLB_REPO = "facebook/nllb-200-distilled-1.3B"
@@ -278,6 +279,7 @@ def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
                     from gpu import free_gpu
                     free_gpu(config.device)
     if glossary_map:
+        translations = [repair_corrupted_placeholders(t, p) for t, p in zip(translations, payload)]
         translations = [restore(t, glossary_map) for t in translations]
 
     result: list[str | None] = [None] * len(sentences)

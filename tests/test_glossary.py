@@ -5,7 +5,8 @@ import glossary as glossary_mod
 from glossary import (Entity, PhraseEntry, bare_entity_translation,
                       build_glossary, build_phrase_map,
                       entity_occurrence_report, protect,
-                      recover_dropped_entities, restore)
+                      recover_dropped_entities, repair_corrupted_placeholders,
+                      restore)
 
 
 class ProtectRestoreTests(unittest.TestCase):
@@ -192,6 +193,52 @@ class BareEntityTranslationTests(unittest.TestCase):
         m = build_phrase_map(phrases, "tr")
         self.assertEqual(m[glossary_mod._phrase_key("Peki!")], "Okay.")
         self.assertEqual(m[glossary_mod._phrase_key("peki?")], "Okay.")
+
+
+class RepairCorruptedPlaceholdersTests(unittest.TestCase):
+    """Real evidence (S01E05 QC run, 2026-09-20): Serkan's real placeholder
+    "Xac" came back from NLLB as "Xax" (a one-character substitution) and
+    restore() left the raw corrupted token in the final subtitle since it
+    only does exact matching. Scoped to the placeholders active in THIS
+    sentence's own protected source, not the whole job's glossary -- see
+    the function's docstring for why a whole-glossary scope collides too
+    often on a show with a double-digit cast."""
+
+    def test_one_character_corruption_is_repaired_then_restored(self):
+        g = build_glossary([Entity("Serkan", ["Serkan"])])
+        source_protected = protect("Serkan'ı nasıl kıskandığını.", g)  # "Xaa'ı ..."
+        corrupted = "- How jealous she was of Xab."
+        repaired = repair_corrupted_placeholders(corrupted, source_protected)
+        self.assertIn("Xaa", repaired)
+        self.assertEqual(restore(repaired, g), "- How jealous she was of Serkan.")
+
+    def test_exact_placeholder_is_left_alone(self):
+        g = build_glossary([Entity("Serkan", ["Serkan"])])
+        source_protected = protect("Serkan'ı nasıl kıskandığını.", g)
+        text = "- How jealous she was of Xaa."
+        self.assertEqual(repair_corrupted_placeholders(text, source_protected), text)
+
+    def test_unrelated_shape_is_left_alone(self):
+        g = build_glossary([Entity("Serkan", ["Serkan"])])
+        source_protected = protect("Serkan'ı nasıl kıskandığını.", g)
+        text = "He works at Xerox."
+        self.assertEqual(repair_corrupted_placeholders(text, source_protected), text)
+
+    def test_two_active_placeholders_equidistant_is_left_alone(self):
+        # Real case: two names mentioned in the SAME sentence (Serkan ->
+        # Xac, Ferit -> Xak in production) can both be exactly one edit
+        # from the same corrupted token -- must not guess either way.
+        g = build_glossary([Entity("Alpha", ["Alpha"]), Entity("Beta", ["Beta"])])
+        placeholders = sorted({p for p, _c in g.values()})  # ["Xaa", "Xab"]
+        source_protected = f"{placeholders[0]} and {placeholders[1]} talked."
+        text = "Xac said hello."  # one edit from both Xaa and Xab
+        self.assertEqual(repair_corrupted_placeholders(text, source_protected), text)
+
+    def test_no_placeholders_active_in_source_returns_text_unchanged(self):
+        self.assertEqual(
+            repair_corrupted_placeholders("Xab said hello.", "Hello, how are you?"),
+            "Xab said hello.",
+        )
 
 
 if __name__ == "__main__":

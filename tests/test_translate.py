@@ -140,6 +140,19 @@ class BareEntityShortCircuitTests(unittest.TestCase):
         mock_batch.assert_called_once()
         self.assertEqual(result, ["Cenk's news, is there?"])
 
+    def test_corrupted_placeholder_from_the_model_is_repaired_before_restore(self):
+        # Real evidence (S01E05 QC, 2026-09-20): the model returned a
+        # one-character-corrupted placeholder ("Xax" for real "Xac"),
+        # which used to leak into the final subtitle untouched.
+        from glossary import Entity, build_glossary
+        g = build_glossary([Entity("Serkan", ["Serkan"])])
+        cues = [cue(0, 0.0, 1.0, "Serkan'ı nasıl kıskandığını.")]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", return_value=["How jealous she was of Xab."]):
+            result = translate_spans(cues, spans, "tr", glossary_map=g)
+        self.assertEqual(result, ["How jealous she was of Serkan."])
+
 
 class DefaultConfigTests(unittest.TestCase):
     def test_default_device_is_cuda(self):
