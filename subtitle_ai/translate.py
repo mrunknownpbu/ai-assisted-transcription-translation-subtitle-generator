@@ -16,6 +16,43 @@ from glossary import (_phrase_key, bare_entity_translation, protect,
                       repair_corrupted_placeholders, restore)
 from transcript import BoundaryReason, MERGEABLE_BOUNDARIES, Segment
 
+REMOTE_TIMEOUT_SECONDS = 60.0
+
+
+class RemoteTranslationError(Exception):
+    """The remote translate-server (see translate_server.py) was
+    unreachable, timed out, or returned an error. Callers catch this and
+    fall back to local load_model()/translate_batch() -- never let a
+    media-server hiccup break a translation job outright, just make it
+    slower (see translate_spans()'s remote_url handling)."""
+
+
+def remote_translate_batch(url: str, sentences: list[str], src_lang: str,
+                           batch_size: int, on_progress=None) -> list[str]:
+    """Same chunking/progress-callback shape as translate_batch(), but
+    dispatches each chunk to a remote translate-server over HTTP instead
+    of a local model call. Real motivation (2026-09-20 benchmark, same
+    model/config/sentences): a media server's RTX 3070 measured ~8x the
+    throughput of this host's Tesla P4 (16.53 vs 2.05 sentences/sec) --
+    NLLB-200-distilled-1.3B has real tensor-core acceleration there this
+    card doesn't have."""
+    import httpx
+    if not sentences:
+        return []
+    out: list[str] = []
+    try:
+        with httpx.Client(timeout=REMOTE_TIMEOUT_SECONDS) as client:
+            for i in range(0, len(sentences), batch_size):
+                chunk = sentences[i:i + batch_size]
+                resp = client.post(f"{url}/translate", json={"sentences": chunk, "src_lang": src_lang})
+                resp.raise_for_status()
+                out.extend(resp.json()["translations"])
+                if on_progress:
+                    on_progress(len(out), len(sentences))
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        raise RemoteTranslationError(f"remote translate-server at {url!r} failed: {exc}") from exc
+    return out
+
 NLLB_REPO = "facebook/nllb-200-distilled-1.3B"
 NLLB_LANG = {
     "tr": "tur_Latn", "en": "eng_Latn", "es": "spa_Latn", "fr": "fra_Latn",
@@ -204,10 +241,18 @@ def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
                     glossary_map: dict[str, tuple[str, str]] | None = None,
                     phrase_map: dict[str, str] | None = None,
                     config: TranslationConfig | None = None, model=None, tok=None, bos: int = None,
-                    on_progress=None) -> list[str]:
+                    remote_url: str | None = None, on_progress=None) -> list[str]:
     """One translated string per span, entity-protected if a glossary is
     supplied. `model`/`tok`/`bos` injectable so pipeline.py controls model
     lifecycle/GPU lock across the whole job, not this function.
+
+    `remote_url`, when set, tries a remote translate-server (see
+    translate_server.py / remote_translate_batch()'s docstring for the
+    real benchmark motivating this) before ever touching the local GPU.
+    On a RemoteTranslationError (server down, timed out, errored), falls
+    straight through to the exact same local load_model()/translate_batch()
+    path used when `remote_url` is None -- a media-server hiccup makes a
+    job slower, never breaks it.
 
     `phrase_map` (glossary.build_phrase_map's output) short-circuits the
     model entirely for a span whose whole joined text exactly matches a
@@ -258,14 +303,25 @@ def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
     owns_model = model is None
     from contextlib import nullcontext
     from gpu import gpu_lock
+
+    translations: list[str] = []
+    remote_succeeded = False
+    if payload and remote_url:
+        try:
+            translations = remote_translate_batch(remote_url, payload, src_lang,
+                                                  batch_size=config.batch_size, on_progress=on_progress)
+            remote_succeeded = True
+        except RemoteTranslationError:
+            translations = []  # fall through to the local path below
+
     # gpu_lock() serializes GPU contention (see gpu.py's module docstring)
-    # -- holding it for a CPU-only stage protects nothing and needlessly
-    # blocks the Analyze endpoint's stream-sampler (a real GPU consumer)
-    # for the duration of CPU translation.
-    needs_gpu_lock = owns_model and config.device == "cuda" and payload
+    # -- holding it for a CPU-only stage (or a successful remote call)
+    # protects nothing and needlessly blocks the Analyze endpoint's
+    # stream-sampler (a real GPU consumer) for no protective reason.
+    needs_local_work = payload and not remote_succeeded
+    needs_gpu_lock = owns_model and config.device == "cuda" and needs_local_work
     with gpu_lock() if needs_gpu_lock else nullcontext():
-        translations: list[str] = []
-        if payload:
+        if needs_local_work:
             try:
                 if owns_model:
                     # Construction inside the try for the same reason as

@@ -35,7 +35,8 @@ class Worker(threading.Thread):
                  glossary_dir: str | None = None, poll_interval: float = 1.0,
                  transcript_cache_dir: str | None = None,
                  glossary_suggestions_dir: str | None = None,
-                 srt_upload_dir: str | None = None):
+                 srt_upload_dir: str | None = None,
+                 translate_server_url: str | None = None):
         super().__init__(name="subtitle-ai-worker", daemon=True)
         self.store = store
         self.media_root = media_root
@@ -45,6 +46,12 @@ class Worker(threading.Thread):
         self.transcript_cache_dir = transcript_cache_dir
         self.glossary_suggestions_dir = glossary_suggestions_dir
         self.srt_upload_dir = srt_upload_dir
+        # None (default) = today's exact behavior: local Tesla P4
+        # translation only. Set via TRANSLATE_SERVER_URL (main.py) to
+        # route translation to a remote translate-server (see
+        # translate.remote_translate_batch()'s docstring for the real
+        # benchmark motivating this) with automatic local fallback.
+        self.translate_server_url = translate_server_url
         self._stop_event = threading.Event()
 
     def _load_glossary_profile(self, video_path: str) -> glossary_profile.Profile:
@@ -210,6 +217,7 @@ class Worker(threading.Thread):
                     source_lang=source_lang, target_lang=job.get("target_lang") or "en",
                     glossary_entities=glossary_entities,
                     glossary_phrases=glossary_phrases,
+                    translate_remote_url=self.translate_server_url,
                     write_output=True, allow_overwrite=True,  # scratch dir only -- always safe
                     on_event=on_event,
                 )
@@ -345,6 +353,7 @@ class Worker(threading.Thread):
                     glossary_phrases=glossary_phrases,
                     extra_hotwords=extra_hotwords,
                     transcript_cache_dir=cache_dir,
+                    translate_remote_url=self.translate_server_url,
                     write_output=True, allow_overwrite=True,   # scratch dir only -- always safe to overwrite
                     on_event=on_event,
                 )

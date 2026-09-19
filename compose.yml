@@ -30,6 +30,12 @@ services:
       # always bypasses this (see worker.py) so it can never make Retry a
       # no-op after a bad transcription.
       SUBTITLE_AI_TRANSCRIPT_CACHE: /cache/transcripts
+      # Unset by default = local Tesla P4 translation only. Set to route
+      # translation through the media server's RTX 3070 instead (~8x
+      # throughput, real benchmark 2026-09-20) via translate_server.py,
+      # with automatic local fallback if it's unreachable -- see
+      # translate.remote_translate_batch()'s docstring.
+      TRANSLATE_SERVER_URL: http://10.1.1.100:8091
     volumes:
       - ${DATA_PATH}:/data
       # Read-only: confirmed safe by real GPU inference runs this session

@@ -29,6 +29,11 @@ GLOSSARY_SUGGESTIONS_DIR = os.environ.get(
 # uploaded file is transient input, not something that belongs in the
 # user's actual library.
 SRT_UPLOAD_DIR = os.environ.get("SUBTITLE_AI_SRT_UPLOAD_DIR", "/cache/srt_uploads")
+# Unset by default = today's exact behavior (local Tesla P4 translation
+# only). See translate.remote_translate_batch()'s docstring for the real
+# benchmark (~8x throughput) motivating this, and Worker's docstring for
+# the automatic local fallback if the remote server is unreachable.
+TRANSLATE_SERVER_URL = os.environ.get("TRANSLATE_SERVER_URL")
 
 app = api.create_app(DB_PATH, MEDIA_ROOT, glossary_dir=GLOSSARY_DIR,
                      glossary_suggestions_dir=GLOSSARY_SUGGESTIONS_DIR,
@@ -47,5 +52,6 @@ api.get_store().recover_orphaned_jobs()
 _worker = Worker(api.get_store(), MEDIA_ROOT, WORK_ROOT, glossary_dir=GLOSSARY_DIR,
                 transcript_cache_dir=TRANSCRIPT_CACHE_DIR,
                 glossary_suggestions_dir=GLOSSARY_SUGGESTIONS_DIR,
-                srt_upload_dir=SRT_UPLOAD_DIR)
+                srt_upload_dir=SRT_UPLOAD_DIR,
+                translate_server_url=TRANSLATE_SERVER_URL)
 _worker.start()

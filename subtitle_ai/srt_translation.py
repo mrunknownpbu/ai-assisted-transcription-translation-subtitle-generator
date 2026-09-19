@@ -172,6 +172,7 @@ def run_srt_translation_pipeline(source_srt_path: str | Path, work_dir: str | Pa
                                  glossary_phrases: list[glossary_mod.PhraseEntry] | None = None,
                                  translation_config=None, translation_model=None,
                                  translation_tok=None, translation_bos=None,
+                                 translate_remote_url: str | None = None,
                                  write_output: bool = True, allow_overwrite: bool = False,
                                  low_confidence_threshold: float = LOW_CONFIDENCE_THRESHOLD,
                                  on_event=None) -> SrtTranslationResult:
@@ -237,7 +238,7 @@ def run_srt_translation_pipeline(source_srt_path: str | Path, work_dir: str | Pa
         translations = translate.translate_spans(
             cues, spans, detected_language, glossary_map=glossary_map, phrase_map=phrase_map,
             config=translation_config, model=translation_model, tok=translation_tok,
-            bos=translation_bos,
+            bos=translation_bos, remote_url=translate_remote_url,
             on_progress=lambda done, total: _emit(on_event, events, "SRT_TRANSLATION_PROGRESS",
                                                   done=done, total=total))
         _emit(on_event, events, "TRANSLATION_COMPLETED", sentences=len(translations))

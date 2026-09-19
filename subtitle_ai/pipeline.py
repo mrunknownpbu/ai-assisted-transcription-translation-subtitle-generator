@@ -82,6 +82,7 @@ def run(video_path: str, media_root: str, work_dir: str, *,
        extra_hotwords: list[str] | None = None,
        asr_config: AsrConfig | None = None, translation_config=None,
        whisper_model=None, translation_model=None, translation_tok=None, translation_bos=None,
+       translate_remote_url: str | None = None,
        stream_sampler=None, transcript_cache_dir: str | None = None,
        write_output: bool = True, allow_overwrite: bool = False,
        low_confidence_threshold: float = DEFAULT_LOW_CONFIDENCE_THRESHOLD,
@@ -291,6 +292,7 @@ def run(video_path: str, media_root: str, work_dir: str, *,
         translations = translate.translate_spans(
             source_cues, spans, transcript.language, glossary_map=glossary_map, phrase_map=phrase_map,
             config=translation_config, model=translation_model, tok=translation_tok, bos=translation_bos,
+            remote_url=translate_remote_url,
             on_progress=lambda done, total: _emit(on_event, events, "TRANSLATION_PROGRESS",
                                                   done=done, total=total))
         _emit(on_event, events, "TRANSLATION_COMPLETED", sentences=len(translations))

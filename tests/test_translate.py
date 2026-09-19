@@ -1,8 +1,11 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, Mock, patch
+
+import httpx
 
 from transcript import BoundaryReason, Segment, Word
-from translate import TranslationConfig, build_context_spans, translate_spans
+from translate import (RemoteTranslationError, TranslationConfig,
+                       build_context_spans, remote_translate_batch, translate_spans)
 
 
 def cue(index, start, end, text, boundary=None):
@@ -162,6 +165,116 @@ class DefaultConfigTests(unittest.TestCase):
         # fp16 footprint) -- see translate.py's TranslationConfig
         # docstring for the full reasoning and accepted tradeoff.
         self.assertEqual(TranslationConfig().device, "cuda")
+
+
+def _http_response(status=200, json_body=None):
+    resp = Mock()
+    resp.status_code = status
+    resp.json.return_value = json_body if json_body is not None else {}
+    if status >= 400:
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            str(status), request=Mock(), response=resp)
+    else:
+        resp.raise_for_status.side_effect = None
+    return resp
+
+
+def _mock_httpx_client(post_side_effect):
+    """`httpx.Client(...)` is imported lazily inside remote_translate_batch,
+    so patching the real `httpx.Client` (not `translate.httpx.Client`,
+    which doesn't exist at module level) affects it correctly -- Python
+    caches modules in sys.modules, so a lazy `import httpx` still sees
+    this same patched attribute."""
+    client_instance = MagicMock()
+    client_instance.post.side_effect = post_side_effect
+    client_cm = MagicMock()
+    client_cm.__enter__.return_value = client_instance
+    client_cm.__exit__.return_value = False
+    return client_cm
+
+
+class RemoteTranslateBatchTests(unittest.TestCase):
+    """Real motivation (2026-09-20 benchmark): an RTX 3070 on the media
+    server measured ~8x this deployment's usual Tesla P4 throughput on
+    the same model/config/sentences -- remote_translate_batch() is the
+    HTTP client half of routing translation there."""
+
+    def test_successful_batch_returns_translations_and_reports_progress(self):
+        responses = [_http_response(200, {"translations": ["Hello", "World"]})]
+        with patch("httpx.Client", return_value=_mock_httpx_client(responses)):
+            progress = []
+            result = remote_translate_batch("http://media:8091", ["Merhaba", "Dunya"], "tr",
+                                            batch_size=8, on_progress=lambda d, t: progress.append((d, t)))
+        self.assertEqual(result, ["Hello", "World"])
+        self.assertEqual(progress, [(2, 2)])
+
+    def test_chunks_by_batch_size(self):
+        responses = [_http_response(200, {"translations": ["a"]}),
+                    _http_response(200, {"translations": ["b"]})]
+        with patch("httpx.Client", return_value=_mock_httpx_client(responses)) as mock_client_cls:
+            result = remote_translate_batch("http://media:8091", ["x", "y"], "tr", batch_size=1)
+        self.assertEqual(result, ["a", "b"])
+        client_instance = mock_client_cls.return_value.__enter__.return_value
+        self.assertEqual(client_instance.post.call_count, 2)
+
+    def test_connection_error_raises_remote_translation_error(self):
+        with patch("httpx.Client", return_value=_mock_httpx_client(httpx.ConnectError("down"))):
+            with self.assertRaises(RemoteTranslationError):
+                remote_translate_batch("http://media:8091", ["Merhaba"], "tr", batch_size=8)
+
+    def test_non_2xx_status_raises_remote_translation_error(self):
+        with patch("httpx.Client", return_value=_mock_httpx_client([_http_response(500)])):
+            with self.assertRaises(RemoteTranslationError):
+                remote_translate_batch("http://media:8091", ["Merhaba"], "tr", batch_size=8)
+
+    def test_malformed_response_raises_remote_translation_error(self):
+        with patch("httpx.Client", return_value=_mock_httpx_client([_http_response(200, {"oops": []})])):
+            with self.assertRaises(RemoteTranslationError):
+                remote_translate_batch("http://media:8091", ["Merhaba"], "tr", batch_size=8)
+
+    def test_empty_sentences_makes_no_http_call(self):
+        with patch("httpx.Client") as mock_client_cls:
+            result = remote_translate_batch("http://media:8091", [], "tr", batch_size=8)
+        self.assertEqual(result, [])
+        mock_client_cls.assert_not_called()
+
+
+class TranslateSpansRemoteTests(unittest.TestCase):
+    """translate_spans()'s remote_url wiring: try remote first, fall back
+    to the exact local path on RemoteTranslationError."""
+
+    def test_remote_success_skips_local_model_entirely(self):
+        cues = [cue(0, 0.0, 1.0, "Merhaba nasılsın")]
+        spans = [[0]]
+        with patch("translate.remote_translate_batch", return_value=["Hello, how are you"]) as mock_remote, \
+             patch("translate.load_model") as mock_load, \
+             patch("translate.translate_batch") as mock_batch:
+            result = translate_spans(cues, spans, "tr", remote_url="http://media:8091")
+        mock_remote.assert_called_once()
+        mock_load.assert_not_called()
+        mock_batch.assert_not_called()
+        self.assertEqual(result, ["Hello, how are you"])
+
+    def test_remote_failure_falls_back_to_local(self):
+        cues = [cue(0, 0.0, 1.0, "Merhaba nasılsın")]
+        spans = [[0]]
+        with patch("translate.remote_translate_batch", side_effect=RemoteTranslationError("down")), \
+             patch("translate.load_model", return_value=(object(), object(), 0)) as mock_load, \
+             patch("translate.translate_batch", return_value=["Hello, how are you"]) as mock_batch:
+            result = translate_spans(cues, spans, "tr", remote_url="http://media:8091")
+        mock_load.assert_called_once()
+        mock_batch.assert_called_once()
+        self.assertEqual(result, ["Hello, how are you"])
+
+    def test_no_remote_url_never_calls_remote(self):
+        cues = [cue(0, 0.0, 1.0, "Merhaba")]
+        spans = [[0]]
+        with patch("translate.remote_translate_batch") as mock_remote, \
+             patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", return_value=["Hello"]):
+            result = translate_spans(cues, spans, "tr")
+        mock_remote.assert_not_called()
+        self.assertEqual(result, ["Hello"])
 
 
 if __name__ == "__main__":
