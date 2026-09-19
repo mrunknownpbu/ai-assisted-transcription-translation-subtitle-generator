@@ -36,11 +36,13 @@ from pydantic import BaseModel
 
 from translate import NLLB_LANG, TranslationConfig, load_model, translate_batch
 
-# 5 minutes: long enough that a burst of retries (e.g. re-running a whole
-# season back to back, as this deployment actually does) doesn't thrash
-# reload/unload, short enough that the GPU goes back to Jellyfin/Plex
-# promptly once a batch of jobs finishes.
-IDLE_UNLOAD_SECONDS = float(os.environ.get("TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS", "300"))
+# 2 minutes: real back-to-back episode retries (this deployment's actual
+# usage pattern, confirmed 2026-09-20) leave only a few seconds' gap
+# between one job finishing and the next starting, comfortably under
+# this -- so a full-season retry batch still never reloads mid-batch --
+# while still returning the GPU to Jellyfin/Plex well within minutes of
+# the last job finishing, not up to 5 minutes later.
+IDLE_UNLOAD_SECONDS = float(os.environ.get("TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS", "120"))
 _IDLE_CHECK_INTERVAL_SECONDS = 30.0
 
 _state: dict = {"config": None, "models": {}, "last_used": None}
