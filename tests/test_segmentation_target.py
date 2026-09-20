@@ -122,6 +122,30 @@ class SegmentEndToEndTests(unittest.TestCase):
         self.assertTrue(cues[0].text.endswith("."))
         self.assertTrue(cues[1].text.endswith("."))
 
+    def test_two_speaker_dash_dialogue_stays_one_cue_for_whole_envelope(self):
+        # Real evidence (Season 01 full-batch QC, 2026-09-20): splitting
+        # this into two sequential cues -- one per sentence-ending dash
+        # line -- gave each speaker's line only a fraction of the
+        # original envelope, even though the source .srt displays both
+        # lines together for the whole duration. About half of every
+        # episode's sub-1-second "duration below minimum" QC findings
+        # were this exact shape.
+        text = "- Good morning, Mr. Serkan.\n- Good morning, Mr. Serkan."
+        cues = segment(text, 10.0, 12.0)
+        self.assertEqual(len(cues), 1)
+        self.assertEqual(cues[0].start, 10.0)
+        self.assertEqual(cues[0].end, 12.0)
+        self.assertEqual(cues[0].lines, ["- Good morning, Mr. Serkan.", "- Good morning, Mr. Serkan."])
+
+    def test_two_speaker_dialogue_overflowing_a_line_still_splits(self):
+        # Regression guard: correctness of the 2-line/42-char display
+        # constraint always wins over keeping the original presentation.
+        long_line = "- " + ("word " * 20).strip() + "."
+        text = f"{long_line}\n- Short line."
+        cues = segment(text, 0.0, 10.0)
+        for c in cues:
+            self.assertTrue(all(len(l) <= 42 for l in c.lines))
+
 
 if __name__ == "__main__":
     unittest.main()

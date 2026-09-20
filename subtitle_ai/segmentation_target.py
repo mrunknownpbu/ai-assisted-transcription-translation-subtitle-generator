@@ -248,10 +248,55 @@ def merge_short_pieces(pieces: list[str], max_chars: int = MAX_CUE_CHARS) -> lis
     return merged
 
 
+_DASH_DIALOGUE_LINE = re.compile(r"^-\s*.+$")
+
+
+def _two_speaker_dialogue_lines(text: str, max_line_chars: int) -> list[str] | None:
+    """Detects translate.py's join_multi_speaker_dash_lines() output
+    ("- Line one.\\n- Line two.") when both lines individually still fit
+    one MAX_LINES-line cue -- so segment() can keep it as ONE simultaneous
+    cue for its whole envelope instead of running it through the normal
+    per-sentence split below.
+
+    Real evidence (Season 01 full-batch QC, 2026-09-20): the source .srt
+    already displays a two-speaker dash cue as ONE 2-line block for its
+    WHOLE original duration -- viewers read both lines together. Once
+    each line is correctly translated independently (see
+    translate.split_multi_speaker_dash_lines()'s docstring), each line
+    ends with its own sentence-ending punctuation, so the generic
+    split_sentences() path below saw two sentences and split them into
+    two SEPARATE sequential cues, each getting only a fraction of the
+    original envelope -- turning a single-speaker readability problem
+    into a much worse one for a cue that was never meant to be read
+    sequentially in the first place. Confirmed the majority contributor
+    to that regression: about half of every episode's sub-1-second
+    "duration below minimum" findings were dash-prefixed cues.
+
+    Returns None (falls through to the normal pipeline) if a line would
+    overflow max_line_chars on its own -- correctness of the 2-line/
+    42-char-per-line display constraint always wins over keeping the
+    original presentation."""
+    lines = text.split("\n")
+    if len(lines) != MAX_LINES:
+        return None
+    if not all(_DASH_DIALOGUE_LINE.match(l) for l in lines):
+        return None
+    if any(len(l) > max_line_chars for l in lines):
+        return None
+    return lines
+
+
 def segment(text: str, envelope_start: float, envelope_end: float, *,
            max_cue_chars: int = MAX_CUE_CHARS, max_line_chars: int = MAX_LINE_CHARS) -> list[TargetCue]:
     """The full pipeline: sentence split -> long-sentence split -> orphan-
-    fragment merge -> reading-time-weighted timing -> per-cue line wrap."""
+    fragment merge -> reading-time-weighted timing -> per-cue line wrap.
+
+    A two-speaker dash-dialogue cue (see _two_speaker_dialogue_lines())
+    skips all of that and returns as ONE cue spanning the whole envelope,
+    matching how the source .srt itself presented it."""
+    dialogue_lines = _two_speaker_dialogue_lines(text, max_line_chars)
+    if dialogue_lines is not None:
+        return [TargetCue(start=envelope_start, end=envelope_end, lines=dialogue_lines)]
     sentences = split_sentences(text)
     pieces: list[str] = []
     for s in sentences:
