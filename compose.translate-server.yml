@@ -1,0 +1,42 @@
+# Deploys the remote GPU translate-server (translate_server.py) --
+# see its module docstring for why this exists (a faster GPU on a
+# different host than the one this project's main app usually runs on).
+#
+# This file runs on the REMOTE host, not alongside compose.yml -- it was
+# previously untracked, living only at
+# /opt/docker/compose/subtitle-ai-translate-server/compose.yml on that
+# host with no version history (production-readiness audit, 2026-09-21).
+# Reuses the SAME image the main app's Dockerfile already builds; only
+# the command differs (a different uvicorn entrypoint/port).
+#
+# Deploy with scripts/deploy.sh, or manually:
+#   docker save subtitle-ai:dev | ssh <remote-host> docker load
+#   ssh <remote-host> "cd <this-file's-directory-on-that-host> && \
+#     docker compose -f compose.translate-server.yml up -d --force-recreate"
+services:
+  translate-server:
+    image: subtitle-ai:dev
+    container_name: subtitle-ai-translate-server
+    command: ["uvicorn", "translate_server:app", "--host", "0.0.0.0", "--port", "8091"]
+    gpus: all
+    ports:
+      - "8091:8091"
+    volumes:
+      - /opt/docker/appdata/subtitle-ai-translate-server/models:/models:ro
+    restart: unless-stopped
+    # Overrides the image's baked-in HEALTHCHECK (curl localhost:8080
+    # /api/health -- the main subtitle-ai app's port/path, meaningless
+    # here since this alternate entrypoint serves /health on 8091).
+    # start_period is longer than the main app's (30s) since a cold
+    # model load measured ~60s in real testing.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
