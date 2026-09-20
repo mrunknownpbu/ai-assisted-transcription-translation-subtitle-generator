@@ -44,6 +44,10 @@ services:
       # (see .env.example) to enable it.
       TVDB_API_KEY: ${TVDB_API_KEY:-}
       TVDB_API_PIN: ${TVDB_API_PIN:-}
+      # Optional job-failure webhook (see alerting.py) -- unset by
+      # default, matching today's behavior (silent failure until the UI
+      # is checked).
+      FAILURE_WEBHOOK_URL: ${FAILURE_WEBHOOK_URL:-}
     volumes:
       - ${DATA_PATH}:/data
       # Read-only: confirmed safe by real GPU inference runs this session

@@ -4,10 +4,23 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 import api
 from worker import Worker
+
+# Real gap this closes (production-readiness audit, 2026-09-21): zero
+# use of the logging module existed anywhere in subtitle_ai/*.py -- the
+# only durable record of anything was the per-job `log` JSON column,
+# which says nothing about process-level events (startup, worker
+# liveness, EventBus/uvicorn issues). Plain stdout text, one line per
+# record: matches Docker's default json-file log driver either way (it
+# wraps whatever a container writes to stdout), and this project has no
+# existing log-aggregation stack to format for specifically -- adding a
+# JSON formatter now would be speculative complexity with nothing to
+# consume it yet.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 DB_PATH = os.environ.get("SUBTITLE_AI_DB", "/cache/jobs.db")
 MEDIA_ROOT = os.environ.get("SUBTITLE_AI_MEDIA_ROOT", "/data")
@@ -54,4 +67,5 @@ _worker = Worker(api.get_store(), MEDIA_ROOT, WORK_ROOT, glossary_dir=GLOSSARY_D
                 glossary_suggestions_dir=GLOSSARY_SUGGESTIONS_DIR,
                 srt_upload_dir=SRT_UPLOAD_DIR,
                 translate_server_url=TRANSLATE_SERVER_URL)
+api.register_worker(_worker)
 _worker.start()

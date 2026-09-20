@@ -53,6 +53,40 @@ class HealthTests(ApiTestCase):
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.json()["ok"])
 
+    def test_health_omits_heartbeat_when_no_worker_registered(self):
+        r = self.client.get("/api/health")
+        self.assertNotIn("worker_last_heartbeat_seconds_ago", r.json())
+
+    def test_health_reports_registered_worker_heartbeat(self):
+        import time
+        import types
+        api.register_worker(types.SimpleNamespace(last_heartbeat=time.time()))
+        try:
+            r = self.client.get("/api/health")
+            self.assertIn("worker_last_heartbeat_seconds_ago", r.json())
+            self.assertLess(r.json()["worker_last_heartbeat_seconds_ago"], 5.0)
+        finally:
+            api.register_worker(None)
+
+
+class FailureWebhookWiringTests(ApiTestCase):
+    """Real gap this closes (production-readiness audit, 2026-09-21): a
+    job failure was previously invisible until someone opened the UI."""
+
+    def test_job_reaching_failed_status_notifies(self):
+        job = api.get_store().create("Show/S01E01.mkv", "tr")
+        with patch("api.alerting.notify_job_failed") as mock_notify:
+            api.get_store().finish(job["id"], "failed", error="boom",
+                                   error_category="PIPELINE_ERROR")
+        mock_notify.assert_called_once()
+        self.assertEqual(mock_notify.call_args[0][0]["id"], job["id"])
+
+    def test_job_reaching_completed_status_does_not_notify(self):
+        job = api.get_store().create("Show/S01E01.mkv", "tr")
+        with patch("api.alerting.notify_job_failed") as mock_notify:
+            api.get_store().finish(job["id"], "completed")
+        mock_notify.assert_not_called()
+
 
 class CreateJobTests(ApiTestCase):
     def test_creates_queued_job(self):

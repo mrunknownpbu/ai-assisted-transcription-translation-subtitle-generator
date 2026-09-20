@@ -12,7 +12,9 @@ via output.write_srt_atomic(), the one place a production write happens.
 
 from __future__ import annotations
 
+import logging
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -24,6 +26,9 @@ import pipeline
 import srt_translation
 from jobstore import JobStore
 from output import OutputSafetyError, resolve_media_path, resolve_output_path, write_srt_atomic
+
+
+logger = logging.getLogger(__name__)
 
 
 class JobCancelled(RuntimeError):
@@ -53,6 +58,13 @@ class Worker(threading.Thread):
         # benchmark motivating this) with automatic local fallback.
         self.translate_server_url = translate_server_url
         self._stop_event = threading.Event()
+        # Real gap this closes (production-readiness audit, 2026-09-21):
+        # nothing previously distinguished a wedged-but-alive worker
+        # thread from a healthy one -- /api/health only ever reported the
+        # API process, not this thread. Updated once per poll iteration
+        # in run(), regardless of whether a job was claimed, so a long-
+        # running job doesn't itself look like a stall.
+        self.last_heartbeat = time.time()
 
     def _load_glossary_profile(self, video_path: str) -> glossary_profile.Profile:
         """Real defect (2026-09-17): the glossary used to be loaded ONCE
@@ -130,12 +142,15 @@ class Worker(threading.Thread):
         self._stop_event.set()
 
     def run(self) -> None:
+        logger.info("worker thread started")
         while not self._stop_event.is_set():
+            self.last_heartbeat = time.time()
             job = self.store.claim()
             if not job:
                 self._stop_event.wait(self.poll_interval)
                 continue
             self._process(job)
+        logger.info("worker thread stopped")
 
     def _build_on_event(self, job_id: str):
         """Shared by both job types -- LANGUAGE_DETECTED's data shape
@@ -146,6 +161,10 @@ class Worker(threading.Thread):
         (that pipeline has no audio stream), so its branch is a no-op
         there rather than something that needs excluding."""
         def on_event(name, data):
+            # Updated on every pipeline-stage event, not just once per
+            # poll loop, so a long-running job's heartbeat stays fresh
+            # instead of looking stale for its whole duration.
+            self.last_heartbeat = time.time()
             self.store.append_log(job_id, f"{name} {data}")
             if name == "LANGUAGE_DETECTED":
                 self.store.update(job_id, detected_language=data["language"],
@@ -272,6 +291,7 @@ class Worker(threading.Thread):
         except pipeline.UnsupportedLanguageError as exc:
             self.store.finish(job_id, "failed", error=str(exc), error_category="UNSUPPORTED_LANGUAGE")
         except Exception as exc:
+            logger.exception("job %s failed with an unhandled exception", job_id)
             self.store.append_log(job_id, traceback.format_exc()[-2000:])
             self.store.finish(job_id, "failed", error=str(exc)[:500], error_category="PIPELINE_ERROR")
         finally:
@@ -423,6 +443,7 @@ class Worker(threading.Thread):
         except pipeline.UnsupportedLanguageError as exc:
             self.store.finish(job_id, "failed", error=str(exc), error_category="UNSUPPORTED_LANGUAGE")
         except Exception as exc:
+            logger.exception("job %s failed with an unhandled exception", job_id)
             self.store.append_log(job_id, traceback.format_exc()[-2000:])
             self.store.finish(job_id, "failed", error=str(exc)[:500], error_category="PIPELINE_ERROR")
         finally:

@@ -766,5 +766,20 @@ class SrtUploadSourceResolutionTests(unittest.TestCase):
         self.assertEqual(final["status"], "failed")
 
 
+class WorkerHeartbeatTests(WorkerTestCase):
+    """Production-readiness gap (2026-09-21): nothing previously
+    distinguished a wedged-but-alive worker thread from a healthy one."""
+
+    def test_heartbeat_set_at_construction(self):
+        self.assertIsInstance(self.worker.last_heartbeat, float)
+        self.assertAlmostEqual(self.worker.last_heartbeat, time.time(), delta=5.0)
+
+    def test_pipeline_events_update_the_heartbeat(self):
+        self.worker.last_heartbeat = 0.0
+        on_event = self.worker._build_on_event("job-1")
+        on_event("LANGUAGE_DETECTED", {"language": "tr", "probability": 0.9, "mode": "AUTO"})
+        self.assertGreater(self.worker.last_heartbeat, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

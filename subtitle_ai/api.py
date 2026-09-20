@@ -9,6 +9,7 @@ import asyncio
 import json
 import shutil
 import tempfile
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,6 +19,7 @@ from fastapi import FastAPI, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+import alerting
 import audio_streams
 import glossary_profile
 import media
@@ -87,8 +89,34 @@ _store: JobStore | None = None
 _media_root: str = "/data"
 _glossary_dir: str | None = None
 _glossary_suggestions_dir: str | None = None
+_worker = None  # registered via register_worker() -- see its docstring
 _srt_upload_dir: str | None = None
 _static_dir: Path = STATIC_DIR
+
+
+def _on_job_changed(job_id: str) -> None:
+    """Fires after every committed job-row mutation (see JobStore's
+    on_change docstring). Two independent effects, neither allowed to
+    break the other: push the GUI update (existing behavior), and --
+    real gap closed by the production-readiness audit, 2026-09-21 -- fire
+    the optional failure webhook (alerting.py) the moment a job's status
+    actually becomes "failed". Safe against double-firing: finish() is
+    the only path that ever sets a terminal status, and it's called
+    exactly once per job's terminal transition."""
+    _event_bus.publish({"type": "job_changed", "job_id": job_id})
+    job = _store.get(job_id) if _store else None
+    if job and job["status"] == "failed":
+        alerting.notify_job_failed(job)
+
+
+def register_worker(worker) -> None:
+    """Lets /api/health report the worker THREAD's own liveness, not
+    just the API process's -- see Worker.last_heartbeat's docstring for
+    the real gap this closes. Untyped on purpose: worker.py already
+    imports this module (api.py must not import worker.py back, or the
+    two modules would import each other)."""
+    global _worker
+    _worker = worker
 
 
 def create_app(db_path: str | Path, media_root: str = "/data", *,
@@ -96,9 +124,13 @@ def create_app(db_path: str | Path, media_root: str = "/data", *,
                glossary_suggestions_dir: str | None = None,
                srt_upload_dir: str | None = None,
                static_dir: str | Path | None = None) -> FastAPI:
-    global _store, _media_root, _glossary_dir, _glossary_suggestions_dir, _srt_upload_dir, _static_dir
-    _store = JobStore(db_path, on_change=lambda job_id: _event_bus.publish(
-        {"type": "job_changed", "job_id": job_id}))
+    global _store, _media_root, _glossary_dir, _glossary_suggestions_dir, _srt_upload_dir, _static_dir, _worker
+    _store = JobStore(db_path, on_change=_on_job_changed)
+    # Reset, not left over from a previous create_app() call in the same
+    # process -- real risk this avoids: two tests in the same session
+    # creating separate apps, where the second would otherwise silently
+    # report the first app's (possibly stopped) worker's heartbeat.
+    _worker = None
     _media_root = media_root
     _glossary_dir = glossary_dir
     _glossary_suggestions_dir = glossary_suggestions_dir
@@ -153,7 +185,16 @@ class RetryRequest(BaseModel):
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True, "queue": "sqlite"}
+    result = {"ok": True, "queue": "sqlite"}
+    # Real gap this closes (production-readiness audit, 2026-09-21): a
+    # wedged-but-not-crashed worker thread previously still reported the
+    # API as healthy, since this endpoint only ever reflected the API
+    # process itself. None here means no worker has been registered at
+    # all (e.g. a bare create_app() in a test) -- distinct from a real,
+    # stale heartbeat.
+    if _worker is not None:
+        result["worker_last_heartbeat_seconds_ago"] = time.time() - _worker.last_heartbeat
+    return result
 
 
 @app.get("/api/browse")
