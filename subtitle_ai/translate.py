@@ -12,8 +12,10 @@ import gc
 import re
 from dataclasses import dataclass
 
-from glossary import (_phrase_key, bare_entity_translation, protect,
-                      repair_corrupted_placeholders, restore)
+from glossary import (_phrase_key, bare_entity_translation,
+                      join_multi_speaker_dash_lines, protect,
+                      repair_corrupted_placeholders, restore,
+                      split_into_sentences, split_multi_speaker_dash_lines)
 from transcript import BoundaryReason, MERGEABLE_BOUNDARIES, Segment
 
 REMOTE_TIMEOUT_SECONDS = 60.0
@@ -246,6 +248,59 @@ def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
     supplied. `model`/`tok`/`bos` injectable so pipeline.py controls model
     lifecycle/GPU lock across the whole job, not this function.
 
+    A span whose text is 2+ dash-prefixed speaker turns on separate lines
+    (e.g. "- Line one.\\n- Line two.") is expanded into its per-speaker
+    lines BEFORE any of the logic below, each translated independently,
+    then rejoined -- see glossary.split_multi_speaker_dash_lines()'s
+    docstring for the real evidence NLLB otherwise garbles or truncates
+    one of the two turns. An ordinary single-speaker span expands to a
+    list of exactly itself, so every span in the common case (the
+    overwhelming majority of real input) goes through _translate_sentences()
+    completely unchanged from before this existed.
+
+    Each resulting line (a whole single-speaker span, or one dash-turn of
+    a multi-speaker one) is further expanded by
+    glossary.split_into_sentences() if it itself contains 2+ sentences --
+    see that function's docstring for the real evidence NLLB silently
+    drops every sentence after the first when given a multi-sentence span
+    in one generate() call. An ordinary one-sentence line expands to a
+    list of exactly itself. The two expansions nest (sentence -> dash-line
+    -> atomic sentence) and are rejoined in the same order: sentences
+    within a line with a plain space, lines within a span via
+    join_multi_speaker_dash_lines()."""
+    sentences = [" ".join(cues[i].text for i in span) for span in spans]
+    dash_groups = [split_multi_speaker_dash_lines(s) or [s] for s in sentences]
+    nested = [[split_into_sentences(line) or [line] for line in group] for group in dash_groups]
+    flat_sentences = [s for group in nested for line_sentences in group for s in line_sentences]
+
+    flat_result = _translate_sentences(flat_sentences, src_lang, glossary_map=glossary_map,
+                                       phrase_map=phrase_map, config=config, model=model, tok=tok,
+                                       bos=bos, remote_url=remote_url, on_progress=on_progress)
+
+    result: list[str] = []
+    cursor = 0
+    for group in nested:
+        lines: list[str] = []
+        for line_sentences in group:
+            n = len(line_sentences)
+            piece = flat_result[cursor:cursor + n]
+            cursor += n
+            lines.append(" ".join(piece))
+        result.append(join_multi_speaker_dash_lines(lines) if len(lines) > 1 else lines[0])
+    return result
+
+
+def _translate_sentences(sentences: list[str], src_lang: str,
+                         glossary_map: dict[str, tuple[str, str]] | None = None,
+                         phrase_map: dict[str, str] | None = None,
+                         config: TranslationConfig | None = None, model=None, tok=None, bos: int = None,
+                         remote_url: str | None = None, on_progress=None) -> list[str]:
+    """The actual translation pipeline for a flat list of sentence
+    strings -- everything translate_spans() did before dash-line
+    expansion existed. Split out so translate_spans() can call it once
+    on the flattened (dash-expanded) sentence list without duplicating
+    any of this logic.
+
     `remote_url`, when set, tries a remote translate-server (see
     translate_server.py / remote_translate_batch()'s docstring for the
     real benchmark motivating this) before ever touching the local GPU.
@@ -255,25 +310,24 @@ def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
     job slower, never breaks it.
 
     `phrase_map` (glossary.build_phrase_map's output) short-circuits the
-    model entirely for a span whose whole joined text exactly matches a
-    known phrase (see glossary.PhraseEntry's docstring for why: a short,
-    context-free utterance gives NLLB nothing to ground on and it
-    fabricates a continuation). Matched spans never go through
+    model entirely for a sentence that exactly matches a known phrase
+    (see glossary.PhraseEntry's docstring for why: a short, context-free
+    utterance gives NLLB nothing to ground on and it fabricates a
+    continuation). Matched sentences never go through
     protect()/translate_batch()/restore() at all -- their text is already
     the final answer.
 
-    A second, independent short-circuit catches a span that entity-
+    A second, independent short-circuit catches a sentence that entity-
     protection reduces to nothing but a placeholder plus punctuation (a
     bare name-call, e.g. "Cenk." or "Sirius!") -- see
     glossary.bare_entity_translation()'s docstring for the real evidence
     that protecting the entity is not enough on its own to stop this
-    class of hallucination. Both kinds of resolved spans are spliced back
-    into the right positions among the spans that DO need the model.
-    `on_progress` reports over only the spans actually sent to the model,
-    consistent with its existing meaning (progress of real translation
-    work)."""
+    class of hallucination. Both kinds of resolved sentences are spliced
+    back into the right positions among the ones that DO need the model.
+    `on_progress` reports over only the sentences actually sent to the
+    model, consistent with its existing meaning (progress of real
+    translation work)."""
     config = config or TranslationConfig()
-    sentences = [" ".join(cues[i].text for i in span) for span in spans]
 
     phrase_map = phrase_map or {}
     resolved: dict[int, str] = {}

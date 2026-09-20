@@ -1,3 +1,4 @@
+import types
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
@@ -275,6 +276,94 @@ class TranslateSpansRemoteTests(unittest.TestCase):
             result = translate_spans(cues, spans, "tr")
         mock_remote.assert_not_called()
         self.assertEqual(result, ["Hello"])
+
+
+class MultiSpeakerDashCueTests(unittest.TestCase):
+    """Full translate_spans() integration test using the exact real
+    source text that produced real broken output in production
+    (S01E01 QC, 2026-09-20) -- see
+    glossary.split_multi_speaker_dash_lines()'s docstring. Uses a plain
+    SimpleNamespace(text=...) rather than the `cue()` helper above,
+    since `cue()` builds a word-list Segment (matching the video/ASR
+    path) whose reconstructed .text wouldn't preserve the embedded
+    newline the way srt_translation.py's ValidatedCue.text does."""
+
+    def test_identical_dash_lines_translated_independently_and_rejoined(self):
+        cues = [types.SimpleNamespace(text="- Günaydın Serkan Bey.\n- Günaydın Serkan Bey.")]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch",
+                   return_value=["Good morning, Mr. Serkan.", "Good morning, Mr. Serkan."]) as mock_batch:
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(mock_batch.call_args[0][3],
+                        ["Günaydın Serkan Bey.", "Günaydın Serkan Bey."])
+        self.assertEqual(result, ["- Good morning, Mr. Serkan.\n- Good morning, Mr. Serkan."])
+
+    def test_different_dash_lines_translated_independently_and_rejoined(self):
+        cues = [types.SimpleNamespace(text="-Evren Bey oradaki adam.\n-Hangisi?")]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch",
+                   return_value=["Mr. Evren, the man over there.", "Which one?"]) as mock_batch:
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(mock_batch.call_args[0][3],
+                        ["Evren Bey oradaki adam.", "Hangisi?"])
+        self.assertEqual(result, ["- Mr. Evren, the man over there.\n- Which one?"])
+
+    def test_ordinary_single_speaker_span_unaffected(self):
+        cues = [types.SimpleNamespace(text="Merhaba nasılsın")]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", return_value=["Hello, how are you"]) as mock_batch:
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(mock_batch.call_args[0][3], ["Merhaba nasılsın"])
+        self.assertEqual(result, ["Hello, how are you"])
+
+
+class MultiSentenceSpanTests(unittest.TestCase):
+    """Full translate_spans() integration test using the exact real
+    source text that produced real content-dropping truncation in
+    production (Season 01 full-batch QC, 2026-09-20) -- see
+    glossary.split_into_sentences()'s docstring."""
+
+    def test_two_sentence_span_translated_independently_and_rejoined(self):
+        cues = [types.SimpleNamespace(text="Senin için çok seviniyorum. İtalya sana çok iyi gelecek.")]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch",
+                   return_value=["I'm so happy for you.", "Italy will be very good for you."]) as mock_batch:
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(mock_batch.call_args[0][3],
+                        ["Senin için çok seviniyorum.", "İtalya sana çok iyi gelecek."])
+        self.assertEqual(result, ["I'm so happy for you. Italy will be very good for you."])
+
+    def test_multi_sentence_dash_line_nests_with_dash_split(self):
+        # A dash line that ITSELF contains 2 sentences (each 2+ words, so
+        # split_into_sentences' word-count guard doesn't hold it back):
+        # both expansions must compose (sentence -> dash-line -> atomic
+        # sentence) and rejoin in the right order.
+        cues = [types.SimpleNamespace(
+            text="- Ben gidiyorum. Yarın dönerim ben.\n- Tamam, görüşürüz.")]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch",
+                   return_value=["I'm leaving.", "I'll be back tomorrow.", "Okay, see you."]) as mock_batch:
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(mock_batch.call_args[0][3],
+                        ["Ben gidiyorum.", "Yarın dönerim ben.", "Tamam, görüşürüz."])
+        self.assertEqual(result, ["- I'm leaving. I'll be back tomorrow.\n- Okay, see you."])
+
+    def test_single_word_dash_lines_unaffected_by_sentence_split(self):
+        # Regression guard: a short one-word-per-speaker dash exchange
+        # must not be additionally exploded by sentence-splitting on top
+        # of the existing dash-line split.
+        cues = [types.SimpleNamespace(text="-Hı.\n-Hı.")]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", return_value=["Uh-huh.", "Uh-huh."]) as mock_batch:
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(mock_batch.call_args[0][3], ["Hı.", "Hı."])
+        self.assertEqual(result, ["- Uh-huh.\n- Uh-huh."])
 
 
 if __name__ == "__main__":

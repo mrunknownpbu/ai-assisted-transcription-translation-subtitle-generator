@@ -4,9 +4,10 @@ import unittest
 import glossary as glossary_mod
 from glossary import (Entity, PhraseEntry, bare_entity_translation,
                       build_glossary, build_phrase_map,
-                      entity_occurrence_report, protect,
-                      recover_dropped_entities, repair_corrupted_placeholders,
-                      restore)
+                      entity_occurrence_report, join_multi_speaker_dash_lines,
+                      protect, recover_dropped_entities,
+                      repair_corrupted_placeholders, restore,
+                      split_into_sentences, split_multi_speaker_dash_lines)
 
 
 class ProtectRestoreTests(unittest.TestCase):
@@ -239,6 +240,77 @@ class RepairCorruptedPlaceholdersTests(unittest.TestCase):
             repair_corrupted_placeholders("Xab said hello.", "Hello, how are you?"),
             "Xab said hello.",
         )
+
+
+class MultiSpeakerDashLinesTests(unittest.TestCase):
+    """Real evidence (S01E01 QC, 2026-09-20): a two-speaker dash-cue sent
+    to NLLB as one string comes back garbled or truncated. Both real
+    examples below are the actual source text that produced actual real
+    broken output ("Serkan. - Good morning to you, Mr. Serkan." and
+    "Evren? - Mr." respectively)."""
+
+    def test_identical_dash_lines_split(self):
+        text = "- Günaydın Serkan Bey.\n- Günaydın Serkan Bey."
+        self.assertEqual(split_multi_speaker_dash_lines(text),
+                         ["Günaydın Serkan Bey.", "Günaydın Serkan Bey."])
+
+    def test_different_dash_lines_split_no_space_after_dash(self):
+        text = "-Evren Bey oradaki adam.\n-Hangisi?"
+        self.assertEqual(split_multi_speaker_dash_lines(text),
+                         ["Evren Bey oradaki adam.", "Hangisi?"])
+
+    def test_single_line_returns_none(self):
+        self.assertIsNone(split_multi_speaker_dash_lines("Merhaba nasılsın"))
+
+    def test_single_dash_prefixed_line_returns_none(self):
+        # Only one speaker turn -- nothing to split, not this shape.
+        self.assertIsNone(split_multi_speaker_dash_lines("- Merhaba."))
+
+    def test_mixed_dash_and_non_dash_lines_returns_none(self):
+        # Ambiguous shape (only some lines are speaker turns) -- must not
+        # guess, leave it as an ordinary sentence.
+        self.assertIsNone(split_multi_speaker_dash_lines("- Merhaba.\nNasılsın?"))
+
+    def test_join_reconstructs_dash_format(self):
+        self.assertEqual(join_multi_speaker_dash_lines(["Hello.", "Hi there."]),
+                         "- Hello.\n- Hi there.")
+
+
+class SplitIntoSentencesTests(unittest.TestCase):
+    """Real evidence (Season 01 full-batch QC, 2026-09-20): a two-sentence
+    source span sent to NLLB in one generate() call silently lost the
+    second sentence. Both real examples below are actual source text that
+    produced actual real truncated output."""
+
+    def test_real_two_sentence_span_splits(self):
+        text = "Senin için çok seviniyorum. İtalya sana çok iyi gelecek."
+        self.assertEqual(split_into_sentences(text),
+                         ["Senin için çok seviniyorum.", "İtalya sana çok iyi gelecek."])
+
+    def test_real_two_question_span_splits(self):
+        text = "Sen çocuk mu kandırıyorsun? Sen benimle dalga mı geçiyorsun?"
+        self.assertEqual(split_into_sentences(text),
+                         ["Sen çocuk mu kandırıyorsun?", "Sen benimle dalga mı geçiyorsun?"])
+
+    def test_single_sentence_returns_none(self):
+        self.assertIsNone(split_into_sentences("Merhaba nasılsın."))
+
+    def test_short_first_sentence_still_splits(self):
+        # Real evidence (E09, second "Hişt!" occurrence, 2026-09-20): an
+        # earlier version of this function required 2+ words before a
+        # split point and left "Hişt! Çok eminim." merged, which both
+        # missed the phrase-glossary's "Hişt." override AND still lost
+        # "Hişt!" to NLLB outright -- a single-word first sentence must
+        # split just like any other.
+        self.assertEqual(split_into_sentences("Hişt! Çok eminim."),
+                         ["Hişt!", "Çok eminim."])
+        self.assertEqual(split_into_sentences("Oldu. Gidelim mi?"),
+                         ["Oldu.", "Gidelim mi?"])
+
+    def test_three_sentence_span_splits_all(self):
+        text = "Eve gidiyorum. Çok yorgunum. Yarın görüşürüz."
+        self.assertEqual(split_into_sentences(text),
+                         ["Eve gidiyorum.", "Çok yorgunum.", "Yarın görüşürüz."])
 
 
 if __name__ == "__main__":

@@ -113,6 +113,96 @@ def restore(text: str, glossary: dict[str, tuple[str, str]]) -> str:
     return text
 
 
+def split_multi_speaker_dash_lines(text: str) -> list[str] | None:
+    """Detects a subtitle cue containing 2+ dash-prefixed speaker turns on
+    separate lines (e.g. "- Line one.\\n- Line two.", the standard SRT
+    convention for two people speaking within the same on-screen cue).
+
+    Real evidence (S01E01 QC, 2026-09-20): NLLB struggles to correctly
+    translate BOTH turns within a single generate() call. Two real,
+    previously-undiscovered breakages (invisible to every existing QC
+    heuristic, since neither is "suspiciously long" or a repeated match):
+    "- Günaydın Serkan Bey.\\n- Günaydın Serkan Bey." (two IDENTICAL
+    lines) came back as "Serkan. - Good morning to you, Mr. Serkan." --
+    garbled, the two-line structure lost entirely, plausibly from
+    translate.py's no_repeat_ngram_size guard fighting the model's own
+    attempt to legitimately repeat itself. "-Evren Bey oradaki
+    adam.\\n-Hangisi?" (two DIFFERENT lines) came back as "Evren? - Mr."
+    -- severely truncated, most content dropped outright.
+
+    Returns the list of per-speaker line texts (dash marker stripped) if
+    EVERY line in `text` starts with "-" (2 or more lines) -- so each
+    turn can be translated independently and rejoined by
+    join_multi_speaker_dash_lines() -- or None if `text` doesn't match
+    this shape (an ordinary single-speaker sentence, the overwhelming
+    majority of real input)."""
+    lines = text.split("\n")
+    if len(lines) < 2:
+        return None
+    stripped = []
+    for line in lines:
+        m = re.match(r"^-\s*(.*)$", line)
+        if not m:
+            return None
+        stripped.append(m.group(1))
+    return stripped
+
+
+def join_multi_speaker_dash_lines(lines: list[str]) -> str:
+    return "\n".join(f"- {line}" for line in lines)
+
+
+_SOURCE_SENTENCE_END = re.compile(r"[.!?…]+(?:\s+|$)")
+
+
+def split_into_sentences(text: str) -> list[str] | None:
+    """Detects source text (pre-translation, any source language) made of
+    2+ sentences, so each can be sent to NLLB independently instead of in
+    one generate() call.
+
+    Real evidence (Season 01 full-batch QC, 2026-09-20): a single source
+    cue containing two sentences -- e.g. "Senin için çok seviniyorum.
+    İtalya sana çok iyi gelecek." ("I'm so happy for you. Italy will be
+    great for you.") -- silently lost the second sentence under NLLB,
+    translating to just "I'm so happy for you." with no trace of the
+    rest. This was invisible as its own bug: the QC "substitution"
+    heuristic (repeated-translation matching) mislabeled it as a
+    coincidental match with an unrelated short sentence elsewhere in the
+    same episode that happened to produce the same short output, hiding
+    a real, systematic content-dropping defect behind 72 findings filed
+    as harmless noise across 34 of the season's 39 episodes.
+
+    An earlier version of this function required 2+ words before a split
+    point, to guard against a hypothetical title abbreviation ("Dr."
+    followed by a name) getting torn away from what follows -- mirroring
+    the analogous, confirmed-real bug already fixed on the target-language
+    side (segmentation_target.py's title-abbreviation guard). Removed
+    2026-09-20 after real evidence it caused the exact class of bug this
+    function exists to fix: source "Hişt! Çok eminim." (E09, second
+    occurrence) kept its 1-word first sentence "Hişt!" merged with
+    "Çok eminim." under the guard, so the combined string never matched
+    the phrase-glossary's "Hişt." override (glossary_key strips trailing
+    punctuation but still needs the two sentences apart) and NLLB dropped
+    "Hişt!" outright, translating just "I'm sure of it." -- with zero
+    real evidence of a Turkish title-abbreviation collision anywhere in
+    this project's actual corpus to weigh against that.
+
+    Returns None if `text` is already a single sentence (the overwhelming
+    majority of real input, left completely unchanged); otherwise the
+    list of 2+ individual sentences in order, punctuation retained."""
+    pieces = []
+    i = 0
+    for m in _SOURCE_SENTENCE_END.finditer(text):
+        piece = text[i:m.end()].strip()
+        if piece:
+            pieces.append(piece)
+        i = m.end()
+    tail = text[i:].strip()
+    if tail:
+        pieces.append(tail)
+    return pieces if len(pieces) > 1 else None
+
+
 _PLACEHOLDER_SHAPE = re.compile(r"X[a-z]{2}")
 
 
