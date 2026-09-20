@@ -36,6 +36,14 @@ services:
       # with automatic local fallback if it's unreachable -- see
       # translate.remote_translate_batch()'s docstring.
       TRANSLATE_SERVER_URL: http://10.1.1.100:8091
+      # Optional TheTVDB API v4 credentials (see tvdb_client.py) -- metadata
+      # enrichment only (series title, cast lookup), never a runtime
+      # dependency for translation itself. Left unset by default: every
+      # function in tvdb_client.py degrades to None/empty with no key
+      # configured, exactly today's production behavior. Set via .env
+      # (see .env.example) to enable it.
+      TVDB_API_KEY: ${TVDB_API_KEY:-}
+      TVDB_API_PIN: ${TVDB_API_PIN:-}
     volumes:
       - ${DATA_PATH}:/data
       # Read-only: confirmed safe by real GPU inference runs this session

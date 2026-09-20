@@ -24,6 +24,7 @@ transcripts/
 # Secrets
 .env
 .env.*
+!.env.example
 *secret*
 *token*
 *credential*
