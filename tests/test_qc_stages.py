@@ -5,7 +5,7 @@ from pathlib import Path
 from glossary import Entity, build_glossary, protect
 from hallucination import HallucinationFinding
 from qc import entity_qc, output_qc, readability_qc, timing_qc, transcription_qc, translation_qc
-from qc.types import QcCategory
+from qc.types import JobQc, QcCategory, QcFinding, QcResult, QcStage
 from segmentation_target import TargetCue
 from srt import render
 from transcript import Segment, Word
@@ -162,6 +162,60 @@ class OutputQcTests(unittest.TestCase):
             result = output_qc.run(path)
         self.assertEqual(result.flagged, 0)
         self.assertEqual(result.population, 1)
+
+
+class NeedsReviewCountTests(unittest.TestCase):
+    """Production-readiness gap (2026-09-21): translation/entity/
+    hallucination/readability QC findings are purely advisory -- they
+    never gate job completion, matching a real, session-proven false-
+    positive rate too high to safely auto-fail on. needs_review_count()
+    surfaces the subset actually worth a human's attention without
+    changing completion behavior at all."""
+
+    def test_entity_error_finding_counts_regardless_of_confidence(self):
+        qc = JobQc(entity=QcResult(
+            stage=QcStage.ENTITY, population=1, flagged=1,
+            findings=[QcFinding(QcCategory.ENTITY_ERROR, "dropped", confidence=0.3)]))
+        self.assertEqual(qc.needs_review_count(), 1)
+
+    def test_hallucination_finding_counts_regardless_of_confidence(self):
+        qc = JobQc(transcription=QcResult(
+            stage=QcStage.TRANSCRIPTION, population=1, flagged=1,
+            findings=[QcFinding(QcCategory.HALLUCINATION, "suppressed", confidence=0.2)]))
+        self.assertEqual(qc.needs_review_count(), 1)
+
+    def test_high_confidence_finding_counts_regardless_of_category(self):
+        qc = JobQc(translation=QcResult(
+            stage=QcStage.TRANSLATION, population=1, flagged=1,
+            findings=[QcFinding(QcCategory.TRANSLATION_ERROR, "empty translation", confidence=1.0)]))
+        self.assertEqual(qc.needs_review_count(), 1)
+
+    def test_low_confidence_substitution_does_not_count(self):
+        # Real false-positive shape this session found repeatedly:
+        # harmless interjection-collision "substitution" matches at
+        # moderate confidence -- must not trigger review noise.
+        qc = JobQc(translation=QcResult(
+            stage=QcStage.TRANSLATION, population=2, flagged=1,
+            findings=[QcFinding(QcCategory.SUBSTITUTION, "repeated translation", confidence=0.5)]))
+        self.assertEqual(qc.needs_review_count(), 0)
+
+    def test_structural_findings_alone_never_count(self):
+        qc = JobQc(timing=QcResult(stage=QcStage.TIMING, population=5, flagged=1,
+                                   findings=[QcFinding(QcCategory.TIMING_DIFFERENCE, "gap", confidence=0.6)]),
+                  readability=QcResult(stage=QcStage.READABILITY, population=5, flagged=1,
+                                       findings=[QcFinding(QcCategory.READABILITY_ERROR, "cps", confidence=0.5)]))
+        self.assertEqual(qc.needs_review_count(), 0)
+
+    def test_no_qc_stages_present_counts_zero(self):
+        self.assertEqual(JobQc().needs_review_count(), 0)
+
+    def test_counts_across_multiple_stages(self):
+        qc = JobQc(
+            entity=QcResult(stage=QcStage.ENTITY, population=1, flagged=1,
+                           findings=[QcFinding(QcCategory.ENTITY_ERROR, "dropped", confidence=1.0)]),
+            translation=QcResult(stage=QcStage.TRANSLATION, population=1, flagged=1,
+                                findings=[QcFinding(QcCategory.TRANSLATION_ERROR, "empty", confidence=1.0)]))
+        self.assertEqual(qc.needs_review_count(), 2)
 
 
 if __name__ == "__main__":

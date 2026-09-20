@@ -263,6 +263,23 @@ class ElapsedTimeTests(JobStoreTestCase):
         with self.assertRaises(JobStoreError):
             self.store.finish(claimed["id"], "running")
 
+    def test_needs_review_defaults_to_zero(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        self.assertEqual(job["needs_review"], 0)
+
+    def test_finish_persists_needs_review_count(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        claimed = self.store.claim()
+        result = self.store.finish(claimed["id"], "completed", needs_review=2)
+        self.assertEqual(result["needs_review"], 2)
+        self.assertEqual(self.store.get(claimed["id"])["needs_review"], 2)
+
+    def test_finish_without_needs_review_leaves_default(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        claimed = self.store.claim()
+        result = self.store.finish(claimed["id"], "completed")
+        self.assertEqual(result["needs_review"], 0)
+
 
 class CancelTests(JobStoreTestCase):
     def test_cancel_queued_job_is_immediate(self):

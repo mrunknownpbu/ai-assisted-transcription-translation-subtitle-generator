@@ -12,6 +12,13 @@ const RETRYABLE = new Set(["completed", "failed", "cancelled", "skipped"]);
 const DELETABLE = new Set(["completed", "failed", "cancelled", "skipped"]);
 
 function qcSummary(job: Job): string {
+  // needs_review surfaces only the subset of QC findings worth a
+  // human's attention (see qc/types.py's JobQc.needs_review_count()) --
+  // shown ahead of the generic flagged count so it isn't buried the
+  // way every real bug found this session originally was.
+  if (job.needs_review > 0) {
+    return `⚠ ${job.needs_review} need${job.needs_review === 1 ? "s" : ""} review`;
+  }
   const flagged = Object.values(job.qc).reduce((sum, stage) => sum + (stage?.flagged ?? 0), 0);
   return flagged > 0 ? `${flagged} flagged` : "clean";
 }

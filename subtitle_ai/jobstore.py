@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     tvdb_id INTEGER,
     source_srt_path TEXT,
     destination_srt_path TEXT,
-    source_is_uploaded INTEGER NOT NULL DEFAULT 0
+    source_is_uploaded INTEGER NOT NULL DEFAULT 0,
+    needs_review INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
@@ -125,6 +126,7 @@ class JobStore:
             "destination_srt_path": "ALTER TABLE jobs ADD COLUMN destination_srt_path TEXT",
             "source_is_uploaded":
                 "ALTER TABLE jobs ADD COLUMN source_is_uploaded INTEGER NOT NULL DEFAULT 0",
+            "needs_review": "ALTER TABLE jobs ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0",
         }
         for column, ddl in migrations.items():
             if column not in existing:
@@ -436,7 +438,7 @@ class JobStore:
 
     def finish(self, job_id: str, status: str, *, error: str | None = None,
               error_category: str | None = None, outputs: list | None = None,
-              qc: dict | None = None) -> dict:
+              qc: dict | None = None, needs_review: int | None = None) -> dict:
         if status not in TERMINAL_STATUSES:
             raise JobStoreError(f"finish() requires a terminal status, got {status!r}")
         now = time.time()
@@ -446,6 +448,8 @@ class JobStore:
             fields["outputs"] = outputs
         if qc is not None:
             fields["qc"] = qc
+        if needs_review is not None:
+            fields["needs_review"] = needs_review
         self.update(job_id, **fields)
         return self.get(job_id)
 

@@ -83,6 +83,27 @@ class QcResult:
         }
 
 
+# Real gap this closes (production-readiness audit, 2026-09-21): every
+# QC stage except segmentation/timing/output is purely advisory -- see
+# pipeline.py's/srt_translation.py's `valid` computation, which never
+# reads translation/entity/hallucination/readability findings at all.
+# Every real bug fixed in the Season 01 investigation this codebase's
+# comments document (Bobby/Emre/Kemal/Ceren/Pırıl bare-name
+# hallucinations, the multi-sentence-truncation bug that hid behind 72
+# mislabeled "substitution" findings) was found only by a human's
+# manual, ad-hoc spot-check -- none of them would have surfaced to a
+# future operator on their own. needs_review_count() does NOT gate job
+# completion -- this same investigation also found real false-positive
+# noise (harmless interjection-collision "substitution" matches,
+# embellishment-but-not-wrong translation_error cases) at rates too high
+# to safely auto-fail a job on. It only counts findings worth a human's
+# attention: the exact categories this session's real bugs landed in,
+# plus anything confident enough to be worth a look regardless of
+# category.
+REVIEW_CATEGORIES = frozenset({QcCategory.ENTITY_ERROR, QcCategory.HALLUCINATION})
+REVIEW_CONFIDENCE = 0.7
+
+
 @dataclass
 class JobQc:
     """All QC results for one job, keyed by stage -- the API/GUI contract.
@@ -100,3 +121,16 @@ class JobQc:
     def to_dict(self) -> dict:
         return {stage.value: getattr(self, stage.value).to_dict()
                for stage in QcStage if getattr(self, stage.value) is not None}
+
+    def needs_review_count(self) -> int:
+        """See the module-level comment above REVIEW_CATEGORIES for the
+        real gap this closes and why it counts rather than gates."""
+        count = 0
+        for stage in QcStage:
+            result = getattr(self, stage.value)
+            if result is None:
+                continue
+            for finding in result.findings:
+                if finding.category in REVIEW_CATEGORIES or finding.confidence >= REVIEW_CONFIDENCE:
+                    count += 1
+        return count

@@ -75,6 +75,11 @@ export interface Job {
   log: LogEntry[];
   tvdb_id: number | null;
   elapsed_seconds: number;
+  // Count of high-confidence QC findings (entity_error/hallucination
+  // categories, or any finding >=0.7 confidence) worth a human's
+  // attention -- advisory only, never blocks completion. See
+  // qc/types.py's JobQc.needs_review_count() docstring for why.
+  needs_review: number;
 }
 
 export interface JobListResponse {

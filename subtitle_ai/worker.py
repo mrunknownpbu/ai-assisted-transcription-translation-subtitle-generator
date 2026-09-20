@@ -259,7 +259,8 @@ class Worker(threading.Thread):
             else:
                 self.store.append_log(job_id, f"KEEP: {destination_path.name} already exists")
 
-            self.store.finish(job_id, "completed", outputs=outputs, qc=result.qc.to_dict())
+            self.store.finish(job_id, "completed", outputs=outputs, qc=result.qc.to_dict(),
+                             needs_review=result.qc.needs_review_count())
         except JobCancelled:
             self.store.finish(job_id, "cancelled")
         except OutputSafetyError as exc:
@@ -389,7 +390,8 @@ class Worker(threading.Thread):
                         "(source language matches target language; single output)")
                 else:
                     self.store.append_log(job_id, f"KEEP: {target_path.name} already exists")
-                self.store.finish(job_id, "completed", outputs=outputs, qc=result.qc.to_dict())
+                self.store.finish(job_id, "completed", outputs=outputs, qc=result.qc.to_dict(),
+                                  needs_review=result.qc.needs_review_count())
                 return
 
             # write_srt_atomic itself is the KEEP/REPLACE decision point:
@@ -410,7 +412,8 @@ class Worker(threading.Thread):
             else:
                 self.store.append_log(job_id, f"KEEP: {target_path.name} already exists")
 
-            self.store.finish(job_id, "completed", outputs=outputs, qc=result.qc.to_dict())
+            self.store.finish(job_id, "completed", outputs=outputs, qc=result.qc.to_dict(),
+                             needs_review=result.qc.needs_review_count())
         except JobCancelled:
             self.store.finish(job_id, "cancelled")
         except OutputSafetyError as exc:
