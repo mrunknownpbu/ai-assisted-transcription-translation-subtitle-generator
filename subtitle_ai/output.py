@@ -16,6 +16,15 @@ from pathlib import Path
 # overwrite flag. This list is the one place that decision is made.
 PROTECTED_SUFFIXES = (".en.hi.srt", ".en.forced.srt", ".en.sdh.srt")
 
+# Real gap this closes (production-readiness audit, 2026-09-21): a
+# browser-uploaded SRT (api.py's POST /api/srt-uploads) was already
+# capped at 2 MiB, but a source_srt_path pointed at the media library
+# had no size limit at all -- srt_translation.parse_and_validate() reads
+# the whole file into memory before any check runs. Shared here (not
+# duplicated) so both paths enforce the identical limit. Generous for
+# any real subtitle file.
+MAX_SRT_FILE_BYTES = 2 * 1024 * 1024
+
 
 class OutputSafetyError(ValueError):
     pass

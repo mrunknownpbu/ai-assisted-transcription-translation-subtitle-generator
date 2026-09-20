@@ -263,6 +263,15 @@ class ElapsedTimeTests(JobStoreTestCase):
         with self.assertRaises(JobStoreError):
             self.store.finish(claimed["id"], "running")
 
+    def test_update_rejects_unknown_column(self):
+        # Real gap this closes (production-readiness audit, 2026-09-21):
+        # update()'s column names are interpolated directly into the SQL
+        # text -- values are parameterized, but nothing previously
+        # stopped an unknown key from reaching the query at all.
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        with self.assertRaises(JobStoreError):
+            self.store.update(job["id"], not_a_real_column="value")
+
     def test_needs_review_defaults_to_zero(self):
         job = self.store.create("Show/S01E01.mkv", "tr")
         self.assertEqual(job["needs_review"], 0)

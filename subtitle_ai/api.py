@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import tempfile
 import time
@@ -15,7 +16,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -27,7 +28,8 @@ import translate
 from events import EventBus
 from jobstore import JobStore, JobStoreError
 from media import VIDEO_EXTENSIONS
-from output import OutputSafetyError, resolve_media_path, resolve_output_path, write_srt_atomic
+from output import (MAX_SRT_FILE_BYTES, OutputSafetyError, resolve_media_path,
+                    resolve_output_path, write_srt_atomic)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -46,6 +48,23 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Subtitle AI v2", docs_url=None, redoc_url=None, lifespan=_lifespan)
+
+
+def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    """Real gap this closes (production-readiness audit, 2026-09-21):
+    every endpoint had zero access control, including delete/cancel/
+    retry/glossary-write. Opt-in only -- confirmed LAN-only deployment
+    makes this cheap insurance, not a hard requirement, so an unset
+    SUBTITLE_AI_API_KEY (today's default everywhere this runs) makes
+    this a no-op, identical to current behavior. Deliberately NOT
+    applied to read-only or job-creation endpoints -- see the plan this
+    implements for why the scope stops at delete/cancel/retry/
+    glossary-write specifically."""
+    expected = os.environ.get("SUBTITLE_AI_API_KEY")
+    if not expected:
+        return
+    if x_api_key != expected:
+        raise HTTPException(status_code=401, detail="missing or invalid X-API-Key")
 
 
 def get_store() -> JobStore:
@@ -354,6 +373,17 @@ def create_job(request: JobRequest) -> dict:
         resolve_output_path(get_media_root(), request.video_path, "en")  # validates the path shape early
     except OutputSafetyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Real gap this closes (production-readiness audit, 2026-09-21): the
+    # regex pattern alone (JobRequest.source_lang) accepts any
+    # well-formed-looking code -- "xx" passes it but isn't a language
+    # this deployment's NLLB build can translate. POST /api/srt-
+    # translations already has this exact check (see
+    # create_srt_translation_job below); this brings the video-job path
+    # up to the same standard instead of letting an unsupported code
+    # reach the worker/pipeline unchecked.
+    if request.source_lang != "auto" and request.source_lang not in translate.NLLB_LANG:
+        raise HTTPException(status_code=400,
+                            detail=f"unsupported source_lang: {request.source_lang!r}")
     try:
         job = get_store().create(request.video_path, request.source_lang,
                                  target_lang=request.target_lang,
@@ -374,7 +404,10 @@ def list_languages() -> dict:
     return {"languages": sorted(translate.NLLB_LANG.keys())}
 
 
-MAX_SRT_UPLOAD_BYTES = 2 * 1024 * 1024  # 2 MiB -- generous for any real subtitle file
+# Shared with srt_translation.parse_and_validate()'s identical cap on a
+# source_srt_path-sourced file -- see output.MAX_SRT_FILE_BYTES's
+# docstring for the gap this closes (that path had no size limit at all).
+MAX_SRT_UPLOAD_BYTES = MAX_SRT_FILE_BYTES
 
 
 @app.post("/api/srt-uploads", status_code=201)
@@ -529,7 +562,7 @@ class PromoteGlossaryEntityRequest(BaseModel):
     aliases: list[str] = []
 
 
-@app.post("/api/series/{tvdb_id}/glossary/promote")
+@app.post("/api/series/{tvdb_id}/glossary/promote", dependencies=[Depends(require_api_key)])
 def promote_glossary_entity(tvdb_id: int, request: PromoteGlossaryEntityRequest) -> dict:
     """Turns a mined suggestion (or any name) into a real,
     translation-affecting protected entity -- the one deliberate human
@@ -596,7 +629,7 @@ def _write_series_glossary(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
-@app.post("/api/series/{tvdb_id}/glossary/update")
+@app.post("/api/series/{tvdb_id}/glossary/update", dependencies=[Depends(require_api_key)])
 def update_glossary_entity(tvdb_id: int, request: UpdateGlossaryEntityRequest) -> dict:
     """Edits an EXISTING entry's canonical spelling and/or aliases.
     Scoped to the series-specific file only (never the global/Turkish
@@ -626,7 +659,7 @@ class DeleteGlossaryEntityRequest(BaseModel):
     canonical: str = Field(min_length=1)
 
 
-@app.post("/api/series/{tvdb_id}/glossary/delete")
+@app.post("/api/series/{tvdb_id}/glossary/delete", dependencies=[Depends(require_api_key)])
 def delete_glossary_entity(tvdb_id: int, request: DeleteGlossaryEntityRequest) -> dict:
     """Removes an entry from the series-specific glossary file entirely
     (un-protects it). Same scoping/404 rules as update above."""
@@ -676,7 +709,7 @@ def get_job(job_id: str) -> dict:
     return job
 
 
-@app.post("/api/jobs/{job_id}/cancel")
+@app.post("/api/jobs/{job_id}/cancel", dependencies=[Depends(require_api_key)])
 def cancel_job(job_id: str) -> dict:
     try:
         return get_store().request_cancel(job_id)
@@ -685,7 +718,7 @@ def cancel_job(job_id: str) -> dict:
         raise HTTPException(status_code=code, detail=str(exc)) from exc
 
 
-@app.post("/api/jobs/{job_id}/retry", status_code=201)
+@app.post("/api/jobs/{job_id}/retry", status_code=201, dependencies=[Depends(require_api_key)])
 def retry_job(job_id: str, request: RetryRequest = RetryRequest()) -> dict:
     # A request body that never mentions audio_stream_index carries the
     # original stream selection forward (like an omitted source_lang
@@ -713,7 +746,7 @@ def retry_job(job_id: str, request: RetryRequest = RetryRequest()) -> dict:
     return {"job": job}
 
 
-@app.delete("/api/jobs/{job_id}")
+@app.delete("/api/jobs/{job_id}", dependencies=[Depends(require_api_key)])
 def delete_job(job_id: str) -> dict:
     """Removes only the jobs-table row. Never touches a media file --
     verified by test_api.py; the media root is never imported into this

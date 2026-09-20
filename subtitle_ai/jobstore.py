@@ -99,6 +99,15 @@ class JobStore:
         with self._connect() as conn:
             conn.executescript(SCHEMA)
             self._migrate(conn)
+            # Real gap this closes (production-readiness audit,
+            # 2026-09-21): update()'s column names are interpolated
+            # directly into the SQL text (values are still parameterized
+            # -- see update()'s docstring). No caller currently passes an
+            # attacker-controlled key, so this was never exploitable, but
+            # it was a foot-gun for future code that might. Derived from
+            # the LIVE schema (post-migration), not a hand-duplicated
+            # list, so it can never drift from _migrate()'s own columns.
+            self._known_columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         """CREATE TABLE IF NOT EXISTS never adds columns to a table that
@@ -419,6 +428,9 @@ class JobStore:
     def update(self, job_id: str, **fields) -> None:
         if not fields:
             return
+        unknown = set(fields) - self._known_columns
+        if unknown:
+            raise JobStoreError(f"update() got unknown column(s): {sorted(unknown)}")
         fields = dict(fields)
         fields["updated_at"] = time.time()
         for key in ("outputs", "qc", "log"):

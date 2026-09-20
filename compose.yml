@@ -48,6 +48,10 @@ services:
       # default, matching today's behavior (silent failure until the UI
       # is checked).
       FAILURE_WEBHOOK_URL: ${FAILURE_WEBHOOK_URL:-}
+      # Optional shared-secret header required on mutating endpoints
+      # (see api.py's require_api_key()) -- unset by default, matching
+      # this deployment's confirmed LAN-only status.
+      SUBTITLE_AI_API_KEY: ${SUBTITLE_AI_API_KEY:-}
     volumes:
       - ${DATA_PATH}:/data
       # Read-only: confirmed safe by real GPU inference runs this session

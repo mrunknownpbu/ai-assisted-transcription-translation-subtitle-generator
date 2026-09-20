@@ -29,7 +29,7 @@ import glossary as glossary_mod
 import segmentation_target
 import srt
 import translate
-from output import write_srt_atomic
+from output import MAX_SRT_FILE_BYTES, write_srt_atomic
 from pipeline import LowConfidenceLanguageError, UnsupportedLanguageError
 from qc import entity_qc, output_qc, readability_qc, timing_qc, translation_qc
 from qc.types import JobQc
@@ -92,7 +92,17 @@ def parse_and_validate(path: str | Path) -> list[ValidatedCue]:
     Handles the same UTF-8 BOM / CRLF normalization as srt.parse() (this
     is intentionally NOT a call to srt.parse() itself, since that
     function's silent-skip-on-malformed-block behavior loses exactly the
-    information this function exists to act on -- reject vs. tolerate)."""
+    information this function exists to act on -- reject vs. tolerate).
+
+    Real gap this closes (production-readiness audit, 2026-09-21): a
+    browser-uploaded source was already capped at MAX_SRT_FILE_BYTES
+    (api.py), but a source_srt_path pointed at the media library had no
+    size limit at all -- checked here, before the full read, since the
+    whole point is never loading an oversized file into memory."""
+    size = Path(path).stat().st_size
+    if size > MAX_SRT_FILE_BYTES:
+        raise SrtValidationError(f"source .srt is {size} bytes, exceeds the "
+                                 f"{MAX_SRT_FILE_BYTES} byte limit")
     raw = Path(path).read_text(encoding="utf-8-sig").replace("\r\n", "\n")
     cues: list[ValidatedCue] = []
     for block in raw.split("\n\n"):

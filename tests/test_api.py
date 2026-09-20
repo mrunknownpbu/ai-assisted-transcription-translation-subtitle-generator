@@ -69,6 +69,44 @@ class HealthTests(ApiTestCase):
             api.register_worker(None)
 
 
+class ApiKeyGuardTests(ApiTestCase):
+    """Real gap this closes (production-readiness audit, 2026-09-21):
+    every endpoint had zero access control. Opt-in only -- unset by
+    default, matching the confirmed LAN-only deployment's current
+    behavior exactly."""
+
+    def test_unset_key_leaves_mutating_endpoints_open(self):
+        with patch.dict("os.environ", {}, clear=True):
+            job = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv", "source_lang": "tr"})
+            r = self.client.post(f"/api/jobs/{job.json()['job']['id']}/cancel")
+        self.assertEqual(r.status_code, 200)
+
+    def test_configured_key_blocks_request_with_no_header(self):
+        job = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv", "source_lang": "tr"})
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
+            r = self.client.post(f"/api/jobs/{job.json()['job']['id']}/cancel")
+        self.assertEqual(r.status_code, 401)
+
+    def test_configured_key_blocks_request_with_wrong_header(self):
+        job = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv", "source_lang": "tr"})
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
+            r = self.client.post(f"/api/jobs/{job.json()['job']['id']}/cancel",
+                                 headers={"X-API-Key": "wrong"})
+        self.assertEqual(r.status_code, 401)
+
+    def test_configured_key_allows_request_with_correct_header(self):
+        job = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv", "source_lang": "tr"})
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
+            r = self.client.post(f"/api/jobs/{job.json()['job']['id']}/cancel",
+                                 headers={"X-API-Key": "secret123"})
+        self.assertEqual(r.status_code, 200)
+
+    def test_read_only_endpoints_stay_open_even_with_key_configured(self):
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
+            r = self.client.get("/api/health")
+        self.assertEqual(r.status_code, 200)
+
+
 class FailureWebhookWiringTests(ApiTestCase):
     """Real gap this closes (production-readiness audit, 2026-09-21): a
     job failure was previously invisible until someone opened the UI."""
@@ -112,6 +150,13 @@ class CreateJobTests(ApiTestCase):
         r = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv", "source_lang": "auto"})
         self.assertEqual(r.status_code, 201)
         self.assertEqual(r.json()["job"]["source_lang"], "auto")
+
+    def test_unsupported_but_valid_shaped_language_code_rejected_with_400(self):
+        # Matches POST /api/srt-translations' existing stricter check --
+        # a well-formed-looking code that isn't a real NLLB_LANG key
+        # must not reach the worker/pipeline unchecked.
+        r = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv", "source_lang": "zz"})
+        self.assertEqual(r.status_code, 400)
 
     def test_target_lang_defaults_to_english(self):
         r = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"})

@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from srt_translation import SrtValidationError, parse_and_validate
@@ -106,6 +107,17 @@ class ParseAndValidateTests(unittest.TestCase):
         path = _write(self.dir, content)
         cues = parse_and_validate(path)
         self.assertEqual(len(cues), 1)
+
+    def test_oversized_source_file_rejected_before_reading(self):
+        # Real gap this closes (production-readiness audit, 2026-09-21):
+        # a browser-uploaded source was already capped at 2 MiB
+        # (api.py), but a source_srt_path pointed at the media library
+        # had no size limit at all.
+        import srt_translation
+        path = _write(self.dir, VALID_SRT)
+        with unittest.mock.patch.object(srt_translation, "MAX_SRT_FILE_BYTES", 1):
+            with self.assertRaises(SrtValidationError):
+                parse_and_validate(path)
 
 
 class DetectSourceLanguageTests(unittest.TestCase):
