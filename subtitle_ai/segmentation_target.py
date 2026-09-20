@@ -32,6 +32,15 @@ TARGET_CPS = 17.0
 
 _SENTENCE_END = re.compile(r"[.!?…]['\"»)\]]*(?:\s|$)")
 _CLAUSE_END = re.compile(r"[,;:]['\"»)\]]*$")
+# English-only (this module only ever processes already-translated,
+# target=English text, never source-language text) -- title abbreviations
+# whose period must never count as a sentence end. Real bug (2026-09-20):
+# rejoining two identical two-speaker dash lines that both translated to
+# "- Good morning, Mr. Serkan." produced repeated "Mr." periods this
+# splitter had no way to distinguish from real sentence ends, fragmenting
+# "Mr." away from the name that follows it into its own short, garbled
+# display cue.
+_TITLE_ABBREVIATIONS = frozenset({"mr", "mrs", "ms", "mx", "dr", "prof", "sr", "jr", "st"})
 _STRIP_PUNCT = ".,!?;:\"'()[]…"
 _CLINGY_WORDS = frozenset({
     "a", "an", "the", "my", "your", "his", "her", "its", "our", "their",
@@ -56,13 +65,26 @@ class TargetCue:
         return " ".join(self.lines)
 
 
+def _is_title_abbreviation_period(text: str, period_pos: int) -> bool:
+    """True if the "." at `period_pos` closes a known title abbreviation
+    ("Mr.", "Dr.", ...) rather than ending a sentence."""
+    word_start = period_pos
+    while word_start > 0 and text[word_start - 1].isalpha():
+        word_start -= 1
+    return text[word_start:period_pos].casefold() in _TITLE_ABBREVIATIONS
+
+
 def split_sentences(text: str) -> list[str]:
     """Split on sentence-ending punctuation, keeping the punctuation
-    attached to the sentence it closes."""
-    pieces, buf = [], ""
+    attached to the sentence it closes. A "." closing a known title
+    abbreviation (see _TITLE_ABBREVIATIONS) is never treated as a
+    sentence end."""
+    pieces = []
     i = 0
     for m in _SENTENCE_END.finditer(text):
         end = m.end()
+        if text[m.start()] == "." and _is_title_abbreviation_period(text, m.start()):
+            continue
         piece = text[i:end].strip()
         if piece:
             pieces.append(piece)

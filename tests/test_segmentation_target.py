@@ -15,6 +15,26 @@ class SplitSentencesTests(unittest.TestCase):
     def test_empty_text(self):
         self.assertEqual(split_sentences(""), [])
 
+    def test_title_abbreviation_period_is_not_a_sentence_end(self):
+        # Real bug (2026-09-20): rejoining two identical dash-speaker
+        # lines both containing "Mr. Serkan." fragmented "Mr." away from
+        # the name that follows it.
+        self.assertEqual(
+            split_sentences("- Good morning, Mr. Serkan.\n- Good morning, Mr. Serkan."),
+            ["- Good morning, Mr. Serkan.", "- Good morning, Mr. Serkan."],
+        )
+
+    def test_other_title_abbreviations_not_split(self):
+        self.assertEqual(split_sentences("I saw Dr. Smith today. He left."),
+                         ["I saw Dr. Smith today.", "He left."])
+
+    def test_ordinary_words_still_split_normally(self):
+        # Regression guard: the abbreviation check only fires when the
+        # FULL word immediately before the period is a known
+        # abbreviation stem -- an ordinary word must never be misread as
+        # one just because it happens to end in similar letters.
+        self.assertEqual(split_sentences("Fast. Slow."), ["Fast.", "Slow."])
+
 
 class SplitLongPieceTests(unittest.TestCase):
     def test_short_piece_unchanged(self):
