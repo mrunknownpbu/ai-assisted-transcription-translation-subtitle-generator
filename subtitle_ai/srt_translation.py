@@ -29,7 +29,7 @@ import glossary as glossary_mod
 import segmentation_target
 import srt
 import translate
-from output import MAX_SRT_FILE_BYTES, write_srt_atomic
+from output import MAX_SRT_FILE_BYTES, TARGET_LANG, write_srt_atomic
 from pipeline import LowConfidenceLanguageError, UnsupportedLanguageError
 from qc import entity_qc, output_qc, readability_qc, timing_qc, translation_qc
 from qc.types import JobQc
@@ -164,7 +164,7 @@ class SrtTranslationResult:
     requested_source_language: str = "auto"
     detected_source_language: str = ""
     language_probability: float | None = None
-    target_language: str = "en"
+    target_language: str = TARGET_LANG
     # A scratch-rendered copy of the ORIGINAL (untranslated) cues -- distinct
     # from source_srt_path above, which is just "where this job's input came
     # from". Committing this alongside the video (see worker.py) makes an
@@ -177,7 +177,7 @@ class SrtTranslationResult:
 
 
 def run_srt_translation_pipeline(source_srt_path: str | Path, work_dir: str | Path, *,
-                                 source_lang: str = "auto", target_lang: str = "en",
+                                 source_lang: str = "auto", target_lang: str = TARGET_LANG,
                                  glossary_entities: list[glossary_mod.Entity] | None = None,
                                  glossary_phrases: list[glossary_mod.PhraseEntry] | None = None,
                                  translation_config=None, translation_model=None,

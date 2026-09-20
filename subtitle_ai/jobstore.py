@@ -21,6 +21,21 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import glossary_profile
+from output import TARGET_LANG
+
+def _english_destination(original: dict) -> str:
+    """A retry always targets English (see output.TARGET_LANG), even when
+    the original row predates that restriction and recorded another
+    target: rewrite a legacy `<stem>.<lang>.srt` destination to
+    `<stem>.en.srt` so English text is never written under a mislabeled
+    filename."""
+    destination = original["destination_srt_path"]
+    legacy = original.get("target_lang") or TARGET_LANG
+    suffix = f".{legacy}.srt"
+    if legacy != TARGET_LANG and destination.endswith(suffix):
+        return destination[: -len(suffix)] + f".{TARGET_LANG}.srt"
+    return destination
+
 
 STATUSES = ("queued", "running", "completed", "failed", "skipped", "cancelled")
 TERMINAL_STATUSES = frozenset({"completed", "failed", "skipped", "cancelled"})
@@ -532,16 +547,16 @@ class JobStore:
                              else overwrite_english)
         if original["job_type"] == "srt_translation":
             return self.create_srt_translation(
-                original["source_srt_path"], original["destination_srt_path"],
+                original["source_srt_path"], _english_destination(original),
                 source_lang=source_lang or original["source_lang"],
-                target_lang=original.get("target_lang") or "en",
+                target_lang=TARGET_LANG,
                 video_path=original["video_path"] or None, overwrite_english=overwrite_english,
                 source_is_uploaded=original["source_is_uploaded"],
                 retry_of_job_id=job_id, attempt=original["attempt"] + 1)
         stream_override = (original.get("requested_audio_stream") if audio_stream_index == "unset"
                           else audio_stream_index)
         return self.create(original["video_path"], source_lang or original["source_lang"],
-                           target_lang=original.get("target_lang") or "en",
+                           target_lang=TARGET_LANG,
                            audio_stream_index=stream_override,
                            overwrite_original=overwrite_original, overwrite_english=overwrite_english,
                            retry_of_job_id=job_id, attempt=original["attempt"] + 1)

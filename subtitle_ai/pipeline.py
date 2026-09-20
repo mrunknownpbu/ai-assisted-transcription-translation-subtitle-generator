@@ -23,7 +23,7 @@ import segmentation_target
 import srt
 import translate
 from asr import AsrConfig, PIPELINE_VERSION, transcribe as asr_transcribe
-from output import write_srt_atomic, resolve_output_path
+from output import TARGET_LANG, write_srt_atomic, resolve_output_path
 from projection import ProjectedCue, merge_groups, project, validate_coverage
 from qc import entity_qc, output_qc, readability_qc, timing_qc, transcription_qc, translation_qc
 from qc.types import JobQc
@@ -61,7 +61,7 @@ class PipelineResult:
     language_probability: float | None = None
     source_language_mode: str = "AUTO"
     language_detection_uncertain: bool = False
-    target_language: str = "en"
+    target_language: str = TARGET_LANG
     requested_audio_stream: int | None = None
     selected_audio_stream: int = 0
     embedded_stream_language: str | None = None
@@ -273,7 +273,7 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     sentences = [join_words([source_cues[i].text for i in span], transcript.language) for span in spans]
     protected_sentences = [glossary_mod.protect(s, glossary_map) for s in sentences] if glossary_map else sentences
 
-    target_language = "en"
+    target_language = TARGET_LANG
     if transcript.language == target_language:
         # The resolved source language already IS the target -- a real
         # reachable case now that source language is auto-detected (e.g.

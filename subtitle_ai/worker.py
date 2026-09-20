@@ -25,7 +25,8 @@ import gpu
 import pipeline
 import srt_translation
 from jobstore import JobStore
-from output import OutputSafetyError, resolve_media_path, resolve_output_path, write_srt_atomic
+from output import (TARGET_LANG, OutputSafetyError, resolve_media_path, resolve_output_path,
+                    write_srt_atomic)
 
 
 logger = logging.getLogger(__name__)
@@ -233,7 +234,7 @@ class Worker(threading.Thread):
                 api.release_stream_sampler()
                 result = srt_translation.run_srt_translation_pipeline(
                     source_srt_path=str(source_path), work_dir=str(work_dir),
-                    source_lang=source_lang, target_lang=job.get("target_lang") or "en",
+                    source_lang=source_lang, target_lang=TARGET_LANG,
                     glossary_entities=glossary_entities,
                     glossary_phrases=glossary_phrases,
                     translate_remote_url=self.translate_server_url,
@@ -310,7 +311,7 @@ class Worker(threading.Thread):
             # path depends on the resolved language: for a manual request
             # that's known now; for AUTO it's only known after ASR detects
             # it, so that validation happens after pipeline.run() below.
-            target_path = resolve_output_path(self.media_root, job["video_path"], "en")
+            target_path = resolve_output_path(self.media_root, job["video_path"], TARGET_LANG)
             source_path = (resolve_output_path(self.media_root, job["video_path"], source_lang)
                           if source_lang != "auto" else None)
 

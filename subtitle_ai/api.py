@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import alerting
 import audio_streams
@@ -28,7 +28,7 @@ import translate
 from events import EventBus
 from jobstore import JobStore, JobStoreError
 from media import VIDEO_EXTENSIONS
-from output import (MAX_SRT_FILE_BYTES, OutputSafetyError, resolve_media_path,
+from output import (MAX_SRT_FILE_BYTES, TARGET_LANG, OutputSafetyError, resolve_media_path,
                     resolve_output_path, write_srt_atomic)
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -158,12 +158,24 @@ def create_app(db_path: str | Path, media_root: str = "/data", *,
     return app
 
 
+def _require_english_target(value: str) -> str:
+    """Shared by both job-creation request models. translate.load_model()
+    is hardwired to English output (see output.TARGET_LANG), so any other
+    target would produce English text under a mislabeled filename."""
+    if value != TARGET_LANG:
+        raise ValueError(f'target_lang must be "{TARGET_LANG}"; '
+                         "multi-target translation is not supported")
+    return value
+
+
 class JobRequest(BaseModel):
     video_path: str
     # "auto" (the default) means detect the spoken language from the audio;
     # a 2-3 letter code is an explicit manual override.
     source_lang: str = Field(default="auto", pattern=r"^(auto|[a-z]{2,3})$")
-    target_lang: str = Field(default="en", pattern=r"^[a-z]{2,3}$")
+    target_lang: str = TARGET_LANG
+
+    _check_target_lang = field_validator("target_lang")(_require_english_target)
     # None (the default) means let the pipeline recommend a stream; a
     # given index is an explicit manual override -- see audio_streams.py.
     audio_stream_index: int | None = Field(default=None, ge=0)
@@ -188,7 +200,9 @@ class SrtTranslationRequest(BaseModel):
     # text itself (see srt_translation.py) -- an explicit 2-3 letter code
     # is a manual override. Same pattern/validator as JobRequest.source_lang.
     source_lang: str = Field(default="auto", pattern=r"^(auto|[a-z]{2,3})$")
-    target_lang: str = Field(default="en", pattern=r"^[a-z]{2,3}$")
+    target_lang: str = TARGET_LANG
+
+    _check_target_lang = field_validator("target_lang")(_require_english_target)
     overwrite_english: bool = False
 
 
@@ -370,7 +384,7 @@ def audio_stream_recommendation(path: str = Query(...)) -> dict:
 @app.post("/api/jobs", status_code=201)
 def create_job(request: JobRequest) -> dict:
     try:
-        resolve_output_path(get_media_root(), request.video_path, "en")  # validates the path shape early
+        resolve_output_path(get_media_root(), request.video_path, TARGET_LANG)  # validates the path shape early
     except OutputSafetyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     # Real gap this closes (production-readiness audit, 2026-09-21): the
@@ -386,7 +400,7 @@ def create_job(request: JobRequest) -> dict:
                             detail=f"unsupported source_lang: {request.source_lang!r}")
     try:
         job = get_store().create(request.video_path, request.source_lang,
-                                 target_lang=request.target_lang,
+                                 target_lang=TARGET_LANG,
                                  audio_stream_index=request.audio_stream_index,
                                  overwrite_original=request.overwrite_original,
                                  overwrite_english=request.overwrite_english)
@@ -463,7 +477,7 @@ def create_srt_translation_job(request: SrtTranslationRequest) -> dict:
         raise HTTPException(status_code=400, detail=f"video_path: {exc}") from exc
 
     try:
-        destination = resolve_output_path(get_media_root(), request.video_path, request.target_lang)
+        destination = resolve_output_path(get_media_root(), request.video_path, TARGET_LANG)
     except OutputSafetyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -503,7 +517,7 @@ def create_srt_translation_job(request: SrtTranslationRequest) -> dict:
     try:
         job = get_store().create_srt_translation(
             str(source.relative_to(source_root)), str(destination.relative_to(media_root)),
-            source_lang=request.source_lang, target_lang=request.target_lang,
+            source_lang=request.source_lang, target_lang=TARGET_LANG,
             video_path=str(video.relative_to(media_root)), overwrite_english=request.overwrite_english,
             source_is_uploaded=source_is_uploaded)
     except JobStoreError as exc:

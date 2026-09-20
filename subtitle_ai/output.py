@@ -26,6 +26,13 @@ PROTECTED_SUFFIXES = (".en.hi.srt", ".en.forced.srt", ".en.sdh.srt")
 MAX_SRT_FILE_BYTES = 2 * 1024 * 1024
 
 
+# The only translation target this deployment supports: translate.load_model()
+# pins NLLB's BOS token to eng_Latn, so the model can only emit English.
+# Every place that names, validates or defaults a target language uses this
+# instead of a literal "en", so they can't drift apart.
+TARGET_LANG = "en"
+
+
 class OutputSafetyError(ValueError):
     pass
 

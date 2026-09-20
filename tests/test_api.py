@@ -162,6 +162,18 @@ class CreateJobTests(ApiTestCase):
         r = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"})
         self.assertEqual(r.json()["job"]["target_lang"], "en")
 
+    def test_non_english_target_lang_rejected_with_422(self):
+        r = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv", "target_lang": "fr"})
+        self.assertEqual(r.status_code, 422)
+        self.assertTrue(r.json()["detail"][0]["msg"].endswith(
+            'target_lang must be "en"; multi-target translation is not supported'))
+        self.assertEqual(self.client.get("/api/jobs").json()["total"], 0)
+
+    def test_explicit_english_target_lang_still_accepted(self):
+        r = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv", "target_lang": "en"})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["job"]["target_lang"], "en")
+
     def test_audio_stream_index_defaults_to_auto(self):
         r = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"})
         job = r.json()["job"]
@@ -321,6 +333,18 @@ class SrtTranslationApiTests(MediaRootApiTestCase):
         body = {"video_path": "Show/S01E01.mkv", "source_srt_path": "in/ep.tr.srt"}
         body.update(overrides)
         return body
+
+    def test_non_english_target_lang_rejected_with_422(self):
+        r = self.client.post("/api/srt-translations", json=self._body(target_lang="fr"))
+        self.assertEqual(r.status_code, 422)
+        self.assertTrue(r.json()["detail"][0]["msg"].endswith(
+            'target_lang must be "en"; multi-target translation is not supported'))
+        self.assertEqual(self.client.get("/api/jobs").json()["total"], 0)
+
+    def test_explicit_english_target_lang_still_accepted(self):
+        r = self.client.post("/api/srt-translations", json=self._body(target_lang="en"))
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["job"]["destination_srt_path"], "Show/S01E01.en.srt")
 
     def test_creates_queued_srt_translation_job_with_derived_destination(self):
         r = self.client.post("/api/srt-translations", json=self._body())

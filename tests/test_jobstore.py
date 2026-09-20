@@ -666,6 +666,22 @@ class SrtTranslationJobCreationTests(JobStoreTestCase):
         self.assertEqual(retried["retry_of_job_id"], claimed["id"])
         self.assertEqual(retried["attempt"], 2)
 
+    def test_retry_of_legacy_non_english_srt_job_targets_english(self):
+        # Rows created before the English-only restriction could record
+        # another target and a `.fr.srt` destination.
+        job = self.store.create_srt_translation("in/ep.tr.srt", "out/ep.fr.srt", target_lang="fr")
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"])
+        self.assertEqual(retried["target_lang"], "en")
+        self.assertEqual(retried["destination_srt_path"], "out/ep.en.srt")
+
+    def test_retry_of_legacy_non_english_video_job_targets_english(self):
+        job = self.store.create("Show/S01E01.mkv", "auto", target_lang="fr")
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        self.assertEqual(self.store.retry(claimed["id"])["target_lang"], "en")
+
     def test_retry_of_srt_translation_job_inherits_overwrite_english(self):
         job = self.store.create_srt_translation(
             "in/ep.tr.srt", "out/ep.en.srt", overwrite_english=False)
