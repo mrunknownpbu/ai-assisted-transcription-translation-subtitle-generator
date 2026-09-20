@@ -73,6 +73,35 @@ class TranslationQcTests(unittest.TestCase):
         self.assertEqual(finding.evidence["source"], "Baska bir seyler burada")
         self.assertEqual(finding.evidence["translated"], "okay going now")
 
+    def test_unpunctuated_run_on_source_flagged(self):
+        # Real bug (Love Is In The Air S01E03, 2026-09-21): this exact
+        # source cue has zero sentence-ending punctuation across three
+        # separate thoughts, so it went to NLLB as one generate() call
+        # and came back as "Okay, Uncle Alptekin, I'm Moon Flood." --
+        # invisible to the length-ratio checks above (37/84 = 0.44,
+        # above the 0.25 cutoff for "suspiciously short").
+        source = ("Sen Kahveni İçerken Ben Hazırladım Tamam Alptekin Amca "
+                  "Ay Selinciğim Biz Amca Değil")
+        translated = "Okay, Uncle Alptekin, I'm Moon Flood."
+        result = translation_qc.run([source], [translated])
+        self.assertEqual(result.flagged, 1)
+        finding = result.findings[0]
+        self.assertEqual(finding.category, QcCategory.TRANSLATION_ERROR)
+        self.assertIn("unpunctuated", finding.reason)
+
+    def test_ordinary_punctuated_sentence_not_flagged_as_run_on(self):
+        result = translation_qc.run(
+            ["Bu adam gercekten cok tuhaf davraniyor bu aralar sanki."],
+            ["This guy has been acting really weird lately."])
+        self.assertEqual(result.flagged, 0)
+
+    def test_short_unpunctuated_source_not_flagged_as_run_on(self):
+        # Under the 8-word threshold -- an ordinary short unpunctuated
+        # utterance ("Tamam gidiyorum simdi") is common and not at risk
+        # of the multi-clause garbling this check targets.
+        result = translation_qc.run(["Tamam gidiyorum simdi"], ["Okay, I'm going now"])
+        self.assertEqual(result.flagged, 0)
+
 
 class EntityQcTests(unittest.TestCase):
     def test_matching_occurrence_counts_clean(self):
