@@ -75,7 +75,24 @@ STOPWORDS = frozenset({
     "Yani", "Şimdi", "Sonra", "Önce", "Belki", "Aslında", "Tabii",
     "Lütfen", "Pardon", "Hey", "Vay",
     "Anne", "Baba", "Abla", "Abi", "Teyze", "Amca", "Dayı", "Hala",
-    "Hoca", "Doktor", "Bey", "Hanım",
+    "Hoca", "Doktor", "Bey", "Hanım", "Efendim",
+    # Added 2026-09-20 from a real Season 01 (Love Is In The Air,
+    # tvdb-383383) full-corpus mining run: these ordinary Turkish
+    # function words/interjections were crowding real recurring
+    # character names (Pırıl, Aydan, Ayfer, Erdem, Deniz, ...) out of
+    # TOP_N_CANDIDATES. They pass the corroborated-mid-cue check (which
+    # exists precisely to reject sentence-initial-only capitalization,
+    # see test_sentence_initial_only_capitalization_not_counted_as_proper_noun)
+    # not because they're genuine proper nouns, but because faster-
+    # whisper's Turkish casing is imperfect and sometimes capitalizes
+    # them mid-cue too -- a real, observed ASR noise floor, not a gap in
+    # the position-based heuristic itself.
+    "Bir", "Çok", "Yok", "İyi", "Öyle", "Aa", "Her", "Çünkü", "Ay",
+    "Allah", "Bana", "Gerçekten", "Senin", "Bence", "Böyle", "Sana",
+    "Gel", "Hiç", "Hem", "Niye", "Vallahi", "Güzel", "Seni", "Benim",
+    "Ya", "Ee", "Beni", "Zaten", "Neyse", "Daha", "Ve", "Biraz", "Olur",
+    "Bunu", "Teşekkürler", "Teşekkür", "Ha", "Eğer", "İşte", "En",
+    "Bizim",
 })
 
 # A single episode's ASR mishear can recur a few times within THAT
@@ -100,6 +117,23 @@ MIN_DISTINCT_EPISODES = 1
 # a long-running series; ranked by total_count descending before the cap
 # is applied, so the most confidently recurring names always win a slot.
 TOP_N_CANDIDATES = 30
+
+# A cue where every word is capitalized is never ordinary dialogue -- real
+# example (Season 01, mostly S01E01-E05): faster-whisper transcribes the
+# show's sung opening theme in Title Case ("Yanlışlarımdan Ders Alacak
+# Kadar Olgun Değilim..."), unlike its normal sentence-case dialogue
+# output. Every word in a cue like that matches PROPER_NOUN_PATTERN and
+# most aren't cue-initial, so lyrics were mass-corroborating ordinary
+# words as "proper nouns" and drowning out real character names. 4+ words
+# keeps this from misfiring on a short, genuinely all-capitalized
+# two/three-word dialogue line (rare, but "İyi Akşamlar" style greetings
+# exist) that happens to have no lowercase word to contrast against.
+_TITLE_CASE_MIN_WORDS = 4
+
+
+def _is_title_case_cue(text: str) -> bool:
+    words = [t for t in (raw.strip(_STRIP_CHARS) for raw in text.split()) if t]
+    return len(words) >= _TITLE_CASE_MIN_WORDS and all(w[:1].isupper() for w in words)
 
 
 @dataclass
@@ -171,6 +205,8 @@ def mine_series_entities(series_root: str | Path, source_lang: str = SOURCE_LANG
         episode_key = str(tr_path)
         per_episode: dict[str, int] = {}
         for cue in cues:
+            if _is_title_case_cue(cue.text):
+                continue
             for token, is_initial in _candidate_tokens(cue.text):
                 if token.casefold() in exclude_canonicals:
                     continue

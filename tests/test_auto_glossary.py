@@ -122,6 +122,34 @@ class MiningTests(unittest.TestCase):
         candidates = [c.canonical for c in mine_series_entities(self.root)]
         self.assertNotIn("Bir", candidates)
 
+    def test_common_word_mid_cue_still_excluded_via_stopwords(self):
+        # Real bug (Season 01 full-corpus mining, 2026-09-20): faster-
+        # whisper's Turkish casing sometimes capitalizes ordinary function
+        # words mid-cue too, not just cue-initial, so the corroboration
+        # check alone let them through as if they were proper nouns and
+        # they crowded real recurring character names out of
+        # TOP_N_CANDIDATES. STOPWORDS is the actual backstop.
+        lines = ["Gördüm Çok kötüydü.", "Aslında Çok iyiydi.", "Bence Çok komikti."]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines)
+        candidates = [c.canonical for c in mine_series_entities(self.root)]
+        self.assertNotIn("Çok", candidates)
+
+    def test_title_case_lyric_cue_excluded_entirely(self):
+        # Real bug (Season 01, mostly S01E01-E05): the sung opening theme
+        # is transcribed in Title Case, unlike ordinary dialogue -- every
+        # word capitalized makes each one look like a corroborated proper
+        # noun. Such a cue must contribute no candidates at all, even for
+        # a token that would otherwise clear every other check.
+        lyric = "Yanlislarimdan Ders Alacak Kadar Olgun Degilim Sana"
+        lines = [lyric, lyric, lyric, "Pirilti bir şey söyledi.", "Pirilti geldi."]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines)
+        candidates = [c.canonical for c in mine_series_entities(self.root)]
+        # None of the lyric's words qualify purely from lyric repetition.
+        self.assertNotIn("Sana", candidates)
+        self.assertNotIn("Degilim", candidates)
+
 
 class WriteSuggestionsTests(unittest.TestCase):
     def test_output_matches_real_glossary_schema(self):
