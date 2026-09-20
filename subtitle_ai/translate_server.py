@@ -24,17 +24,17 @@ running. See _unload_if_idle()'s docstring for the mitigation.
 from __future__ import annotations
 
 import asyncio
-import gc
 import os
 import threading
 import time
 from contextlib import asynccontextmanager
 
 import torch
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from translate import NLLB_LANG, TranslationConfig, load_model, translate_batch
+from gpu import free_gpu
+from translate import NLLB_LANG, TranslationConfig, load_model, load_tokenizer, translate_batch
 
 # 2 minutes: real back-to-back episode retries (this deployment's actual
 # usage pattern, confirmed 2026-09-20) leave only a few seconds' gap
@@ -45,41 +45,65 @@ from translate import NLLB_LANG, TranslationConfig, load_model, translate_batch
 IDLE_UNLOAD_SECONDS = float(os.environ.get("TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS", "120"))
 _IDLE_CHECK_INTERVAL_SECONDS = 30.0
 
-_state: dict = {"config": None, "models": {}, "last_used": None}
+# Exactly ONE model is ever GPU-resident. NLLB's weights are language-
+# agnostic (see translate.load_tokenizer()): only the tokenizer's
+# `src_lang` is language-specific, so a second source language costs one
+# small tokenizer, never another ~2.8GB model.
+#
+# Two locks, two jobs:
+#   _lock        guards the fields of _state (held only briefly)
+#   _infer_lock  serializes model load + inference -- a single model must
+#                never run two generate() calls at once, and per-language
+#                tokenizers are stateful, so requests take turns.
+# `active_requests` is what eviction consults. It is incremented BEFORE a
+# request waits on _infer_lock and decremented in `finally`, so a request
+# that is merely queued behind another still keeps the model resident.
+_state: dict = {"config": None, "model": None, "bos": None, "tokenizers": {},
+                "last_used": None, "active_requests": 0}
 _lock = threading.Lock()
+_infer_lock = threading.Lock()
 
 
 def _load_for(nllb_code: str):
-    """Cached per NLLB language code -- the model weights themselves are
-    shared/language-agnostic (see load_model()'s docstring: only the
-    tokenizer's src_lang setting is language-specific), so a second
-    language reuses the same underlying model object, not a full reload.
-    Also the sole place `last_used` is refreshed -- a request that's
-    RUNNING keeps pushing the idle deadline out; only a genuinely quiet
-    gap between requests can trigger an unload."""
-    with _lock:
-        if nllb_code not in _state["models"]:
-            _state["models"][nllb_code] = load_model(_state["config"], nllb_code)
-        _state["last_used"] = time.monotonic()
-        return _state["models"][nllb_code]
+    """Returns (model, tokenizer, bos) for a source language, loading the
+    model on first use and only a tokenizer for each further language.
+    Caller must hold _infer_lock (so loads never overlap inference or
+    each other)."""
+    config = _state["config"]
+    if _state["model"] is None:
+        model, tok, bos = load_model(config, nllb_code)
+        with _lock:
+            _state["model"], _state["bos"] = model, bos
+            _state["tokenizers"][nllb_code] = tok
+            _state["last_used"] = time.monotonic()
+    elif nllb_code not in _state["tokenizers"]:
+        tok = load_tokenizer(config, nllb_code)
+        with _lock:
+            _state["tokenizers"][nllb_code] = tok
+    return _state["model"], _state["tokenizers"][nllb_code], _state["bos"]
 
 
 def _unload_if_idle() -> bool:
-    """Frees every loaded model/tokenizer and the GPU memory they hold if
-    nothing has used them for IDLE_UNLOAD_SECONDS. Safe against a request
-    in flight: that request already holds its own Python reference to the
-    model tuple from `_load_for()`, so clearing the dict here doesn't
-    affect it mid-generate() -- it just means the NEXT request reloads.
-    Returns whether anything was actually unloaded (for tests)."""
+    """Frees the model, tokenizers and the GPU memory they hold if nothing
+    has used them for IDLE_UNLOAD_SECONDS AND no request is active or
+    queued. The active check matters: a request still holds its own
+    reference to the model, so dropping ours would free no VRAM -- and
+    the next request would then load a SECOND model beside it. `last_used`
+    is refreshed when a request finishes, so a long request never looks
+    idle to the clock either. Returns whether anything was actually
+    unloaded (for tests)."""
     with _lock:
-        if not _state["models"] or _state["last_used"] is None:
+        if _state["model"] is None or _state["last_used"] is None:
+            return False
+        if _state["active_requests"] > 0:
             return False
         if time.monotonic() - _state["last_used"] < IDLE_UNLOAD_SECONDS:
             return False
-        _state["models"].clear()
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        _state["model"] = None
+        _state["bos"] = None
+        _state["tokenizers"].clear()
+        config = _state["config"]
+        free_gpu(config.device if config else "cpu")
         return True
 
 
@@ -97,11 +121,15 @@ async def _lifespan(app: FastAPI):
     # exclusively Turkish (see translate.NLLB_LANG for the full list).
     default_lang = os.environ.get("TRANSLATE_SERVER_DEFAULT_LANG", "tr")
     if default_lang in NLLB_LANG:
-        _load_for(NLLB_LANG[default_lang])
+        with _infer_lock:
+            _load_for(NLLB_LANG[default_lang])
     task = asyncio.create_task(_idle_unload_loop())
     yield
     task.cancel()
-    _state["models"].clear()
+    with _lock:
+        _state["model"] = None
+        _state["bos"] = None
+        _state["tokenizers"].clear()
 
 
 app = FastAPI(title="Subtitle AI Translate Server", docs_url=None, redoc_url=None, lifespan=_lifespan)
@@ -114,18 +142,31 @@ class TranslateRequest(BaseModel):
 
 @app.post("/translate")
 def translate(request: TranslateRequest) -> dict:
-    nllb_code = NLLB_LANG[request.src_lang]
-    model, tok, bos = _load_for(nllb_code)
-    config = _state["config"]
-    translations = translate_batch(model, tok, bos, request.sentences, config.device, config,
-                                   batch_size=config.batch_size)
+    nllb_code = NLLB_LANG.get(request.src_lang)
+    if nllb_code is None:
+        raise HTTPException(status_code=422, detail=f"unsupported src_lang: {request.src_lang!r}")
+    with _lock:
+        _state["active_requests"] += 1
+    try:
+        with _infer_lock:
+            model, tok, bos = _load_for(nllb_code)
+            config = _state["config"]
+            translations = translate_batch(model, tok, bos, request.sentences, config.device, config,
+                                           batch_size=config.batch_size)
+    finally:
+        with _lock:
+            _state["active_requests"] -= 1
+            _state["last_used"] = time.monotonic()
     return {"translations": translations}
 
 
 @app.get("/health")
 def health() -> dict:
-    """An empty `loaded_languages` here is a NORMAL, expected state after
-    an idle-unload, not a failure -- the next /translate call reloads
-    transparently, just slower than usual for that one request."""
+    """`model_loaded: false` (and an empty `loaded_languages`) is a NORMAL,
+    expected state after an idle-unload, not a failure -- the next
+    /translate call reloads transparently, just slower than usual for
+    that one request. `loaded_languages` lists the languages whose
+    tokenizer is cached; there is only ever one model regardless."""
     device = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
-    return {"status": "ok", "device": device, "loaded_languages": list(_state["models"])}
+    return {"status": "ok", "device": device, "model_loaded": _state["model"] is not None,
+            "loaded_languages": list(_state["tokenizers"])}

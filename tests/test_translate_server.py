@@ -3,6 +3,8 @@ load_model()/translate_batch() are mocked throughout -- this module is a
 thin dispatch layer over translate.py's already-tested functions, not a
 place to re-test NLLB itself."""
 
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -12,12 +14,17 @@ import translate_server
 from translate import NLLB_LANG
 
 
+def _reset_state():
+    # Fresh state per test -- the module-level _state dict would
+    # otherwise leak a "loaded" model across tests.
+    translate_server._state.update(
+        model=None, bos=None, tokenizers={}, last_used=None, active_requests=0,
+        config=translate_server.TranslationConfig())
+
+
 class TranslateServerTests(unittest.TestCase):
     def setUp(self):
-        # Fresh cache per test -- the module-level _state dict would
-        # otherwise leak a "loaded" language across tests.
-        translate_server._state["models"] = {}
-        translate_server._state["last_used"] = None
+        _reset_state()
 
     def test_health_reports_device_and_loaded_default_language(self):
         with patch("translate_server.load_model", return_value=(object(), object(), 0)):
@@ -48,13 +55,54 @@ class TranslateServerTests(unittest.TestCase):
                 client.post("/translate", json={"sentences": ["Merhaba"], "src_lang": "tr"})
         mock_load.assert_called_once()
 
-    def test_new_language_is_loaded_on_demand(self):
+    def test_new_language_loads_only_a_tokenizer_never_a_second_model(self):
         with patch("translate_server.load_model", return_value=(object(), object(), 0)) as mock_load, \
+             patch("translate_server.load_tokenizer", return_value=object()) as mock_tok, \
              patch("translate_server.translate_batch", return_value=["Hello"]):
             with TestClient(translate_server.app) as client:
                 client.post("/translate", json={"sentences": ["Konnichiwa"], "src_lang": "ja"})
-        # Once for the default ("tr") at startup, once more for "ja".
-        self.assertEqual(mock_load.call_count, 2)
+                client.post("/translate", json={"sentences": ["Bonjour"], "src_lang": "fr"})
+                client.post("/translate", json={"sentences": ["Konnichiwa"], "src_lang": "ja"})
+        # One model load, at startup for the default ("tr"); "ja" and
+        # "fr" each cost a single tokenizer, and a repeat costs nothing.
+        mock_load.assert_called_once()
+        self.assertEqual(mock_tok.call_count, 2)
+
+    def test_all_languages_share_the_same_model_instance(self):
+        seen = []
+        model = object()
+        with patch("translate_server.load_model", return_value=(model, object(), 0)), \
+             patch("translate_server.load_tokenizer", return_value=object()), \
+             patch("translate_server.translate_batch",
+                   side_effect=lambda m, *a, **k: seen.append(m) or ["x"]):
+            with TestClient(translate_server.app) as client:
+                for lang in ("tr", "ja", "fr"):
+                    client.post("/translate", json={"sentences": ["s"], "src_lang": lang})
+        self.assertEqual(seen, [model, model, model])
+
+    def test_unsupported_src_lang_is_422_not_500(self):
+        with patch("translate_server.load_model", return_value=(object(), object(), 0)):
+            with TestClient(translate_server.app) as client:
+                resp = client.post("/translate", json={"sentences": ["x"], "src_lang": "zz"})
+        self.assertEqual(resp.status_code, 422)
+
+    def test_health_reports_model_loaded(self):
+        with patch("translate_server.load_model", return_value=(object(), object(), 0)):
+            with TestClient(translate_server.app) as client:
+                self.assertTrue(client.get("/health").json()["model_loaded"])
+
+    def test_active_requests_returns_to_zero_even_when_inference_raises(self):
+        with patch("translate_server.load_model", return_value=(object(), object(), 0)), \
+             patch("translate_server.translate_batch", side_effect=RuntimeError("boom")):
+            with TestClient(translate_server.app, raise_server_exceptions=False) as client:
+                resp = client.post("/translate", json={"sentences": ["x"], "src_lang": "tr"})
+        self.assertEqual(resp.status_code, 500)
+        self.assertEqual(translate_server._state["active_requests"], 0)
+
+
+def _load(code):
+    with translate_server._infer_lock:
+        return translate_server._load_for(code)
 
 
 class IdleUnloadTests(unittest.TestCase):
@@ -64,54 +112,54 @@ class IdleUnloadTests(unittest.TestCase):
     long stretches with no translation job running."""
 
     def setUp(self):
-        translate_server._state["models"] = {}
-        translate_server._state["last_used"] = None
-        translate_server._state["config"] = translate_server.TranslationConfig()
+        _reset_state()
 
     def test_nothing_loaded_does_not_unload(self):
         self.assertFalse(translate_server._unload_if_idle())
 
-    def test_using_the_model_again_resets_the_idle_clock(self):
-        # First load at t=1000, a SECOND use at t=1200 (before the first
-        # use's own deadline would have passed) -- the idle check at
-        # t=1200+IDLE_UNLOAD_SECONDS-1 must count from the latest use,
-        # not the original load, or an actively-reused model would get
-        # unloaded out from under a still-busy deployment.
-        with patch("translate_server.load_model", return_value=(object(), object(), 0)):
+    def test_finishing_a_request_resets_the_idle_clock(self):
+        # Loaded at t=1000, a request COMPLETES at t=1200 -- the idle
+        # check at t=1200+IDLE_UNLOAD_SECONDS-1 must count from the latest
+        # completion, not the original load, or an actively-reused model
+        # would get unloaded out from under a still-busy deployment.
+        with patch("translate_server.load_model", return_value=(object(), object(), 0)), \
+             patch("translate_server.translate_batch", return_value=["x"]):
             with patch("translate_server.time.monotonic", return_value=1000.0):
-                translate_server._load_for("tur_Latn")
-            with patch("translate_server.time.monotonic", return_value=1200.0):
-                translate_server._load_for("tur_Latn")
-            with patch("translate_server.time.monotonic",
-                      return_value=1200.0 + translate_server.IDLE_UNLOAD_SECONDS - 1):
-                unloaded = translate_server._unload_if_idle()
+                _load("tur_Latn")
+            with TestClient(translate_server.app) as client:
+                with patch("translate_server.time.monotonic", return_value=1200.0):
+                    client.post("/translate", json={"sentences": ["x"], "src_lang": "tr"})
+                with patch("translate_server.time.monotonic",
+                          return_value=1200.0 + translate_server.IDLE_UNLOAD_SECONDS - 1):
+                    unloaded = translate_server._unload_if_idle()
         self.assertFalse(unloaded)
 
     def test_unloads_after_timeout_elapses(self):
         with patch("translate_server.load_model", return_value=(object(), object(), 0)):
             with patch("translate_server.time.monotonic", return_value=1000.0):
-                translate_server._load_for("tur_Latn")
+                _load("tur_Latn")
             with patch("translate_server.time.monotonic",
                       return_value=1000.0 + translate_server.IDLE_UNLOAD_SECONDS + 1):
                 unloaded = translate_server._unload_if_idle()
         self.assertTrue(unloaded)
-        self.assertEqual(translate_server._state["models"], {})
+        self.assertIsNone(translate_server._state["model"])
+        self.assertEqual(translate_server._state["tokenizers"], {})
 
     def test_does_not_unload_before_timeout_elapses(self):
         with patch("translate_server.load_model", return_value=(object(), object(), 0)):
             with patch("translate_server.time.monotonic", return_value=1000.0):
-                translate_server._load_for("tur_Latn")
+                _load("tur_Latn")
             with patch("translate_server.time.monotonic",
                       return_value=1000.0 + translate_server.IDLE_UNLOAD_SECONDS - 1):
                 unloaded = translate_server._unload_if_idle()
         self.assertFalse(unloaded)
-        self.assertIn("tur_Latn", translate_server._state["models"])
+        self.assertIn("tur_Latn", translate_server._state["tokenizers"])
 
     def test_reloads_transparently_on_next_request_after_idle_unload(self):
         with patch("translate_server.load_model", return_value=(object(), object(), 0)) as mock_load, \
              patch("translate_server.translate_batch", return_value=["Hello"]):
             with patch("translate_server.time.monotonic", return_value=1000.0):
-                translate_server._load_for("tur_Latn")
+                _load("tur_Latn")
             with patch("translate_server.time.monotonic",
                       return_value=1000.0 + translate_server.IDLE_UNLOAD_SECONDS + 1):
                 translate_server._unload_if_idle()
@@ -122,6 +170,96 @@ class IdleUnloadTests(unittest.TestCase):
                 resp = client.post("/translate", json={"sentences": ["Merhaba"], "src_lang": "tr"})
         self.assertEqual(resp.status_code, 200)
         self.assertGreaterEqual(mock_load.call_count, 2)
+
+    def test_does_not_unload_while_a_request_is_active(self):
+        with patch("translate_server.load_model", return_value=(object(), object(), 0)):
+            with patch("translate_server.time.monotonic", return_value=1000.0):
+                _load("tur_Latn")
+            translate_server._state["active_requests"] = 1
+            with patch("translate_server.time.monotonic",
+                      return_value=1000.0 + translate_server.IDLE_UNLOAD_SECONDS * 10):
+                unloaded = translate_server._unload_if_idle()
+        self.assertFalse(unloaded)
+        self.assertIsNotNone(translate_server._state["model"])
+
+    def test_unloads_after_the_active_request_finishes_and_idle_window_passes(self):
+        with patch("translate_server.load_model", return_value=(object(), object(), 0)), \
+             patch("translate_server.translate_batch", return_value=["x"]):
+            with patch("translate_server.time.monotonic", return_value=1000.0):
+                _load("tur_Latn")
+            with TestClient(translate_server.app) as client:
+                # A request starts and finishes at t=5000 -- last_used must
+                # be refreshed at COMPLETION, not just at start.
+                with patch("translate_server.time.monotonic", return_value=5000.0):
+                    client.post("/translate", json={"sentences": ["x"], "src_lang": "tr"})
+                self.assertEqual(translate_server._state["last_used"], 5000.0)
+                with patch("translate_server.time.monotonic",
+                          return_value=5000.0 + translate_server.IDLE_UNLOAD_SECONDS - 1):
+                    self.assertFalse(translate_server._unload_if_idle())
+                with patch("translate_server.time.monotonic",
+                          return_value=5000.0 + translate_server.IDLE_UNLOAD_SECONDS + 1):
+                    self.assertTrue(translate_server._unload_if_idle())
+                self.assertIsNone(translate_server._state["model"])
+
+    def test_slow_request_past_idle_timeout_is_not_evicted_and_causes_no_second_load(self):
+        """A request that runs longer than IDLE_UNLOAD_SECONDS must keep
+        the model resident: the idle check runs mid-request and must
+        refuse, and the next request must reuse the same model."""
+        model = object()
+        started, release = threading.Event(), threading.Event()
+        evicted_mid_request = []
+
+        def slow_batch(m, *args, **kwargs):
+            started.set()
+            release.wait(timeout=5)
+            return ["x"]
+
+        with patch("translate_server.load_model", return_value=(model, object(), 0)) as mock_load, \
+             patch("translate_server.translate_batch", side_effect=slow_batch):
+            with TestClient(translate_server.app) as client:
+                results = []
+                t = threading.Thread(target=lambda: results.append(
+                    client.post("/translate", json={"sentences": ["x"], "src_lang": "tr"})))
+                t.start()
+                self.assertTrue(started.wait(timeout=5))
+                # Far past the idle window while the request is in flight.
+                with patch("translate_server.time.monotonic",
+                          return_value=time.monotonic() + translate_server.IDLE_UNLOAD_SECONDS * 10):
+                    evicted_mid_request.append(translate_server._unload_if_idle())
+                release.set()
+                t.join(timeout=5)
+                client.post("/translate", json={"sentences": ["x"], "src_lang": "tr"})
+        self.assertEqual(evicted_mid_request, [False])
+        self.assertEqual(results[0].status_code, 200)
+        mock_load.assert_called_once()
+
+    def test_concurrent_requests_never_overlap_inference(self):
+        in_flight, max_in_flight = [0], [0]
+        guard = threading.Lock()
+
+        def tracked_batch(m, *args, **kwargs):
+            with guard:
+                in_flight[0] += 1
+                max_in_flight[0] = max(max_in_flight[0], in_flight[0])
+            time.sleep(0.05)
+            with guard:
+                in_flight[0] -= 1
+            return ["x"]
+
+        with patch("translate_server.load_model", return_value=(object(), object(), 0)), \
+             patch("translate_server.load_tokenizer", return_value=object()), \
+             patch("translate_server.translate_batch", side_effect=tracked_batch):
+            with TestClient(translate_server.app) as client:
+                threads = [threading.Thread(
+                    target=lambda lang=lang: client.post(
+                        "/translate", json={"sentences": ["x"], "src_lang": lang}))
+                    for lang in ("tr", "ja", "tr", "fr")]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join(timeout=10)
+        self.assertEqual(max_in_flight[0], 1)
+        self.assertEqual(translate_server._state["active_requests"], 0)
 
 
 if __name__ == "__main__":

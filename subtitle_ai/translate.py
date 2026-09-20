@@ -159,9 +159,12 @@ def build_context_spans(cues: list[Segment], real_boundaries: frozenset = frozen
     return spans
 
 
-def load_model(config: TranslationConfig, src_lang_code: str):
-    import torch
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+def load_tokenizer(config: TranslationConfig, src_lang_code: str):
+    """The tokenizer alone -- the only language-specific part of NLLB
+    (its `src_lang` setting). The model weights are language-agnostic, so
+    a caller that already holds a model needs only this to translate a
+    second source language, never another load_model()."""
+    from transformers import AutoTokenizer
     # cache_dir + local_files_only=True, explicitly, matching asr.py's
     # explicit download_root="/models" -- without this, huggingface_hub
     # falls back to $HF_HOME/hub, which under the container's non-root
@@ -170,8 +173,14 @@ def load_model(config: TranslationConfig, src_lang_code: str):
     # hit a bare PermissionError on os.makedirs() at the translation
     # stage, on every job regardless of source language, once this was
     # actually exercised end-to-end for the first time in this deployment.
-    tok = AutoTokenizer.from_pretrained(config.repo, src_lang=src_lang_code,
-                                        cache_dir="/models/hf", local_files_only=True)
+    return AutoTokenizer.from_pretrained(config.repo, src_lang=src_lang_code,
+                                         cache_dir="/models/hf", local_files_only=True)
+
+
+def load_model(config: TranslationConfig, src_lang_code: str):
+    import torch
+    from transformers import AutoModelForSeq2SeqLM
+    tok = load_tokenizer(config, src_lang_code)
     dtype = torch.float16 if config.device == "cuda" else torch.float32
     model = AutoModelForSeq2SeqLM.from_pretrained(config.repo, torch_dtype=dtype,
                                                   cache_dir="/models/hf", local_files_only=True
