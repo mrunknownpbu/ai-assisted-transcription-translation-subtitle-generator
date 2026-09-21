@@ -9,6 +9,13 @@
 # Reuses the SAME image the main app's Dockerfile already builds; only
 # the command differs (a different uvicorn entrypoint/port).
 #
+# Model behavior: exactly ONE NLLB model is GPU-resident regardless of how
+# many source languages are requested (~2.8GB; each extra language adds
+# only a tokenizer), translations run one at a time, and the model is
+# unloaded after TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS (default 120) of
+# inactivity -- never while a request is active. Verify with
+# `curl http://<host>:8091/health` (reports model_loaded).
+#
 # Deploy with scripts/deploy.sh, or manually:
 #   docker save subtitle-ai:dev | ssh <remote-host> docker load
 #   ssh <remote-host> "cd <this-file's-directory-on-that-host> && \

@@ -57,19 +57,29 @@ Workflow A (video transcription) moves through the following stages:
 
 - **ASR**: [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
   running `large-v3`.
-- **Translation**: NLLB-200 (1.3B), covering a wide range of source/target
-  language pairs from a single model.
+- **Translation**: NLLB-200 (1.3B). Any supported source language is
+  translated to **English**; English is the only output language (see
+  "Output language" below).
 - **Entity protection**: named entities (character names, places) are
   identified and protected through translation so they aren't mangled or
   inconsistently rendered across a series.
 - **Stream-aware caching**: intermediate artifacts are cached per audio
-  stream/config, so re-running a job with a different target language or
-  setting doesn't repeat expensive ASR work unnecessarily.
+  stream/config, so re-running a job with a different setting doesn't
+  repeat expensive ASR work unnecessarily.
 - **Job system**: jobs are tracked persistently (SQLite-backed job store)
   with status, history, and recovery across restarts.
 - **GPU lock**: GPU-heavy stages (model load through inference) are
   serialized across all processes sharing the same GPU, preventing
   concurrent jobs from exhausting VRAM on single-GPU deployments.
+
+## Output language
+
+Output is always English: the translation model is pinned to English
+output, and both workflows always write `<video stem>.en.srt`. Both
+job-creation endpoints (`POST /api/jobs`, `POST /api/srt-translations`)
+accept `target_lang` only as `"en"` (the default) and reject anything else
+with HTTP 422 (`target_lang must be "en"; multi-target translation is not
+supported`). The field is still stored on job records for compatibility.
 
 ## Status
 
@@ -107,6 +117,36 @@ GPU access requires the NVIDIA Container Toolkit configured on the host.
 Configuration is supplied via environment variables in `compose.yml`
 (see that file for the current set, including optional TVDB metadata
 lookup credentials).
+
+### Scratch work directories
+
+Each job's intermediate files (extracted audio, stream samples,
+pre-commit subtitles) live in `SUBTITLE_AI_WORK_ROOT/<job_id>` (default
+`/cache/work`). They are managed automatically:
+
+| Job outcome | What happens to its scratch directory |
+|---|---|
+| Completed, cancelled | Removed as soon as the job finishes (final subtitles are already committed to the media library) |
+| Failed, validation failure | Kept for diagnosis for `SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS` (default `24`), then removed |
+| Job deleted via the API | Removed immediately |
+
+A sweep at startup and then hourly removes anything past its window,
+including directories with no matching job. It never touches queued or
+running jobs, and only ever removes direct child directories of the work
+root -- never the transcript cache, job database, or SRT upload staging.
+Cleanup problems are logged and never change a job's result.
+
+### Remote translate-server (optional)
+
+`translate_server.py` can run on a separate GPU host (`TRANSLATE_SERVER_URL`
+on the main app; deployed with `scripts/deploy.sh`) and the main app falls
+back to local translation if it is unreachable. It keeps **exactly one**
+NLLB model resident regardless of how many source languages it serves (a
+further language costs only a small tokenizer), runs one translation at a
+time, and unloads the model after `TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS`
+(default `120`) with no activity so a shared GPU is freed between jobs.
+It never unloads while a request is running or queued. An unsupported
+`src_lang` returns HTTP 422; `GET /health` reports `model_loaded`.
 
 Run tests with:
 

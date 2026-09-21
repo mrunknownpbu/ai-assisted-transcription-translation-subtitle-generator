@@ -15,7 +15,7 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-21: 632 passing, 1 pre-existing failure
+Baseline as of 2026-09-21: 683 passing, 1 pre-existing failure
 (`test_glossary_profile.py::RealGlossaryDataTests::test_loads_real_series_profile`
 -- a real-glossary-data assertion mismatch on `"Eda Yıldız"` vs the
 production glossary's current `"Eda"` canonical, unrelated to whatever
@@ -43,6 +43,26 @@ heartbeat updates on every pipeline-stage event, not just once per poll,
 so a long-running job doesn't itself look like a stall).
 
 Remote translate-server health: `curl http://<remote-host>:8091/health`.
+
+## Scratch dirs and the remote translate-server (ops behavior)
+
+- **`WORK_ROOT/<job_id>` is auto-managed** (`workdir.py`): removed when a
+  job completes or is cancelled, kept `SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS`
+  (default 24) after a failure -- so a failed job's WAV/partial SRTs are
+  still there to inspect for a day -- and removed on `DELETE /api/jobs/<id>`.
+  A startup + hourly sweep also removes orphan dirs (no job row) by mtime.
+  The FIRST sweep after deploying this cleared ~6GB of accumulated dirs;
+  if you need a failed job's artifacts, copy them out before the window ends.
+- **Output is English-only**: `target_lang` other than `en` is a 422
+  (`output.TARGET_LANG`). Don't reintroduce free-form targets without
+  changing `translate.load_model()`'s pinned `eng_Latn` BOS token first.
+- **translate-server keeps ONE model** regardless of source language
+  (~2.8GB; extra languages are tokenizers only), runs one request at a
+  time, and never evicts while `active_requests > 0`. If remote VRAM
+  climbs past ~3GB after multi-language use, that invariant is broken.
+- `SKIP_REMOTE=1 ./scripts/deploy.sh` is right for changes that don't
+  touch `translate.py`/`translate_server.py` (API, worker, scratch
+  cleanup); anything in those two files needs the full deploy.
 
 ## Environment / secrets
 
