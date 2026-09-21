@@ -8,6 +8,7 @@ import logging
 import os
 
 import api
+import workdir
 from worker import Worker
 
 # Real gap this closes (production-readiness audit, 2026-09-21): zero
@@ -47,10 +48,15 @@ SRT_UPLOAD_DIR = os.environ.get("SUBTITLE_AI_SRT_UPLOAD_DIR", "/cache/srt_upload
 # benchmark (~8x throughput) motivating this, and Worker's docstring for
 # the automatic local fallback if the remote server is unreachable.
 TRANSLATE_SERVER_URL = os.environ.get("TRANSLATE_SERVER_URL")
+# A FAILED job's scratch directory (extracted WAV, partial SRTs) is kept this
+# long for diagnosis, then removed by a periodic sweep. Completed and
+# cancelled jobs' directories are removed immediately. See workdir.py.
+FAILED_WORK_RETENTION_HOURS = workdir.parse_retention_hours(
+    os.environ.get("SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS"))
 
 app = api.create_app(DB_PATH, MEDIA_ROOT, glossary_dir=GLOSSARY_DIR,
                      glossary_suggestions_dir=GLOSSARY_SUGGESTIONS_DIR,
-                     srt_upload_dir=SRT_UPLOAD_DIR)
+                     srt_upload_dir=SRT_UPLOAD_DIR, work_root=WORK_ROOT)
 
 # Recover any job left 'running' by a prior process instance (crash,
 # OOM-kill, redeploy) BEFORE the worker starts claiming -- see
@@ -66,6 +72,7 @@ _worker = Worker(api.get_store(), MEDIA_ROOT, WORK_ROOT, glossary_dir=GLOSSARY_D
                 transcript_cache_dir=TRANSCRIPT_CACHE_DIR,
                 glossary_suggestions_dir=GLOSSARY_SUGGESTIONS_DIR,
                 srt_upload_dir=SRT_UPLOAD_DIR,
-                translate_server_url=TRANSLATE_SERVER_URL)
+                translate_server_url=TRANSLATE_SERVER_URL,
+                failed_work_retention_hours=FAILED_WORK_RETENTION_HOURS)
 api.register_worker(_worker)
 _worker.start()

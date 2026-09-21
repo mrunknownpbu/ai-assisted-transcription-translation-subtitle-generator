@@ -726,6 +726,110 @@ class SrtTranslationWorkerTests(SrtTranslationWorkerTestCase):
         self.assertEqual(mock_run.call_args.kwargs["glossary_entities"], [])
 
 
+class WorkDirLifecycleTests(WorkerTestCase):
+    """Scratch directories (WORK_ROOT/<job_id>): removed once a job is
+    completed/cancelled, KEPT for diagnosis when it fails (incl. a
+    validation failure), and a cleanup problem never changes a job's
+    already-terminal result. Final outputs must survive cleanup."""
+
+    def _run(self, fake_run):
+        self.store.create("Show/S01E01.mkv", "tr")
+        claimed = self.store.claim()
+        with patch.object(worker_mod.pipeline, "run", side_effect=fake_run):
+            self.worker._process(claimed)
+        return claimed["id"], self.work_root / claimed["id"]
+
+    def test_completed_job_removes_work_dir_but_keeps_committed_outputs(self):
+        job_id, work = self._run(lambda **kw: fake_result(Path(kw["work_dir"])))
+        self.assertEqual(self.store.get(job_id)["status"], "completed")
+        self.assertFalse(work.exists())
+        self.assertEqual((self.media_root / "Show" / "S01E01.en.srt").read_text(encoding="utf-8"),
+                         "1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+        self.assertTrue((self.media_root / "Show" / "S01E01.tr.srt").exists())
+
+    def test_cancelled_job_removes_work_dir(self):
+        self.store.create("Show/S01E01.mkv", "tr")
+        claimed = self.store.claim()
+
+        def fake_run(**kw):
+            fake_result(Path(kw["work_dir"]))   # leaves artifacts behind
+            self.store.request_cancel(claimed["id"])
+            kw["on_event"]("SOME_STAGE", {})
+        with patch.object(worker_mod.pipeline, "run", side_effect=fake_run):
+            self.worker._process(claimed)
+        self.assertEqual(self.store.get(claimed["id"])["status"], "cancelled")
+        self.assertFalse((self.work_root / claimed["id"]).exists())
+
+    def test_validation_failure_keeps_work_dir_for_diagnosis(self):
+        job_id, work = self._run(lambda **kw: fake_result(Path(kw["work_dir"]), valid=False))
+        self.assertEqual(self.store.get(job_id)["error_category"], "VALIDATION_ERROR")
+        self.assertTrue((work / "S01E01.en.srt").exists())
+
+    def test_pipeline_exception_keeps_work_dir(self):
+        def boom(**kw):
+            Path(kw["work_dir"]).mkdir(parents=True, exist_ok=True)
+            (Path(kw["work_dir"]) / "audio.wav").write_bytes(b"x")
+            raise RuntimeError("boom")
+        job_id, work = self._run(boom)
+        self.assertEqual(self.store.get(job_id)["status"], "failed")
+        self.assertTrue((work / "audio.wav").exists())
+
+    def test_cleanup_failure_does_not_change_a_completed_result(self):
+        with patch.object(worker_mod.workdir, "cleanup_work_dir", side_effect=OSError("disk gone")):
+            job_id, work = self._run(lambda **kw: fake_result(Path(kw["work_dir"])))
+        final = self.store.get(job_id)
+        self.assertEqual(final["status"], "completed")
+        self.assertEqual(len(final["outputs"]), 2)
+
+    def test_sweep_runs_at_startup_then_at_most_hourly(self):
+        with patch.object(worker_mod.workdir, "sweep_stale") as mock_sweep:
+            self.worker._maybe_sweep_work_root()
+            self.worker._maybe_sweep_work_root()
+            self.assertEqual(mock_sweep.call_count, 1)
+            self.worker._last_work_sweep -= worker_mod._WORK_SWEEP_INTERVAL_SECONDS + 1
+            self.worker._maybe_sweep_work_root()
+            self.assertEqual(mock_sweep.call_count, 2)
+        args = mock_sweep.call_args
+        self.assertEqual(args[0][2], self.worker.failed_work_retention_hours)
+
+    def test_sweep_failure_is_swallowed(self):
+        with patch.object(worker_mod.workdir, "sweep_stale", side_effect=RuntimeError("boom")):
+            self.worker._maybe_sweep_work_root()   # must not raise
+
+    def test_startup_sweep_clears_old_terminal_dirs_but_not_a_queued_jobs(self):
+        self.store.create("Show/S01E01.mkv", "tr")
+        done = self.store.claim()
+        self.store.finish(done["id"], "completed")
+        self.store.create("Show/S01E02.mkv", "tr")   # stays queued
+        queued = self.store.get(self.store.list(status="queued")[0][0]["id"])
+        for job_id in (done["id"], queued["id"]):
+            (self.work_root / job_id).mkdir(parents=True)
+        self.worker._maybe_sweep_work_root()
+        self.assertFalse((self.work_root / done["id"]).exists())
+        self.assertTrue((self.work_root / queued["id"]).exists())
+
+
+class SrtWorkDirLifecycleTests(SrtTranslationWorkerTestCase):
+    def test_completed_srt_job_removes_work_dir_and_keeps_output(self):
+        self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        claimed = self.store.claim()
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(Path(kw["work_dir"]))
+            self.worker._process(claimed)
+        self.assertEqual(self.store.get(claimed["id"])["status"], "completed")
+        self.assertFalse((self.work_root / claimed["id"]).exists())
+        self.assertTrue((self.media_root / "out" / "ep.en.srt").exists())
+
+    def test_invalid_srt_job_keeps_work_dir(self):
+        self.store.create_srt_translation("in/ep.tr.srt", "out/ep.en.srt")
+        claimed = self.store.claim()
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(Path(kw["work_dir"]), valid=False)
+            self.worker._process(claimed)
+        self.assertEqual(self.store.get(claimed["id"])["status"], "failed")
+        self.assertTrue((self.work_root / claimed["id"]).exists())
+
+
 class SrtUploadSourceResolutionTests(unittest.TestCase):
     """An uploaded source lives under srt_upload_dir, deliberately absent
     from media_root entirely -- proving the worker resolves against the

@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -511,6 +512,56 @@ class DeleteJobTests(ApiTestCase):
         created = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"}).json()["job"]
         r = self.client.delete(f"/api/jobs/{created['id']}")
         self.assertEqual(r.status_code, 409)
+
+
+class DeleteJobWorkDirTests(unittest.TestCase):
+    """DELETE removes the job's scratch directory too (a failed job's is
+    otherwise kept for a diagnostic window) -- and nothing else."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.work_root = Path(self.tmp.name) / "work"
+        self.work_root.mkdir()
+        app = api.create_app(Path(self.tmp.name) / "jobs.db", work_root=str(self.work_root))
+        self.client = TestClient(app)
+
+    def _failed_job_with_work_dir(self):
+        created = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"}).json()["job"]
+        api.get_store().claim()
+        api.get_store().finish(created["id"], "failed", error="x")
+        work = self.work_root / created["id"]
+        work.mkdir()
+        (work / "audio.wav").write_bytes(b"x")
+        return created["id"], work
+
+    def test_delete_removes_the_jobs_work_dir(self):
+        job_id, work = self._failed_job_with_work_dir()
+        other = self.work_root / "someone_elses_job"
+        other.mkdir()
+        r = self.client.delete(f"/api/jobs/{job_id}")
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(work.exists())
+        self.assertTrue(other.exists())
+
+    def test_delete_of_active_job_is_refused_and_keeps_work_dir(self):
+        created = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"}).json()["job"]
+        work = self.work_root / created["id"]
+        work.mkdir()
+        self.assertEqual(self.client.delete(f"/api/jobs/{created['id']}").status_code, 409)
+        self.assertTrue(work.exists())
+
+    def test_delete_succeeds_when_no_work_dir_exists(self):
+        job_id, work = self._failed_job_with_work_dir()
+        shutil.rmtree(work)
+        self.assertEqual(self.client.delete(f"/api/jobs/{job_id}").status_code, 200)
+
+    def test_delete_without_configured_work_root_still_works(self):
+        app = api.create_app(Path(self.tmp.name) / "jobs2.db")
+        client = TestClient(app)
+        created = client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"}).json()["job"]
+        client.post(f"/api/jobs/{created['id']}/cancel")
+        self.assertEqual(client.delete(f"/api/jobs/{created['id']}").status_code, 200)
 
 
 class ConfiguredMediaRootTests(MediaRootApiTestCase):

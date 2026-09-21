@@ -25,6 +25,7 @@ import audio_streams
 import glossary_profile
 import media
 import translate
+import workdir
 from events import EventBus
 from jobstore import JobStore, JobStoreError
 from media import VIDEO_EXTENSIONS
@@ -90,6 +91,10 @@ def get_glossary_suggestions_dir() -> str | None:
     return _glossary_suggestions_dir
 
 
+def get_work_root() -> str | None:
+    return _work_root
+
+
 def get_srt_upload_dir() -> str | None:
     global _srt_upload_dir
     return _srt_upload_dir
@@ -110,6 +115,7 @@ _glossary_dir: str | None = None
 _glossary_suggestions_dir: str | None = None
 _worker = None  # registered via register_worker() -- see its docstring
 _srt_upload_dir: str | None = None
+_work_root: str | None = None
 _static_dir: Path = STATIC_DIR
 
 
@@ -142,8 +148,9 @@ def create_app(db_path: str | Path, media_root: str = "/data", *,
                glossary_dir: str | None = None,
                glossary_suggestions_dir: str | None = None,
                srt_upload_dir: str | None = None,
+               work_root: str | None = None,
                static_dir: str | Path | None = None) -> FastAPI:
-    global _store, _media_root, _glossary_dir, _glossary_suggestions_dir, _srt_upload_dir, _static_dir, _worker
+    global _store, _media_root, _glossary_dir, _glossary_suggestions_dir, _srt_upload_dir, _work_root, _static_dir, _worker
     _store = JobStore(db_path, on_change=_on_job_changed)
     # Reset, not left over from a previous create_app() call in the same
     # process -- real risk this avoids: two tests in the same session
@@ -154,6 +161,7 @@ def create_app(db_path: str | Path, media_root: str = "/data", *,
     _glossary_dir = glossary_dir
     _glossary_suggestions_dir = glossary_suggestions_dir
     _srt_upload_dir = srt_upload_dir
+    _work_root = work_root
     _static_dir = Path(static_dir) if static_dir else STATIC_DIR
     return app
 
@@ -762,14 +770,17 @@ def retry_job(job_id: str, request: RetryRequest = RetryRequest()) -> dict:
 
 @app.delete("/api/jobs/{job_id}", dependencies=[Depends(require_api_key)])
 def delete_job(job_id: str) -> dict:
-    """Removes only the jobs-table row. Never touches a media file --
-    verified by test_api.py; the media root is never imported into this
-    module at all."""
+    """Removes the jobs-table row and the job's scratch directory (a failed
+    job's is otherwise kept for a diagnostic window -- see workdir.py).
+    Never touches a media file -- verified by test_api.py; the media root
+    is never imported into this module at all."""
     try:
         get_store().delete(job_id)
     except JobStoreError as exc:
         code = 404 if "not found" in str(exc) else 409
         raise HTTPException(status_code=code, detail=str(exc)) from exc
+    if get_work_root():
+        workdir.cleanup_work_dir(get_work_root(), job_id)  # best-effort, never raises
     return {"deleted": job_id}
 
 

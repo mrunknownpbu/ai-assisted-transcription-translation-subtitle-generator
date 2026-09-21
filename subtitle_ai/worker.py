@@ -24,12 +24,15 @@ import glossary_profile
 import gpu
 import pipeline
 import srt_translation
-from jobstore import JobStore
+import workdir
+from jobstore import TERMINAL_STATUSES, JobStore
 from output import (TARGET_LANG, OutputSafetyError, resolve_media_path, resolve_output_path,
                     write_srt_atomic)
 
 
 logger = logging.getLogger(__name__)
+
+_WORK_SWEEP_INTERVAL_SECONDS = 3600.0
 
 
 class JobCancelled(RuntimeError):
@@ -42,7 +45,8 @@ class Worker(threading.Thread):
                  transcript_cache_dir: str | None = None,
                  glossary_suggestions_dir: str | None = None,
                  srt_upload_dir: str | None = None,
-                 translate_server_url: str | None = None):
+                 translate_server_url: str | None = None,
+                 failed_work_retention_hours: float = workdir.DEFAULT_FAILED_RETENTION_HOURS):
         super().__init__(name="subtitle-ai-worker", daemon=True)
         self.store = store
         self.media_root = media_root
@@ -58,6 +62,10 @@ class Worker(threading.Thread):
         # translate.remote_translate_batch()'s docstring for the real
         # benchmark motivating this) with automatic local fallback.
         self.translate_server_url = translate_server_url
+        # How long a FAILED job's scratch directory is kept for
+        # diagnosis before the periodic sweep removes it -- see workdir.py.
+        self.failed_work_retention_hours = failed_work_retention_hours
+        self._last_work_sweep = 0.0  # 0 = sweep on the first loop iteration (startup)
         self._stop_event = threading.Event()
         # Real gap this closes (production-readiness audit, 2026-09-21):
         # nothing previously distinguished a wedged-but-alive worker
@@ -142,10 +150,43 @@ class Worker(threading.Thread):
     def stop(self) -> None:
         self._stop_event.set()
 
+    def _finalize_work_dir(self, job_id: str) -> None:
+        """Called from each job type's outer `finally`, i.e. after the
+        `with gpu_lock()` block has exited -- cleanup never runs while the
+        GPU lock is held. Keyed on the job's FINAL status, so it is
+        correct on every terminal path: completed/cancelled/skipped
+        remove the scratch directory (final outputs were already
+        committed to the media library), while failed -- including a
+        validation failure -- keeps it for the diagnostic window (removed
+        later by _maybe_sweep_work_root). A non-terminal status (finish()
+        itself failed) is left alone. Never raises and never alters the
+        already-terminal job result."""
+        try:
+            job = self.store.get(job_id)
+            if job and job["status"] in TERMINAL_STATUSES and job["status"] != "failed":
+                workdir.cleanup_work_dir(self.work_root, job_id)
+        except Exception:  # noqa: BLE001 -- cleanup must never affect the job result
+            logger.warning("work-dir finalize failed for job %s", job_id, exc_info=True)
+
+    def _maybe_sweep_work_root(self) -> None:
+        """Startup + hourly sweep of stale scratch directories. Runs on the
+        worker thread between jobs, so it is never concurrent with this
+        worker's own job; sweep_stale() also consults the store so a
+        queued/running job's directory is never removed."""
+        now = time.time()
+        if now - self._last_work_sweep < _WORK_SWEEP_INTERVAL_SECONDS:
+            return
+        self._last_work_sweep = now
+        try:
+            workdir.sweep_stale(self.work_root, self.store, self.failed_work_retention_hours, now=now)
+        except Exception:  # noqa: BLE001
+            logger.warning("work-dir sweep failed", exc_info=True)
+
     def run(self) -> None:
         logger.info("worker thread started")
         while not self._stop_event.is_set():
             self.last_heartbeat = time.time()
+            self._maybe_sweep_work_root()
             job = self.store.claim()
             if not job:
                 self._stop_event.wait(self.poll_interval)
@@ -299,6 +340,7 @@ class Worker(threading.Thread):
             # See _process_video's identical finally block for why this
             # must be unconditional, not just inside the `with gpu_lock()`.
             gpu.free_gpu()
+            self._finalize_work_dir(job_id)
 
     def _process_video(self, job: dict) -> None:
         job_id = job["id"]
@@ -467,3 +509,4 @@ class Worker(threading.Thread):
             # after every job, success or failure: a no-op when there is
             # nothing left to free.
             gpu.free_gpu()
+            self._finalize_work_dir(job_id)
