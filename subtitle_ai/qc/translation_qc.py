@@ -7,26 +7,11 @@ from __future__ import annotations
 
 import re
 
+from glossary import is_unpunctuated_run_on
 from qc.types import QcCategory, QcFinding, QcResult, QcStage
 
 _PLACEHOLDER = re.compile(r"\bX[a-z]{2}\b")
 _BRACKETS = {"(": ")", "[": "]", "{": "}"}
-_SENT_END = re.compile(r"[.!?…]")
-
-
-def _is_unpunctuated_run_on(source: str) -> bool:
-    """Real bug (Season 01, S01E03, 2026-09-21): a source cue with zero
-    sentence-ending punctuation can't be split by
-    glossary.split_into_sentences() (which only splits on [.!?…]), so a
-    multi-clause run-on goes to NLLB in one generate() call and gets
-    garbled -- e.g. "...Tamam Alptekin Amca Ay Selinciğim Biz Amca
-    Değil" (three separate thoughts, one of them a vocative aside)
-    translated as "Okay, Uncle Alptekin, I'm Moon Flood." Corpus-wide
-    measurement found 2,927 such cues in this one season (concentrated
-    in S01E01-E05), invisible to the length-ratio checks below (this
-    exact case: 37/84 = 0.44, above the 0.25 cutoff). 8+ words matches
-    the threshold already used to size this population during scoping."""
-    return not _SENT_END.search(source) and len(source.split()) >= 8
 
 
 def _unbalanced_brackets(text: str) -> bool:
@@ -55,7 +40,7 @@ def assess(source: str, translated: str) -> QcFinding | None:
     if src_len >= 5 and tgt_len > src_len * 3.5:
         return QcFinding(QcCategory.TRANSLATION_ERROR, "suspiciously long vs. source length", 0.5,
                          evidence=evidence)
-    if _is_unpunctuated_run_on(source):
+    if is_unpunctuated_run_on(source):
         n = len(source.split())
         return QcFinding(QcCategory.TRANSLATION_ERROR,
                          f"unpunctuated multi-clause source ({n} words, no sentence-ending "

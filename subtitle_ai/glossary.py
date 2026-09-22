@@ -203,6 +203,28 @@ def split_into_sentences(text: str) -> list[str] | None:
     return pieces if len(pieces) > 1 else None
 
 
+_SOURCE_SENT_END = re.compile(r"[.!?…]")
+
+
+def is_unpunctuated_run_on(source: str) -> bool:
+    """Real bug (Season 01, S01E03, 2026-09-21): a source cue with zero
+    sentence-ending punctuation can't be split by split_into_sentences()
+    above (which only splits on [.!?…]), so a multi-clause run-on goes to
+    NLLB in one generate() call and gets garbled -- e.g. "...Tamam
+    Alptekin Amca Ay Selinciğim Biz Amca Değil" (three separate
+    thoughts, one of them a vocative aside) translated as "Okay, Uncle
+    Alptekin, I'm Moon Flood." Corpus-wide measurement found 4,078 such
+    cues in one season (concentrated in S01E01-E05), invisible to
+    translation_qc's length-ratio checks (this exact case: 37/84 = 0.44,
+    above its 0.25 "suspiciously short" cutoff). 8+ words matches the
+    threshold used to size this population during scoping.
+
+    Shared by qc/translation_qc.py (detection/flagging) and
+    translate.py's chunk-and-compare retry (translate.py:CHUNK_WORDS) --
+    one definition, so both agree on exactly what counts as flagged."""
+    return not _SOURCE_SENT_END.search(source) and len(source.split()) >= 8
+
+
 _PLACEHOLDER_SHAPE = re.compile(r"X[a-z]{2}")
 
 

@@ -251,10 +251,13 @@ class RealGlossaryDataTests(unittest.TestCase):
             self.skipTest("real glossary directory not present in this environment")
         profile = load_profile(self.REAL_DIR, tvdb_id=383383)
         canonicals = {e.canonical for e in profile.entities}
-        self.assertIn("Eda Yıldız", canonicals)
-        self.assertIn("Serkan Bolat", canonicals)
-        eda = next(e for e in profile.entities if e.canonical == "Eda Yıldız")
-        self.assertIn("Eda", eda.surface_forms)
+        # Production canonicals are the bare given names ("Eda", "Serkan");
+        # the fuller forms are aliases/surface forms, not the canonical
+        # itself -- confirmed against the live glossary file 2026-09-22.
+        self.assertIn("Eda", canonicals)
+        self.assertIn("Serkan", canonicals)
+        eda = next(e for e in profile.entities if e.canonical == "Eda")
+        self.assertIn("Eda Yıldız", eda.surface_forms)
 
 
 if __name__ == "__main__":

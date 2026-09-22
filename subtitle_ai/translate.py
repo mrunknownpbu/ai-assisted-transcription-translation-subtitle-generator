@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 
 from glossary import (_phrase_key, bare_entity_translation,
+                      entity_occurrence_report, is_unpunctuated_run_on,
                       join_multi_speaker_dash_lines, protect,
                       repair_corrupted_placeholders, restore,
                       split_into_sentences, split_multi_speaker_dash_lines)
@@ -80,6 +81,104 @@ MAX_SPAN_CUES = 6
 MAX_SPAN_CHARS = 300
 MAX_SPAN_GAP = 2.5
 _SENTENCE_END = re.compile(r"[.!?…]['\"»)\]]*$")
+
+# Phase 2 scoping (see the Alptekin "Moon Flood" investigation, 2026-09-21):
+# a fixed word-count chunk size used ONLY as a bounded, content-preserving
+# retry input for spans glossary.is_unpunctuated_run_on() flags (no real
+# sentence boundary to split on). 6 guarantees 2+ chunks for anything that
+# cleared the 8-word flagging threshold. NOT YET wired into
+# _translate_sentences()'s main flow -- these two helpers exist standalone
+# for the validation pass (compare real chunked vs. real one-shot NLLB
+# output over the live corpus) before deciding whether to enable them.
+CHUNK_WORDS = 6
+
+
+def _chunk(text: str) -> list[str]:
+    """Splits already-protect()-ed text into fixed-size word groups, each
+    given an artificial trailing "." so NLLB gets a sentence-shaped input
+    instead of one long run-on. Chunk boundaries are arbitrary word
+    cuts, not real clause boundaries -- this trades fluency for a bound
+    on how much unrelated content can land in one generate() call, it
+    does not guarantee grammatically correct chunking. Splitting on
+    whitespace-delimited words never cuts a glossary placeholder (e.g.
+    "Xac") in half, since a placeholder is always exactly one such
+    token."""
+    words = text.split()
+    return [" ".join(words[i:i + CHUNK_WORDS]) + "."
+           for i in range(0, len(words), CHUNK_WORDS)]
+
+
+def _prefer_chunked(original: str, chunked: str, source_protected: str,
+                    glossary_map: dict[str, tuple[str, str]] | None) -> bool:
+    """True if the chunked-retry candidate should replace the original
+    one-shot candidate for a flagged run-on span. Primary signal is
+    glossary.entity_occurrence_report() -- the same "did we keep the
+    content" check recover_dropped_entities() already uses -- since a
+    protected entity's occurrence count is the one thing this codebase
+    can verify automatically about Turkish semantic preservation. Falls
+    back to translation_qc's own "suspiciously short vs. source length"
+    ratio (0.25) only when the span mentions no protected entity at all
+    (the common case -- ordinary dialogue with no named character), since
+    that leaves no entity signal to compare. Ties -- including "no
+    entities and neither trips the length cutoff" -- keep the original:
+    chunk boundaries are unproven, so this never regresses silently on a
+    guess."""
+    if glossary_map:
+        report_a = entity_occurrence_report(source_protected, original, glossary_map)
+        report_b = entity_occurrence_report(source_protected, chunked, glossary_map)
+        if report_a or report_b:
+            missing_a = sum(max(0, s - t) for s, t in report_a.values())
+            missing_b = sum(max(0, s - t) for s, t in report_b.values())
+            return missing_b < missing_a
+    src_len = len(source_protected)
+    a_bad = src_len >= 15 and len(original) < src_len * 0.25
+    b_bad = src_len >= 15 and len(chunked) < src_len * 0.25
+    return a_bad and not b_bad
+
+
+def _apply_chunk_retry(translations: list[str], run_on_positions: dict[int, str],
+                       payload: list[str], glossary_map: dict[str, tuple[str, str]] | None,
+                       translate_fn) -> list[str]:
+    """For each `payload` position flagged by is_unpunctuated_run_on()
+    (position -> its already-protect()-ed text), builds a fixed-size
+    word-chunked retry input via _chunk(), translates it through
+    `translate_fn` -- whichever dispatch (remote or local) just produced
+    `translations`, so the retry reuses the same open connection /
+    already-loaded model rather than re-acquiring the GPU lock or
+    reloading NLLB -- and replaces translations[pos] with the chunked
+    candidate when _prefer_chunked() prefers it.
+
+    Comparison happens on RESTORED (canonical-name) text --
+    entity_occurrence_report() needs real names, not raw placeholders --
+    but the substitution keeps the WINNING candidate in its ORIGINAL
+    protected/placeholder form, so the caller's existing uniform
+    repair_corrupted_placeholders()/restore() pass over the whole
+    `translations` list (translate.py's _translate_sentences(), right
+    after this is called) still runs exactly once, unchanged, over
+    whichever candidate won."""
+    if not run_on_positions:
+        return translations
+    positions = list(run_on_positions)
+    chunk_payload: list[str] = []
+    spans: list[tuple[int, int]] = []
+    for pos in positions:
+        start = len(chunk_payload)
+        chunk_payload.extend(_chunk(run_on_positions[pos]))
+        spans.append((start, len(chunk_payload)))
+    chunk_translations = translate_fn(chunk_payload)
+    for pos, (start, end) in zip(positions, spans):
+        candidate_b = " ".join(chunk_translations[start:end])
+        source_protected = payload[pos]
+        if glossary_map:
+            original_restored = restore(repair_corrupted_placeholders(translations[pos], source_protected),
+                                        glossary_map)
+            chunked_restored = restore(repair_corrupted_placeholders(candidate_b, source_protected),
+                                       glossary_map)
+        else:
+            original_restored, chunked_restored = translations[pos], candidate_b
+        if _prefer_chunked(original_restored, chunked_restored, source_protected, glossary_map):
+            translations[pos] = candidate_b
+    return translations
 
 
 @dataclass
@@ -344,7 +443,23 @@ def _translate_sentences(sentences: list[str], src_lang: str,
     back into the right positions among the ones that DO need the model.
     `on_progress` reports over only the sentences actually sent to the
     model, consistent with its existing meaning (progress of real
-    translation work)."""
+    translation work).
+
+    A sentence glossary.is_unpunctuated_run_on() flags (a multi-clause
+    ASR transcript with no sentence-ending punctuation to split on --
+    see that function's docstring for the real "Moon Flood" bug this
+    targets) additionally gets a bounded, content-preserving retry via
+    _apply_chunk_retry(): translated once normally (unchanged), then
+    again as fixed-size word chunks, keeping whichever candidate
+    glossary-entity occurrence counts (or, absent any protected entity
+    in the sentence, the existing length-ratio heuristic) says preserves
+    more source content. Validated 2026-09-21 against 1,157 real flagged
+    S01 cues that mention a protected entity: 227 (19.6%) preferred the
+    chunked candidate, and a 15-cue manual sample of those showed
+    consistent, real content-preservation gains with zero regressions.
+    A flagged sentence with no protected entity mention gets a weaker
+    (length-ratio-only) signal and usually keeps the original -- a
+    disclosed limitation, not a bug."""
     config = config or TranslationConfig()
 
     phrase_map = phrase_map or {}
@@ -364,11 +479,14 @@ def _translate_sentences(sentences: list[str], src_lang: str,
 
     nllb_idx: list[int] = []
     payload: list[str] = []
-    for i, p in zip(remaining_idx, protected):
+    run_on_positions: dict[int, str] = {}
+    for orig, i, p in zip(remaining_sentences, remaining_idx, protected):
         bare = bare_entity_translation(p, glossary_map) if glossary_map else None
         if bare is not None:
             resolved[i] = bare
         else:
+            if is_unpunctuated_run_on(orig):
+                run_on_positions[len(payload)] = p
             nllb_idx.append(i)
             payload.append(p)
 
@@ -383,6 +501,11 @@ def _translate_sentences(sentences: list[str], src_lang: str,
             translations = remote_translate_batch(remote_url, payload, src_lang,
                                                   batch_size=config.batch_size, on_progress=on_progress)
             remote_succeeded = True
+            if run_on_positions:
+                translations = _apply_chunk_retry(
+                    translations, run_on_positions, payload, glossary_map,
+                    lambda texts: remote_translate_batch(remote_url, texts, src_lang,
+                                                         batch_size=config.batch_size))
         except RemoteTranslationError:
             translations = []  # fall through to the local path below
 
@@ -401,6 +524,11 @@ def _translate_sentences(sentences: list[str], src_lang: str,
                     model, tok, bos = load_model(config, NLLB_LANG[src_lang])
                 translations = translate_batch(model, tok, bos, payload, config.device, config,
                                                batch_size=config.batch_size, on_progress=on_progress)
+                if run_on_positions:
+                    translations = _apply_chunk_retry(
+                        translations, run_on_positions, payload, glossary_map,
+                        lambda texts: translate_batch(model, tok, bos, texts, config.device, config,
+                                                      batch_size=config.batch_size))
             finally:
                 if owns_model:
                     del model

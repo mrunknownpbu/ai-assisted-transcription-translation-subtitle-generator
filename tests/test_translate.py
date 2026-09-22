@@ -5,8 +5,10 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 
 from transcript import BoundaryReason, Segment, Word
+from glossary import Entity, build_glossary, protect
 from translate import (RemoteTranslationError, TranslationConfig,
-                       build_context_spans, remote_translate_batch, translate_spans)
+                       build_context_spans, remote_translate_batch,
+                       translate_spans, _chunk, _prefer_chunked)
 
 
 def cue(index, start, end, text, boundary=None):
@@ -156,6 +158,80 @@ class BareEntityShortCircuitTests(unittest.TestCase):
              patch("translate.translate_batch", return_value=["How jealous she was of Xab."]):
             result = translate_spans(cues, spans, "tr", glossary_map=g)
         self.assertEqual(result, ["How jealous she was of Serkan."])
+
+
+class RunOnChunkRetryTests(unittest.TestCase):
+    """Real bug (S01E03, 2026-09-21): a source cue with zero
+    sentence-ending punctuation (glossary.is_unpunctuated_run_on())
+    gets a bounded chunk-and-compare retry -- see translate.py's
+    _apply_chunk_retry()/_prefer_chunked() docstrings. Validated
+    2026-09-21 against 1,157 real flagged S01 cues mentioning a
+    protected entity: 227 (19.6%) preferred the chunked candidate,
+    manually sampled with zero regressions."""
+
+    RUN_ON = ("Sen Kahveni İçerken Ben Hazırladım Tamam Alptekin Amca "
+             "Ay Selinciğim Biz Amca Değil")
+
+    def test_chunked_candidate_wins_when_it_preserves_a_dropped_entity(self):
+        from glossary import Entity, build_glossary
+        g = build_glossary([Entity("Alptekin", ["Alptekin"])])
+        cues = [cue(0, 0.0, 10.0, self.RUN_ON)]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch",
+                   side_effect=[
+                       ["I'm sure of it."],  # primary: drops Alptekin entirely
+                       ["I made it while you had your coffee.",
+                        "Uncle Xaa, oh dear Selin.",
+                        "We're not."],       # chunked: keeps the placeholder
+                   ]) as mock_batch:
+            result = translate_spans(cues, spans, "tr", glossary_map=g)
+        self.assertEqual(mock_batch.call_count, 2)
+        self.assertEqual(mock_batch.call_args_list[1][0][3],
+                        ["Sen Kahveni İçerken Ben Hazırladım Tamam.",
+                         "Xaa Amca Ay Selinciğim Biz Amca.",
+                         "Değil."])
+        self.assertIn("Alptekin", result[0])
+
+    def test_original_kept_when_chunked_candidate_is_worse(self):
+        from glossary import Entity, build_glossary
+        g = build_glossary([Entity("Alptekin", ["Alptekin"])])
+        cues = [cue(0, 0.0, 10.0, self.RUN_ON)]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch",
+                   side_effect=[
+                       ["Uncle Xaa was very upset that morning."],  # keeps it
+                       ["I made coffee.", "Good morning.", "Fine."],  # loses it
+                   ]) as mock_batch:
+            result = translate_spans(cues, spans, "tr", glossary_map=g)
+        self.assertEqual(mock_batch.call_count, 2)
+        self.assertEqual(result[0], "Uncle Alptekin was very upset that morning.")
+
+    def test_no_protected_entity_keeps_original_on_tie(self):
+        # No glossary at all -- only the length-ratio fallback signal
+        # exists, and neither candidate here is "suspiciously short", so
+        # the tie keeps the original untouched.
+        cues = [cue(0, 0.0, 10.0, self.RUN_ON)]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch",
+                   side_effect=[
+                       ["He made coffee while she got ready this morning."],
+                       ["He made the coffee.", "She got ready.", "That morning."],
+                   ]) as mock_batch:
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(mock_batch.call_count, 2)
+        self.assertEqual(result[0], "He made coffee while she got ready this morning.")
+
+    def test_ordinary_punctuated_sentence_never_triggers_a_retry(self):
+        cues = [cue(0, 0.0, 5.0, "Bu adam gercekten cok tuhaf davraniyor bu aralar sanki.")]
+        spans = [[0]]
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch",
+                   return_value=["This guy has been acting really weird lately."]) as mock_batch:
+            translate_spans(cues, spans, "tr")
+        mock_batch.assert_called_once()
 
 
 class DefaultConfigTests(unittest.TestCase):
@@ -364,6 +440,54 @@ class MultiSentenceSpanTests(unittest.TestCase):
             result = translate_spans(cues, spans, "tr")
         self.assertEqual(mock_batch.call_args[0][3], ["Hı.", "Hı."])
         self.assertEqual(result, ["- Uh-huh.\n- Uh-huh."])
+
+
+class ChunkTests(unittest.TestCase):
+    def test_splits_into_fixed_size_word_groups_with_trailing_period(self):
+        text = "Sen Kahveni İçerken Ben Hazırladım Tamam Alptekin Amca Ay Selinciğim Biz Amca Değil"
+        chunks = _chunk(text)
+        self.assertEqual(chunks,
+                        ["Sen Kahveni İçerken Ben Hazırladım Tamam.",
+                         "Alptekin Amca Ay Selinciğim Biz Amca.",
+                         "Değil."])
+
+    def test_never_splits_a_placeholder_token(self):
+        # Every glossary placeholder (e.g. "Xac") is exactly one
+        # whitespace-delimited token, so word-boundary chunking can never
+        # cut one in half.
+        text = "Bir gün Xac ile birlikte cok uzun bir yolculuga ciktik"
+        chunks = _chunk(text)
+        self.assertTrue(any("Xac" in c for c in chunks))
+        self.assertTrue(all("Xa" not in c or "Xac" in c for c in chunks))
+
+
+class PreferChunkedTests(unittest.TestCase):
+    def setUp(self):
+        self.glossary_map = build_glossary([Entity("Alptekin", ["Alptekin"])])
+
+    def test_prefers_chunked_when_it_preserves_a_dropped_entity(self):
+        source_protected = protect("Alptekin Amca cok kizgindi o gun oyle degil miydi", self.glossary_map)
+        original = "He was very angry that day, wasn't he?"  # drops Alptekin
+        chunked = "Uncle Alptekin was very angry that day."   # keeps Alptekin
+        self.assertTrue(_prefer_chunked(original, chunked, source_protected, self.glossary_map))
+
+    def test_keeps_original_when_neither_differs_on_entity_preservation(self):
+        source_protected = protect("Alptekin Amca cok kizgindi o gun oyle degil miydi", self.glossary_map)
+        original = "Uncle Alptekin was very angry that day."
+        chunked = "Uncle Alptekin seemed upset that day, right."
+        self.assertFalse(_prefer_chunked(original, chunked, source_protected, self.glossary_map))
+
+    def test_no_protected_entity_falls_back_to_length_ratio(self):
+        source_protected = "Bu gercekten cok tuhaf bir durumdu herkes sasirmisti orada"  # no entities
+        original = "Weird."  # suspiciously short vs. source
+        chunked = "This was a really strange situation, everyone was surprised there."
+        self.assertTrue(_prefer_chunked(original, chunked, source_protected, self.glossary_map))
+
+    def test_no_signal_at_all_keeps_original(self):
+        source_protected = "Bu gercekten cok tuhaf bir durumdu herkes sasirmisti orada"
+        original = "This was a really strange situation."
+        chunked = "Everyone was surprised by this strange thing."
+        self.assertFalse(_prefer_chunked(original, chunked, source_protected, self.glossary_map))
 
 
 if __name__ == "__main__":

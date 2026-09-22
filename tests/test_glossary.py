@@ -4,10 +4,11 @@ import unittest
 import glossary as glossary_mod
 from glossary import (Entity, PhraseEntry, bare_entity_translation,
                       build_glossary, build_phrase_map,
-                      entity_occurrence_report, join_multi_speaker_dash_lines,
-                      protect, recover_dropped_entities,
-                      repair_corrupted_placeholders, restore,
-                      split_into_sentences, split_multi_speaker_dash_lines)
+                      entity_occurrence_report, is_unpunctuated_run_on,
+                      join_multi_speaker_dash_lines, protect,
+                      recover_dropped_entities, repair_corrupted_placeholders,
+                      restore, split_into_sentences,
+                      split_multi_speaker_dash_lines)
 
 
 class ProtectRestoreTests(unittest.TestCase):
@@ -311,6 +312,23 @@ class SplitIntoSentencesTests(unittest.TestCase):
         text = "Eve gidiyorum. Çok yorgunum. Yarın görüşürüz."
         self.assertEqual(split_into_sentences(text),
                          ["Eve gidiyorum.", "Çok yorgunum.", "Yarın görüşürüz."])
+
+
+class IsUnpunctuatedRunOnTests(unittest.TestCase):
+    def test_real_alptekin_source_is_flagged(self):
+        # Real bug (S01E03, 2026-09-21): this exact run-on translated to
+        # "Okay, Uncle Alptekin, I'm Moon Flood."
+        source = ("Sen Kahveni İçerken Ben Hazırladım Tamam Alptekin Amca "
+                  "Ay Selinciğim Biz Amca Değil")
+        self.assertTrue(is_unpunctuated_run_on(source))
+
+    def test_ordinary_punctuated_sentence_not_flagged(self):
+        self.assertFalse(is_unpunctuated_run_on("Bu adam gercekten cok tuhaf davraniyor bu aralar sanki."))
+
+    def test_short_unpunctuated_phrase_not_flagged(self):
+        # Under the 8-word threshold -- an ordinary short unpunctuated
+        # utterance is common and not at risk of multi-clause garbling.
+        self.assertFalse(is_unpunctuated_run_on("Tamam gidiyorum simdi"))
 
 
 if __name__ == "__main__":

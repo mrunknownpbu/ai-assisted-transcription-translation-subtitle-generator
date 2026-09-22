@@ -15,11 +15,12 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-22: 707 passing, 1 pre-existing failure
-(`test_glossary_profile.py::RealGlossaryDataTests::test_loads_real_series_profile`
--- a real-glossary-data assertion mismatch on `"Eda Yıldız"` vs the
-production glossary's current `"Eda"` canonical, unrelated to whatever
-you're working on unless you're touching that specific entity).
+Baseline as of 2026-09-22: 708 passing, 0 failures. (Previously 707
+passing/1 failure --
+`test_glossary_profile.py::RealGlossaryDataTests::test_loads_real_series_profile`
+asserted the stale canonical `"Eda Yıldız"` against the production
+glossary's current `"Eda"` canonical; fixed same day, see
+`IMPROVEMENT_PLAN.md` section 1.1.)
 
 Frontend: `cd frontend && npx tsc --noEmit && npm test -- --run`.
 
@@ -177,18 +178,18 @@ dialogue kept as one cue for its whole envelope,
 regression without sacrificing content. The remaining gap above the
 pre-fix baseline is accepted, not a bug.
 
-## Unpunctuated run-on source cues: partially shipped
+## Unpunctuated run-on source cues: shipped
 
 A source cue with zero sentence-ending punctuation (can't be split by
 `glossary.split_into_sentences()`) sometimes gets garbled by NLLB in one
 `generate()` call -- real example, a source cue containing an aside
 ("oh, dear Selin") translated as "I'm Moon Flood." **Phase 1** (QC
 visibility only -- flags this shape as a `translation_error` finding,
-changes no translation behavior) is shipped. **Phase 2** (a bounded
+changes no translation behavior) shipped first. **Phase 2** (a bounded
 chunk-and-compare retry, validated on real data: 227/1157 flagged cues
 with a protected-entity signal genuinely improved, zero regressions in a
-manual sample) was implemented and tested on a real S01E01 job, but is
-currently sitting in a git stash (`git stash list`), not merged --
-holding pending a decision on whether to commit it. See the scoping plan
-this session produced (ask if you can't find it) for the full design and
-rationale before reviving it.
+manual sample) was merged: flagged run-on sentences are translated once
+normally, then retried in fixed word chunks (`_chunk`), preferring the
+chunked candidate whenever entity preservation or length-ratio checks
+indicate superior content preservation. Covered by unit tests in
+`tests/test_translate.py` and `tests/test_glossary.py`.
