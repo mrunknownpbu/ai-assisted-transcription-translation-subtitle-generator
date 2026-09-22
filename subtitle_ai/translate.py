@@ -277,8 +277,16 @@ def load_tokenizer(config: TranslationConfig, src_lang_code: str):
 
 
 def load_model(config: TranslationConfig, src_lang_code: str):
+    """Shared by both the local worker path (translate_spans() below) and
+    translate_server.py's remote server -- so a VRAM headroom check here
+    covers both this project's own shared Tesla P4 host (Tdarr transcode)
+    and the remote translate-server's shared RTX 3070 host (Jellyfin/Plex
+    hardware transcode; see translate_server.py's own module docstring)."""
     import torch
     from transformers import AutoModelForSeq2SeqLM
+    if config.device == "cuda":
+        from gpu import preflight_vram_check
+        preflight_vram_check()
     tok = load_tokenizer(config, src_lang_code)
     dtype = torch.float16 if config.device == "cuda" else torch.float32
     model = AutoModelForSeq2SeqLM.from_pretrained(config.repo, torch_dtype=dtype,

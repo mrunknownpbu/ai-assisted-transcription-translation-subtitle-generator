@@ -15,12 +15,12 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-22: 708 passing, 0 failures. (Previously 707
-passing/1 failure --
-`test_glossary_profile.py::RealGlossaryDataTests::test_loads_real_series_profile`
-asserted the stale canonical `"Eda Yıldız"` against the production
-glossary's current `"Eda"` canonical; fixed same day, see
-`IMPROVEMENT_PLAN.md` section 1.1.)
+Baseline as of 2026-09-23: 737 passing, 0 failures. (History: 708 after
+fixing `test_glossary_profile.py`'s stale `"Eda Yıldız"` canonical
+assertion 2026-09-22 -- see `IMPROVEMENT_PLAN.md` section 1.1 -- then 727
+after the lightweight-sampler-model tests (section 2.1), then 737 after
+the VRAM pre-flight tests (section 2.2). Update this line rather than
+leaving it to drift the next time the count moves.)
 
 Frontend: `cd frontend && npx tsc --noEmit && npm test -- --run`.
 
@@ -61,6 +61,23 @@ Remote translate-server health: `curl http://<remote-host>:8091/health`.
   (~2.8GB; extra languages are tokenizers only), runs one request at a
   time, and never evicts while `active_requests > 0`. If remote VRAM
   climbs past ~3GB after multi-language use, that invariant is broken.
+- **VRAM pre-flight check before every in-process CUDA model load**
+  (`gpu.preflight_vram_check()`, wired into `asr.py::transcribe()`,
+  `translate.py::load_model()` -- shared by the local worker path AND
+  `translate_server.py`'s remote server -- and `audio_streams.py`'s
+  stream sampler). Polls `torch.cuda.mem_get_info()`, waiting up to 20s
+  (2s poll interval) for `SUBTITLE_AI_VRAM_MARGIN_GB` (default 3.2) free
+  before raising `gpu.InsufficientVramError` instead of attempting a load
+  that would very likely CUDA-OOM. Exists specifically for a Tdarr
+  transcode burst on the Tesla P4 host or a Jellyfin/Plex transcode burst
+  on the translate-server's RTX 3070 host landing in the gap between this
+  project's own idle-eviction freeing memory and the next request needing
+  it -- `gpu.gpu_lock()` alone only serializes this project's OWN
+  processes against each other and can't see or wait out that kind of
+  external contention. A raised `InsufficientVramError` surfaces as a
+  normal job failure (nothing silently retries past it at the pipeline
+  level) -- if you see these in logs, it means the card was genuinely
+  starved by something outside this project's control, not a bug here.
 - **NLLB decode passes `clean_up_tokenization_spaces=True` explicitly**
   (`translate.py::_generate_one_batch`). This tokenizer's own default
   (transformers 4.48) is False unless overridden, which leaked raw

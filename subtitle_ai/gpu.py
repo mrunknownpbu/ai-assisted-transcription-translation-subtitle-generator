@@ -67,6 +67,63 @@ def free_gpu(device: str = "cuda") -> None:
             torch.cuda.empty_cache()
 
 
+# Default headroom before constructing a model -- matches this project's own
+# measured model sizes (NLLB ~2.8GB, large-v3 ASR ~3GB) plus a buffer, not
+# an arbitrary round number. Configurable per deployment (a different card
+# or model mix) without a code change.
+DEFAULT_VRAM_MARGIN_GB = float(os.environ.get("SUBTITLE_AI_VRAM_MARGIN_GB", "3.2"))
+
+
+class InsufficientVramError(RuntimeError):
+    """Raised by preflight_vram_check() when free VRAM is still below the
+    required margin after the whole wait window -- refusing to attempt a
+    model construction that would very likely CUDA-OOM, rather than let
+    ctranslate2/PyTorch's own allocator fail loudly (and non-uniformly:
+    confirmed real cases left partially-allocated VRAM stuck for the rest
+    of the process's life -- see free_gpu()'s and gpu_lock()'s docstrings)
+    mid-load."""
+
+
+def preflight_vram_check(required_gb: float = DEFAULT_VRAM_MARGIN_GB, *,
+                         max_wait_seconds: float = 20.0, poll_interval_seconds: float = 2.0,
+                         device: int = 0) -> None:
+    """Poll `torch.cuda.mem_get_info()` until at least `required_gb` is free,
+    up to `max_wait_seconds`; raise InsufficientVramError if it's still not
+    enough by then. A no-op when CUDA isn't available (CPU-only CI/tests) --
+    there's no VRAM to check.
+
+    Call this from INSIDE gpu_lock(), immediately before constructing a
+    model. gpu_lock() only serializes THIS project's own processes against
+    each other -- it says nothing about an external GPU consumer sharing
+    the same physical card. Both real deployments this project runs on have
+    exactly that: Tdarr hardware transcoding on the Tesla P4 host (ASR,
+    local-NLLB-fallback, and the Analyze stream sampler all run there), and
+    Jellyfin/Plex hardware transcoding on the RTX 3070 host (translate_
+    server.py's own docstring documents this explicitly). A transcode burst
+    can eat headroom in the exact window between this project's own idle-
+    eviction freeing memory and the next request needing it -- gpu_lock()
+    alone cannot see or wait out that kind of external contention, which is
+    the real, previously-unrecoverable CUDA OOM condition this closes by
+    waiting it out (bounded) instead of failing on the very first check."""
+    import time
+    import torch
+    if not torch.cuda.is_available():
+        return
+    required_bytes = required_gb * (1024 ** 3)
+    deadline = time.monotonic() + max_wait_seconds
+    while True:
+        free_bytes, _total_bytes = torch.cuda.mem_get_info(device)
+        if free_bytes >= required_bytes:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            free_gb = free_bytes / (1024 ** 3)
+            raise InsufficientVramError(
+                f"only {free_gb:.2f}GB VRAM free after waiting {max_wait_seconds:.0f}s "
+                f"(need {required_gb:.2f}GB) -- refusing to load model to avoid a CUDA OOM")
+        time.sleep(min(poll_interval_seconds, remaining))
+
+
 # Bookkeeping for gpu_lock()'s reentrancy -- per-process (each process has
 # its own module state), guarded by _state_lock since multiple threads in
 # this process may probe/update it concurrently. The real OS-level

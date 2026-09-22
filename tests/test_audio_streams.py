@@ -320,5 +320,84 @@ class DefaultSamplerModelResolutionTests(unittest.TestCase):
         self.assertEqual(loaded_names, ["large-v3"])
 
 
+class PreflightVramWiringTests(unittest.TestCase):
+    """default_sampler() must call gpu.preflight_vram_check() before each
+    WhisperModel construction (IMPROVEMENT_PLAN.md 2.2) -- the lightweight
+    attempt with a small margin, the large-v3 fallback with the full
+    default margin, and an InsufficientVramError from the lightweight
+    check must skip the (doomed, needs-more-not-less-VRAM) fallback rather
+    than attempting it anyway."""
+
+    def test_lightweight_attempt_checks_a_small_margin(self):
+        import os
+        from unittest.mock import MagicMock, patch
+
+        fake_wav = Path("/fake/sample.wav")
+
+        class FakeModel:
+            def __init__(self, name, **kw):
+                pass
+
+            def transcribe(self, path, **kw):
+                info = MagicMock()
+                info.language, info.language_probability = "tr", 0.9
+                return iter([]), info
+
+        with patch.dict(os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "small"}), \
+             patch("faster_whisper.WhisperModel", FakeModel), \
+             patch("asr.AsrConfig") as MockCfg, \
+             patch("gpu.preflight_vram_check") as preflight:
+            MockCfg.return_value.compute_type = "int8"
+            audio_streams.default_sampler()(fake_wav)
+
+        preflight.assert_called_once_with(0.5)
+
+    def test_fallback_attempt_checks_the_full_default_margin(self):
+        import os
+        from unittest.mock import MagicMock, patch
+
+        fake_wav = Path("/fake/sample.wav")
+
+        class FakeModel:
+            def __init__(self, name, **kw):
+                if name == "small":
+                    raise OSError("not cached")
+
+            def transcribe(self, path, **kw):
+                info = MagicMock()
+                info.language, info.language_probability = "tr", 0.9
+                return iter([]), info
+
+        with patch.dict(os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "small"}), \
+             patch("faster_whisper.WhisperModel", FakeModel), \
+             patch("asr.AsrConfig") as MockCfg, \
+             patch("gpu.preflight_vram_check") as preflight:
+            MockCfg.return_value.compute_type = "int8"
+            audio_streams.default_sampler()(fake_wav)
+
+        # Once for the lightweight attempt (small margin), once for the
+        # large-v3 fallback (no explicit arg -- uses gpu's own default).
+        self.assertEqual(preflight.call_args_list,
+                         [unittest.mock.call(0.5), unittest.mock.call()])
+
+    def test_insufficient_vram_on_lightweight_check_skips_fallback_entirely(self):
+        """A failed lightweight-margin check must propagate immediately --
+        never attempt large-v3, which needs MORE headroom, not less."""
+        import os
+        from unittest.mock import patch
+
+        import gpu
+        fake_wav = Path("/fake/sample.wav")
+
+        with patch.dict(os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "small"}), \
+             patch("faster_whisper.WhisperModel") as MockModel, \
+             patch("asr.AsrConfig"), \
+             patch("gpu.preflight_vram_check", side_effect=gpu.InsufficientVramError("no room")):
+            with self.assertRaises(gpu.InsufficientVramError):
+                audio_streams.default_sampler()(fake_wav)
+
+        MockModel.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

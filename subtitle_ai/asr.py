@@ -321,6 +321,13 @@ def transcribe(wav_path: str, media_path: str, media_hash: str, audio_stream_ind
                 # before raising is never released for the life of the
                 # process (confirmed: VRAM stayed stuck long after the
                 # failed job, with no other job running).
+                if config.device == "cuda":
+                    # Wait out a transient VRAM shortage (e.g. a Tdarr
+                    # transcode burst on this shared Tesla P4) instead of
+                    # attempting a load that would very likely OOM -- see
+                    # gpu.preflight_vram_check()'s docstring.
+                    from gpu import preflight_vram_check
+                    preflight_vram_check()
                 from faster_whisper import WhisperModel
                 model = WhisperModel(config.model_name, device=config.device,
                                      compute_type=config.compute_type, download_root="/models")

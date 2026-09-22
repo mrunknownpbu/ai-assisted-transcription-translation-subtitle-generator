@@ -206,6 +206,12 @@ def default_sampler(model_name: str | None = None):
     falls back to \"large-v3\", preserving the previous behaviour on day zero
     before the operator runs the download script.
 
+    Each load attempt is preceded by gpu.preflight_vram_check() (bounded
+    wait-and-retry against a real Tdarr-transcode-contention CUDA OOM) --
+    see the inline comments below for why the two attempts use different
+    margins, and why a failed lightweight-model check skips the large-v3
+    fallback rather than attempting it anyway.
+
     compute_type is sourced from asr.AsrConfig's own default (not a second
     hardcoded value). Real defect this closes (2026-09-17): when this
     function previously hardcoded \"float16\" independently of asr.py, fixing
@@ -219,10 +225,19 @@ def default_sampler(model_name: str | None = None):
     fallback_name = "large-v3"
     state: dict = {}
 
+    # A lightweight sample model ("small"/"base", ~150-250MB -- see
+    # download_sample_model.py's own numbers) needs nowhere near
+    # gpu.DEFAULT_VRAM_MARGIN_GB (sized for ~3GB models); waiting for that
+    # much free headroom here would be self-defeating -- exactly the VRAM
+    # pressure this lightweight model exists to avoid causing. Only the
+    # large-v3 fallback path needs the full default margin.
+    _LIGHTWEIGHT_VRAM_MARGIN_GB = 0.5
+
     def sample(wav_path: Path) -> tuple[str, float]:
         if "model" not in state:
             from faster_whisper import WhisperModel
             from asr import AsrConfig
+            from gpu import preflight_vram_check, InsufficientVramError
             compute_type = AsrConfig().compute_type
             # Try the configured lightweight model first; fall back to
             # large-v3 if it cannot load.  The most common cause is the
@@ -230,12 +245,20 @@ def default_sampler(model_name: str | None = None):
             # that case faster-whisper raises an OSError or HfHubHTTPError
             # (it can't write a download into a read-only directory). We
             # catch broadly because the failure modes differ across versions.
+            # InsufficientVramError is NOT one of the caught cases here --
+            # if even the lightweight model's small margin isn't free, the
+            # large-v3 fallback (which needs strictly MORE headroom) is
+            # doomed too, so let it propagate immediately instead of
+            # doubling the wait on an attempt that can't succeed.
             load_name = resolved_name
             if load_name != fallback_name:
+                preflight_vram_check(_LIGHTWEIGHT_VRAM_MARGIN_GB)
                 try:
                     state["model"] = WhisperModel(load_name, device="cuda",
                                                   compute_type=compute_type,
                                                   download_root="/models")
+                except InsufficientVramError:
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     _log.warning(
                         "stream sampler: could not load %r (%s); "
@@ -245,6 +268,7 @@ def default_sampler(model_name: str | None = None):
                     )
                     load_name = fallback_name
             if "model" not in state:
+                preflight_vram_check()
                 state["model"] = WhisperModel(load_name, device="cuda",
                                               compute_type=compute_type,
                                               download_root="/models")
