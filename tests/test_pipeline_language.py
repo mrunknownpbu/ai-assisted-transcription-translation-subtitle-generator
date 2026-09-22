@@ -161,11 +161,12 @@ class GlossaryHotwordsTests(unittest.TestCase):
         _make_fixture_video(self.video)
         self.work_dir = Path(self.tmp.name) / "work"
 
-    def _run_and_capture_config(self, glossary_entities, extra_hotwords=None):
+    def _run_and_capture_config(self, glossary_entities, extra_hotwords=None, hotwords_on=True):
         fake_translate = lambda cues, spans, src_lang, **_kw: ["translated"] * len(spans)
         with patch.object(pipeline, "asr_transcribe",
                           return_value=_fake_transcript("tr", 0.95)) as mock_asr, \
-             patch.object(pipeline.translate, "translate_spans", side_effect=fake_translate):
+             patch.object(pipeline.translate, "translate_spans", side_effect=fake_translate), \
+             patch.dict("os.environ", {"SUBTITLE_AI_ASR_HOTWORDS": "on" if hotwords_on else ""}):
             pipeline.run(video_path=str(self.video), media_root=str(self.tmp.name),
                         work_dir=str(self.work_dir), write_output=False,
                         stream_sampler=lambda wav: ("tr", 0.9),
@@ -211,6 +212,13 @@ class GlossaryHotwordsTests(unittest.TestCase):
 
     def test_no_glossary_entities_leaves_hotwords_unset(self):
         config = self._run_and_capture_config(None)
+        self.assertIsNone(config.hotwords)
+
+    def test_hotwords_are_off_by_default_even_with_glossary_and_mined_names(self):
+        # Measured regression: the list made Whisper emit Title Case and
+        # drop audio windows (asr.py module docstring). Opt-in only.
+        entities = [Entity(canonical="Eda", surface_forms=["Eda"])]
+        config = self._run_and_capture_config(entities, extra_hotwords=["Melek"], hotwords_on=False)
         self.assertIsNone(config.hotwords)
 
 

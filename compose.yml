@@ -52,6 +52,10 @@ services:
       # (see api.py's require_api_key()) -- unset by default, matching
       # this deployment's confirmed LAN-only status.
       SUBTITLE_AI_API_KEY: ${SUBTITLE_AI_API_KEY:-}
+      # Empty = defaults (24h failed-job scratch retention; ASR hotwords
+      # off). See .env.example for what each does.
+      SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS: ${SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS:-}
+      SUBTITLE_AI_ASR_HOTWORDS: ${SUBTITLE_AI_ASR_HOTWORDS:-}
     volumes:
       - ${DATA_PATH}:/data
       # Read-only: confirmed safe by real GPU inference runs this session

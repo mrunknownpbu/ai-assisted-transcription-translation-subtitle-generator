@@ -22,7 +22,7 @@ import segmentation_source
 import segmentation_target
 import srt
 import translate
-from asr import AsrConfig, PIPELINE_VERSION, transcribe as asr_transcribe
+from asr import AsrConfig, PIPELINE_VERSION, hotwords_enabled, transcribe as asr_transcribe, vad_parameters
 from output import TARGET_LANG, write_srt_atomic, resolve_output_path
 from projection import ProjectedCue, merge_groups, project, validate_coverage
 from qc import entity_qc, output_qc, readability_qc, timing_qc, transcription_qc, translation_qc
@@ -172,6 +172,10 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     hotwords = " ".join(sorted(
         {form for e in (glossary_entities or []) for form in e.surface_forms} | set(extra_hotwords or [])
     )) or None
+    # Off by default: on real E01 data the list induced Title Case output
+    # and dropped audio windows (asr.py module docstring has the numbers).
+    if not hotwords_enabled():
+        hotwords = None
     asr_config = asr_config or AsrConfig(language=asr_language, hotwords=hotwords)
 
     # Cache lookup key is computed BEFORE extraction/ASR so a hit can skip
@@ -187,7 +191,8 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     if transcript_cache_dir is not None:
         asr_params = {"beam_size": asr_config.beam_size, "temperature": list(asr_config.temperature),
                      "condition_on_previous_text": asr_config.condition_on_previous_text,
-                     "vad_filter": asr_config.vad_filter, "compute_type": asr_config.compute_type,
+                     "vad_filter": asr_config.vad_filter, "vad_parameters": vad_parameters(asr_config),
+                     "compute_type": asr_config.compute_type,
                      "hotwords": asr_config.hotwords}
         if source_lang == AUTO:
             lookup_key = auto_lookup_key(media_hash, audio_stream_index, selected_stream.codec,

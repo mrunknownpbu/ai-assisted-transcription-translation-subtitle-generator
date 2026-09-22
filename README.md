@@ -118,6 +118,22 @@ Configuration is supplied via environment variables in `compose.yml`
 (see that file for the current set, including optional TVDB metadata
 lookup credentials).
 
+### ASR decoding defaults
+
+Chosen by measuring word recall against a human-made SRT for Love Is In
+The Air S01E01 (two 20-minute windows; `asr.py` module docstring has the
+table):
+
+- **Hotwords are off** (`SUBTITLE_AI_ASR_HOTWORDS=on` restores them). The
+  glossary/auto-mined list made Whisper output Title Case and dropped
+  audio windows; character-name recall is ~3-5 points lower without it.
+- **VAD is more permissive** than faster-whisper's default (onset 0.3,
+  offset 0.15, 1 s minimum silence, 500 ms pad), worth +1.3 to +4.1
+  points of recall.
+
+Both are part of the transcript cache identity, so existing cached
+transcripts are not reused after the change.
+
 ### Scratch work directories
 
 Each job's intermediate files (extracted audio, stream samples,

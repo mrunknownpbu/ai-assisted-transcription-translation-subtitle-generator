@@ -15,7 +15,7 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-21: 683 passing, 1 pre-existing failure
+Baseline as of 2026-09-22: 694 passing, 1 pre-existing failure
 (`test_glossary_profile.py::RealGlossaryDataTests::test_loads_real_series_profile`
 -- a real-glossary-data assertion mismatch on `"Eda Yıldız"` vs the
 production glossary's current `"Eda"` canonical, unrelated to whatever
@@ -60,6 +60,14 @@ Remote translate-server health: `curl http://<remote-host>:8091/health`.
   (~2.8GB; extra languages are tokenizers only), runs one request at a
   time, and never evicts while `active_requests > 0`. If remote VRAM
   climbs past ~3GB after multi-language use, that invariant is broken.
+- **ASR hotwords are OFF and VAD is permissive** (`asr.py` docstring has
+  the measurements). The hotword list induced Title Case transcripts
+  (~70% of segments) that NLLB turns into token-spaced English, and it
+  dropped audio windows. Tempting to re-enable to fix name spelling --
+  check recall against a human SRT first. Existing `.tr.srt` files for
+  Love Is In The Air E01-E05 predate this and are still Title Case.
+  `auto_glossary` mining of those Title Case files also polluted the
+  suggestion list with ordinary words ("Anladım", "Buyurun").
 - `SKIP_REMOTE=1 ./scripts/deploy.sh` is right for changes that don't
   touch `translate.py`/`translate_server.py` (API, worker, scratch
   cleanup); anything in those two files needs the full deploy.

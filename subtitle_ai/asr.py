@@ -33,6 +33,27 @@ the prior implementation:
                          propagation takes. Breaking the chain per segment
                          trades a little cross-segment coherence for
                          materially less hallucination spread.
+  hotwords=OFF by default (SUBTITLE_AI_ASR_HOTWORDS=on to restore)
+                         Measured on Love Is In The Air S01E01 against a
+                         human SRT (two 20-minute windows, 2026-09-22):
+                         the 60-word glossary+mined list made Whisper
+                         emit Title Case for ~65-75% of segments
+                         ("Kendine Gelemesin Ya Sinir Olsun"), which
+                         NLLB then translates into token-spaced English
+                         ("It 's all over ."), and it cost 3-4 points of
+                         word recall against no hotwords at all. Even an
+                         8-name list made whole 30-second windows vanish
+                         in one window. The price of turning it off is
+                         ~3-5 points of character-name recall; the
+                         translation-time glossary still protects names.
+  vad_*                  Permissive VAD (onset 0.3 / offset 0.15, 1s
+                         min silence, 500ms pad) instead of
+                         faster-whisper's defaults (0.5 / 0.35 / 2s /
+                         400ms): +1.3 to +4.1 points of word recall over
+                         the default VAD in both windows, measured the
+                         same way. Loosening no_speech/logprob thresholds
+                         changed nothing -- dropped scenes are not from
+                         those.
   word_timestamps=True   Required -- see transcript.Word; nothing
                          downstream may fall back to segment-only timing
                          when word timing is available.
@@ -50,6 +71,14 @@ from media import MediaError
 from transcript import CanonicalTranscript, ModelInfo, Segment, Word
 
 PIPELINE_VERSION = "2.0.0"
+
+
+def hotwords_enabled() -> bool:
+    """SUBTITLE_AI_ASR_HOTWORDS=on|1|true|yes re-enables feeding the
+    glossary/auto-mined names to Whisper as `hotwords`. Off by default --
+    see the module docstring for the measured reason."""
+    import os
+    return os.environ.get("SUBTITLE_AI_ASR_HOTWORDS", "").strip().lower() in {"on", "1", "true", "yes"}
 
 # Real defect (multi-language validation, 2026-09-14): a file's language
 # auto-detection previously trusted a SINGLE short window (faster-whisper's
@@ -84,6 +113,12 @@ class AsrConfig:
     no_speech_threshold: float = 0.6
     condition_on_previous_text: bool = False
     vad_filter: bool = True
+    # faster-whisper VadOptions fields (this version names the Silero
+    # threshold onset/offset, not threshold). Only used when vad_filter.
+    vad_onset: float = 0.3
+    vad_offset: float = 0.15
+    vad_min_silence_ms: int = 1000
+    vad_speech_pad_ms: int = 500
     word_timestamps: bool = True
     language: str | None = None      # None = auto-detect
     # Space-separated known terms (character names, places) that bias
@@ -94,12 +129,24 @@ class AsrConfig:
     hotwords: str | None = None
 
 
+def vad_parameters(config: "AsrConfig") -> dict | None:
+    """The VadOptions dict handed to model.transcribe(), or None when the
+    VAD is off. Also part of the transcript cache key (see pipeline.py)
+    so a VAD change never serves a transcript made under the old one."""
+    if not config.vad_filter:
+        return None
+    return {"onset": config.vad_onset, "offset": config.vad_offset,
+            "min_silence_duration_ms": config.vad_min_silence_ms,
+            "speech_pad_ms": config.vad_speech_pad_ms}
+
+
 def _model_info(config: AsrConfig, model_version: str) -> ModelInfo:
     return ModelInfo(name=f"faster-whisper-{config.model_name}", version=model_version,
                      parameters={"beam_size": config.beam_size,
                                 "temperature": list(config.temperature),
                                 "condition_on_previous_text": config.condition_on_previous_text,
                                 "vad_filter": config.vad_filter,
+                                "vad_parameters": vad_parameters(config),
                                 "compute_type": config.compute_type,
                                 "hotwords": config.hotwords})
 
@@ -301,7 +348,8 @@ def transcribe(wav_path: str, media_path: str, media_hash: str, audio_stream_ind
                 log_prob_threshold=config.logprob_threshold,
                 no_speech_threshold=config.no_speech_threshold,
                 condition_on_previous_text=config.condition_on_previous_text,
-                vad_filter=config.vad_filter, word_timestamps=config.word_timestamps,
+                vad_filter=config.vad_filter, vad_parameters=vad_parameters(config),
+                word_timestamps=config.word_timestamps,
                 language=effective_language, hotwords=config.hotwords or None)
 
             total_duration = getattr(info, "duration", None)
