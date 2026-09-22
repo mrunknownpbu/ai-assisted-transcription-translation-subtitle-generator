@@ -126,5 +126,38 @@ class RepetitionGuardTests(unittest.TestCase):
         _, kwargs = model.generate.call_args
         self.assertEqual(kwargs["no_repeat_ngram_size"], 4)
 
+
+class DecodeSpacingTests(unittest.TestCase):
+    """Real bug (2026-09-22, confirmed in a committed .en.srt: "That 's
+    nice .", "go ."): this tokenizer's own clean_up_tokenization_spaces
+    default (transformers 4.48) is False unless the decode call passes it
+    explicitly, so NLLB's raw subword spacing survived into output. Not
+    the same defect as the Title Case source-casing issue (asr.py's
+    hotwords fix) -- confirmed still reproducing on sentence-case input."""
+
+    def _decode(self):
+        fake_torch = types.ModuleType("torch")
+        fake_torch.inference_mode = contextlib.nullcontext
+        fake_torch.cuda = types.SimpleNamespace(OutOfMemoryError=RuntimeError)
+        model = MagicMock()
+        model.generate.return_value = "GEN_TOKENS"
+        tok = MagicMock()
+        tok.return_value = FakeEncoding(input_ids="IDS", attention_mask="MASK")
+        tok.batch_decode.return_value = ["That's nice."]
+        with patch.dict(sys.modules, {"torch": fake_torch}):
+            translate._generate_one_batch(model, tok, 0, ["Güzelmiş."], "cuda", TranslationConfig())
+        return tok
+
+    def test_batch_decode_receives_clean_up_tokenization_spaces_true(self):
+        tok = self._decode()
+        _, kwargs = tok.batch_decode.call_args
+        self.assertTrue(kwargs.get("clean_up_tokenization_spaces"))
+
+    def test_skip_special_tokens_still_requested(self):
+        tok = self._decode()
+        _, kwargs = tok.batch_decode.call_args
+        self.assertTrue(kwargs.get("skip_special_tokens"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -60,6 +60,13 @@ Remote translate-server health: `curl http://<remote-host>:8091/health`.
   (~2.8GB; extra languages are tokenizers only), runs one request at a
   time, and never evicts while `active_requests > 0`. If remote VRAM
   climbs past ~3GB after multi-language use, that invariant is broken.
+- **NLLB decode passes `clean_up_tokenization_spaces=True` explicitly**
+  (`translate.py::_generate_one_batch`). This tokenizer's own default
+  (transformers 4.48) is False unless overridden, which leaked raw
+  subword spacing into real output ("That 's nice .", "go ."),
+  independent of the Title Case source-casing issue below -- confirmed
+  reproducing on ordinary sentence-case input too. If you ever see that
+  pattern in output again, check this first before assuming it's back.
 - **ASR hotwords are OFF and VAD is permissive** (`asr.py` docstring has
   the measurements). The hotword list induced Title Case transcripts
   (~70% of segments) that NLLB turns into token-spaced English, and it
@@ -68,6 +75,21 @@ Remote translate-server health: `curl http://<remote-host>:8091/health`.
   Love Is In The Air E01-E05 predate this and are still Title Case.
   `auto_glossary` mining of those Title Case files also polluted the
   suggestion list with ordinary words ("Anladım", "Buyurun").
+- **Known, not fixed: a source cue that's a single orphan word** (real
+  example, S01E01's closing song: a large internal word-timestamp gap
+  inside one Whisper segment split "Her" from "şey olur, her şey
+  biter", both `segmentation_source.py`'s MAX_GAP boundary and
+  `translate.build_context_spans()`'s REAL_ACOUSTIC_GAP handling then
+  correctly-by-design treat that as a real pause, so "Her" gets
+  translated alone with zero context and comes out as garbage ("out").
+  Confirmed narrow in practice (not present in 20 minutes of ordinary
+  S01E01 dialogue checked by hand) -- concentrated in sung-lyric
+  sections where Whisper's word-level alignment is least reliable.
+  Deliberately NOT "fixed" by loosening REAL_ACOUSTIC_GAP handling:
+  `transcript.py`'s BoundaryReason/MERGEABLE_BOUNDARIES docstrings and
+  `projection.py` both depend on that boundary being trustworthy for
+  coverage validation, and loosening it needs its own scoped
+  investigation, not a quick patch alongside an unrelated ASR change.
 - `SKIP_REMOTE=1 ./scripts/deploy.sh` is right for changes that don't
   touch `translate.py`/`translate_server.py` (API, worker, scratch
   cleanup); anything in those two files needs the full deploy.

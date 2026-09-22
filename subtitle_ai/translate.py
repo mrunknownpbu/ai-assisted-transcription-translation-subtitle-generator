@@ -206,7 +206,16 @@ def _generate_one_batch(model, tok, bos: int, batch: list[str], device: str,
             gen = model.generate(**enc, forced_bos_token_id=bos, max_new_tokens=config.max_new_tokens,
                                  num_beams=config.num_beams,
                                  no_repeat_ngram_size=config.no_repeat_ngram_size)
-        return tok.batch_decode(gen, skip_special_tokens=True)
+        # clean_up_tokenization_spaces MUST be explicit: this tokenizer's
+        # own default (self.clean_up_tokenization_spaces, transformers
+        # 4.48) is False unless passed, which left NLLB's raw subword
+        # spacing in the output -- confirmed real artifact ("That 's
+        # nice .", "go .") surviving all the way into committed .en.srt
+        # files, independent of the Title Case source-casing issue
+        # (asr.py's hotwords fix reduced how OFTEN it fired, since
+        # differently-cased input tokenizes differently, but didn't
+        # remove the underlying cause).
+        return tok.batch_decode(gen, skip_special_tokens=True, clean_up_tokenization_spaces=True)
     except torch.cuda.OutOfMemoryError:
         del enc
         gc.collect()
