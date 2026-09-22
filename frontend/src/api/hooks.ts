@@ -38,9 +38,20 @@ export function useAudioStreams(path: string | null) {
 }
 
 export function useJobs(status: string) {
+  // Real bug (2026-09-22): JobsPage's tab labels are UPPERCASE
+  // ("QUEUED", "RUNNING", ...) for display, but the job store's status
+  // column is lowercase ("queued", "running", ...) and jobstore.list()
+  // does an exact SQL match -- 'WHERE status=?' with the raw, uppercase
+  // value never matched a row, so every tab except ALL silently showed
+  // "No jobs." regardless of how many jobs actually had that status
+  // (visible in the header's own separately-computed counts, which DO
+  // normalize case). Lowercasing here, at the one place a tab label
+  // becomes a query param, fixes every tab without touching the labels
+  // themselves or the server's case-sensitive comparison.
+  const apiStatus = status === "ALL" ? undefined : status.toLowerCase();
   return useQuery({
     queryKey: ["jobs", status],
-    queryFn: () => api.listJobs({ status: status === "ALL" ? undefined : status, limit: 100 }),
+    queryFn: () => api.listJobs({ status: apiStatus, limit: 100 }),
   });
 }
 

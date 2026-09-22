@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useCancelJob, useDeleteJob, useRetryJob } from "../api/hooks";
 import { ApiError } from "../api/client";
 import type { Job } from "../api/types";
-import { fmtElapsed } from "../format";
+import { fmtDateTime, fmtElapsed } from "../format";
 import { useToast } from "./Toast";
 import { JobStatusBadge } from "./JobStatusBadge";
 
@@ -41,6 +41,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
           <tr>
             <th>Type</th>
             <th>File</th>
+            <th>Date/Time</th>
             <th>Status</th>
             <th>Stage</th>
             <th>Progress</th>
@@ -52,7 +53,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
         <tbody>
           {jobs.length === 0 && (
             <tr>
-              <td className="empty" colSpan={8}>
+              <td className="empty" colSpan={9}>
                 No jobs.
               </td>
             </tr>
@@ -65,6 +66,9 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
               <td>{isSrt ? "SRT Translation" : "Video"}</td>
               <td className="file-cell" title={fileIdentity}>
                 {fileIdentity.split("/").pop()}
+              </td>
+              <td className="date-cell" title={fmtDateTime(job.created_at)}>
+                {fmtDateTime(job.created_at)}
               </td>
               <td>
                 <JobStatusBadge status={job.status} />

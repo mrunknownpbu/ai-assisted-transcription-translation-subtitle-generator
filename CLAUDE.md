@@ -15,7 +15,7 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-22: 694 passing, 1 pre-existing failure
+Baseline as of 2026-09-22: 707 passing, 1 pre-existing failure
 (`test_glossary_profile.py::RealGlossaryDataTests::test_loads_real_series_profile`
 -- a real-glossary-data assertion mismatch on `"Eda Yıldız"` vs the
 production glossary's current `"Eda"` canonical, unrelated to whatever

@@ -341,6 +341,17 @@ class JobStore:
         return self._row_to_dict(row) if row else None
 
     def list(self, status: str | None = None, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+        """`status`, if given, is matched case-insensitively against the
+        (always-lowercase) status column -- real bug this closes
+        (2026-09-22): the GUI's status-filter tabs send their own
+        UPPERCASE label ("RUNNING") straight through as the query param,
+        and a plain `WHERE status=?` exact match against that never hit
+        a row, so every tab but ALL silently showed zero jobs regardless
+        of how many actually had that status. counts() already
+        normalizes case for its own dict keys (`.upper()`); this does
+        the equivalent normalization on the way IN, so any caller's
+        casing works, not just this one now-fixed frontend call site."""
+        status = status.lower() if status else None
         with self._connect() as conn:
             if status:
                 total = conn.execute("SELECT COUNT(*) FROM jobs WHERE status=?", (status,)).fetchone()[0]

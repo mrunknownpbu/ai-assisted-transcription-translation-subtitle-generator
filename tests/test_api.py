@@ -207,6 +207,15 @@ class ListAndQueueTests(ApiTestCase):
         r = self.client.get("/api/jobs", params={"status": "running"})
         self.assertEqual(r.json()["total"], 0)
 
+    def test_status_filter_is_case_insensitive(self):
+        # Real bug (2026-09-22): the GUI's status tabs send an UPPERCASE
+        # label ("QUEUED") as this query param -- must match the same
+        # rows a lowercase filter would.
+        self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"})
+        lower = self.client.get("/api/jobs", params={"status": "queued"}).json()["total"]
+        upper = self.client.get("/api/jobs", params={"status": "QUEUED"}).json()["total"]
+        self.assertEqual((lower, upper), (1, 1))
+
 
 class GetJobTests(ApiTestCase):
     def test_get_existing_job(self):

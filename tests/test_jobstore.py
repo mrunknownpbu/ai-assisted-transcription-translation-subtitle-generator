@@ -25,6 +25,43 @@ class CreateAndGetTests(JobStoreTestCase):
         self.assertIsNone(self.store.get("does-not-exist"))
 
 
+class ListStatusFilterTests(JobStoreTestCase):
+    """Real bug this guards against (2026-09-22): the GUI's status-filter
+    tabs pass their own UPPERCASE label ("RUNNING") straight through as
+    the query param, and list() used to do a plain exact match against
+    the (always-lowercase) status column -- every tab but ALL silently
+    returned zero jobs, while the header's separately-computed counts()
+    (which already normalizes with .upper()) correctly showed non-zero
+    numbers, making the bug look like nothing was wrong server-side."""
+
+    def setUp(self):
+        super().setUp()
+        self.queued_job = self.store.create("Show/S01E01.mkv", "tr")
+        self.store.claim()  # the queued job above -> running
+
+    def test_lowercase_status_matches(self):
+        jobs, total = self.store.list(status="running")
+        self.assertEqual(total, 1)
+        self.assertEqual(jobs[0]["id"], self.queued_job["id"])
+
+    def test_uppercase_status_matches_the_same_way(self):
+        jobs, total = self.store.list(status="RUNNING")
+        self.assertEqual(total, 1)
+        self.assertEqual(jobs[0]["id"], self.queued_job["id"])
+
+    def test_mixed_case_status_matches(self):
+        jobs, total = self.store.list(status="RuNNing")
+        self.assertEqual(total, 1)
+
+    def test_unknown_status_returns_empty_not_an_error(self):
+        jobs, total = self.store.list(status="bogus")
+        self.assertEqual((jobs, total), ([], 0))
+
+    def test_no_status_returns_everything(self):
+        _, total = self.store.list(status=None)
+        self.assertEqual(total, 1)
+
+
 class LanguageModeDefaultsTests(JobStoreTestCase):
     def test_default_source_lang_is_auto(self):
         job = self.store.create("Show/S01E01.mkv")

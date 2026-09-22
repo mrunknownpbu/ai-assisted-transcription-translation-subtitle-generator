@@ -34,3 +34,19 @@ export function fmtPercent(confidence: number | null | undefined): string {
   if (confidence == null) return "—";
   return `${Math.round(confidence * 100)}%`;
 }
+
+// job.created_at etc. are Unix seconds (Python time.time()), matching
+// every other timestamp field this API returns -- *1000 for JS's
+// millisecond-based Date. Uses the viewer's own locale/timezone rather
+// than a fixed format, same convention as the browser's other
+// locale-formatted UI text.
+export function fmtDateTime(seconds: number | null | undefined): string {
+  if (!seconds) return "—";
+  return new Date(seconds * 1000).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
