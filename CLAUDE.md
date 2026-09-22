@@ -15,12 +15,13 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-23: 737 passing, 0 failures. (History: 708 after
+Baseline as of 2026-09-23: 757 passing, 0 failures. (History: 708 after
 fixing `test_glossary_profile.py`'s stale `"Eda Yıldız"` canonical
 assertion 2026-09-22 -- see `IMPROVEMENT_PLAN.md` section 1.1 -- then 727
-after the lightweight-sampler-model tests (section 2.1), then 737 after
-the VRAM pre-flight tests (section 2.2). Update this line rather than
-leaving it to drift the next time the count moves.)
+after the lightweight-sampler-model tests (section 2.1), 737 after the
+VRAM pre-flight tests (section 2.2), then 757 after the orphan-context-
+padding tests (section 3.2). Update this line rather than leaving it to
+drift the next time the count moves.)
 
 Frontend: `cd frontend && npx tsc --noEmit && npm test -- --run`.
 
@@ -93,21 +94,33 @@ Remote translate-server health: `curl http://<remote-host>:8091/health`.
   Love Is In The Air E01-E05 predate this and are still Title Case.
   `auto_glossary` mining of those Title Case files also polluted the
   suggestion list with ordinary words ("Anladım", "Buyurun").
-- **Known, not fixed: a source cue that's a single orphan word** (real
-  example, S01E01's closing song: a large internal word-timestamp gap
-  inside one Whisper segment split "Her" from "şey olur, her şey
-  biter", both `segmentation_source.py`'s MAX_GAP boundary and
-  `translate.build_context_spans()`'s REAL_ACOUSTIC_GAP handling then
-  correctly-by-design treat that as a real pause, so "Her" gets
-  translated alone with zero context and comes out as garbage ("out").
+- **Orphan single-word cue near a real acoustic gap: soft-context
+  grounding, not a segmentation change** (2026-09-23, IMPROVEMENT_PLAN.md
+  3.2). Real example, S01E01's closing song: a large internal word-
+  timestamp gap inside one Whisper segment split "Her" from "şey olur,
+  her şey biter", and `translate.build_context_spans()`'s
+  REAL_ACOUSTIC_GAP handling correctly-by-design refuses to MERGE across
+  that pause -- but translating "Her" with zero context produced garbage
+  ("out"). Deliberately NOT fixed by loosening REAL_ACOUSTIC_GAP handling
+  (see the historical reasoning below, still accurate): `transcript.py`'s
+  BoundaryReason/MERGEABLE_BOUNDARIES docstrings and `projection.py` both
+  depend on that boundary being trustworthy for coverage validation.
+  Instead, `translate._pad_orphan_context()` (a post-pass in
+  `translate_spans()`, toggle: `SUBTITLE_AI_ORPHAN_CONTEXT_PADDING`,
+  default on) detects a single-cue, single-word span adjacent to EXACTLY
+  ONE real-gap boundary, translates a short probe (the gap-side
+  neighbor's nearest cue, alone and padded with the orphan word), and
+  replaces the orphan's translation with the extracted residual ONLY when
+  `translate._strip_anchor_affix()` finds an exact word-for-word match
+  between the probe's anchor portion and that neighbor's own independent
+  translation -- segmentation/display boundaries are never touched, and
+  any non-exact match silently keeps today's (context-free) translation.
   Confirmed narrow in practice (not present in 20 minutes of ordinary
-  S01E01 dialogue checked by hand) -- concentrated in sung-lyric
-  sections where Whisper's word-level alignment is least reliable.
-  Deliberately NOT "fixed" by loosening REAL_ACOUSTIC_GAP handling:
-  `transcript.py`'s BoundaryReason/MERGEABLE_BOUNDARIES docstrings and
-  `projection.py` both depend on that boundary being trustworthy for
-  coverage validation, and loosening it needs its own scoped
-  investigation, not a quick patch alongside an unrelated ASR change.
+  S01E01 dialogue checked by hand) -- concentrated in sung-lyric sections
+  where Whisper's word-level alignment is least reliable -- so this pass
+  costs nothing on an ordinary job (zero orphans found -> zero extra
+  model calls) and the exact-match requirement means it only ever
+  improves a translation, never silently guesses one.
 - `SKIP_REMOTE=1 ./scripts/deploy.sh` is right for changes that don't
   touch `translate.py`/`translate_server.py` (API, worker, scratch
   cleanup); anything in those two files needs the full deploy.

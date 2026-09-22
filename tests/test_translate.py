@@ -7,8 +7,9 @@ import httpx
 from transcript import BoundaryReason, Segment, Word
 from glossary import Entity, build_glossary, protect
 from translate import (RemoteTranslationError, TranslationConfig,
-                       build_context_spans, remote_translate_batch,
-                       translate_spans, _chunk, _prefer_chunked)
+                       build_context_spans, orphan_context_padding_enabled,
+                       remote_translate_batch, translate_spans, _chunk,
+                       _find_orphan_spans, _prefer_chunked, _strip_anchor_affix)
 
 
 def cue(index, start, end, text, boundary=None):
@@ -488,6 +489,175 @@ class PreferChunkedTests(unittest.TestCase):
         original = "This was a really strange situation."
         chunked = "Everyone was surprised by this strange thing."
         self.assertFalse(_prefer_chunked(original, chunked, source_protected, self.glossary_map))
+
+
+class FindOrphanSpansTests(unittest.TestCase):
+    """IMPROVEMENT_PLAN.md 3.2 / CLAUDE.md's "Known, not fixed" note: a
+    single-word span isolated by a real acoustic gap gets zero context.
+    _find_orphan_spans() only ever flags a span gap-adjacent on EXACTLY
+    ONE side -- the gap side is where the real continuation is (see its
+    own docstring for the "Her"/"şey olur, her şey biter" example)."""
+
+    def test_gap_after_orphan_uses_the_next_span_as_context(self):
+        # The neighbor cue is deliberately multi-word (not itself a
+        # candidate orphan) so this test isolates the "Her" span's own
+        # classification, not an accidental second flag on its neighbor.
+        cues = [cue(0, 0.0, 1.0, "Her"),
+                cue(1, 5.0, 6.0, "seyler oluyor", boundary=BoundaryReason.REAL_ACOUSTIC_GAP)]
+        self.assertEqual(_find_orphan_spans(cues, [[0], [1]]), {0: (1, False)})
+
+    def test_gap_before_orphan_uses_the_previous_span_as_context(self):
+        cues = [cue(0, 0.0, 1.0, "context here"),
+                cue(1, 5.0, 6.0, "Her", boundary=BoundaryReason.REAL_ACOUSTIC_GAP)]
+        self.assertEqual(_find_orphan_spans(cues, [[0], [1]]), {1: (0, True)})
+
+    def test_gap_on_both_sides_is_ambiguous_and_skipped(self):
+        # Both neighbors are multi-word (never candidate orphans
+        # themselves), isolating "Her" as the only span under test.
+        cues = [cue(0, 0.0, 1.0, "context one"),
+                cue(1, 5.0, 6.0, "Her", boundary=BoundaryReason.REAL_ACOUSTIC_GAP),
+                cue(2, 10.0, 11.0, "context two", boundary=BoundaryReason.REAL_ACOUSTIC_GAP)]
+        self.assertEqual(_find_orphan_spans(cues, [[0], [1], [2]]), {})
+
+    def test_no_gap_on_either_side_is_not_an_orphan(self):
+        cues = [cue(0, 0.0, 1.0, "a"), cue(1, 1.2, 2.0, "Her"), cue(2, 2.2, 3.0, "b")]
+        self.assertEqual(_find_orphan_spans(cues, [[0], [1], [2]]), {})
+
+    def test_multi_word_span_is_never_flagged_even_if_gap_adjacent(self):
+        cues = [cue(0, 0.0, 1.0, "Her seyler"),
+                cue(1, 5.0, 6.0, "devam ediyor", boundary=BoundaryReason.REAL_ACOUSTIC_GAP)]
+        self.assertEqual(_find_orphan_spans(cues, [[0], [1]]), {})
+
+    def test_gap_before_the_very_first_span_has_no_previous_neighbor(self):
+        cues = [cue(0, 0.0, 1.0, "Her", boundary=BoundaryReason.REAL_ACOUSTIC_GAP)]
+        self.assertEqual(_find_orphan_spans(cues, [[0]]), {})
+
+
+class StripAnchorAffixTests(unittest.TestCase):
+    def test_context_before_strips_the_leading_anchor_words(self):
+        self.assertEqual(
+            _strip_anchor_affix("cats are cute dogs too", "cats are cute", context_before=True),
+            "dogs too")
+
+    def test_context_after_strips_the_trailing_anchor_words(self):
+        self.assertEqual(
+            _strip_anchor_affix("dogs too cats are cute", "cats are cute", context_before=False),
+            "dogs too")
+
+    def test_case_and_punctuation_insensitive_match(self):
+        self.assertEqual(
+            _strip_anchor_affix("Dogs cats are cute.", "cats are cute", context_before=False),
+            "Dogs")
+
+    def test_mismatched_affix_returns_none(self):
+        self.assertIsNone(
+            _strip_anchor_affix("the dogs are loud", "cats are cute", context_before=False))
+
+    def test_no_residual_beyond_the_anchor_returns_none(self):
+        # Padded translation is the SAME length as the anchor -- nothing
+        # distinguishable was actually added, e.g. NLLB just re-cased a
+        # word instead of translating a genuinely new one.
+        self.assertIsNone(
+            _strip_anchor_affix("cats are cute", "cats are cute", context_before=False))
+
+    def test_empty_anchor_translation_returns_none(self):
+        self.assertIsNone(_strip_anchor_affix("dogs cats", "", context_before=False))
+
+
+class PadOrphanContextIntegrationTests(unittest.TestCase):
+    """translate_spans() end-to-end: an orphan word translated alone
+    ("Dogs" -> "out", standing in for the real "Her" -> "out" defect)
+    gets replaced by a context-grounded candidate extracted from a small
+    probe translation, without touching the neighbor span's own result."""
+
+    TRANSLATIONS = {
+        "Dogs": "out",
+        "Cats are cute.": "cats are cute.",
+        "Dogs Cats are cute.": "dogs cats are cute.",
+    }
+
+    def _fake_translate_batch(self, model, tok, bos, sentences, device, config,
+                              batch_size=12, on_progress=None):
+        return [self.TRANSLATIONS[s] for s in sentences]
+
+    def test_orphan_gets_replaced_with_grounded_translation(self):
+        cues = [cue(0, 0.0, 1.0, "Dogs"),
+                cue(1, 5.0, 6.0, "Cats are cute.", boundary=BoundaryReason.REAL_ACOUSTIC_GAP)]
+        spans = build_context_spans(cues)
+        self.assertEqual(spans, [[0], [1]])  # sanity: real gap forces the split
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", side_effect=self._fake_translate_batch):
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(result, ["dogs", "cats are cute."])
+
+    def test_neighbor_spans_own_translation_is_never_altered(self):
+        cues = [cue(0, 0.0, 1.0, "Dogs"),
+                cue(1, 5.0, 6.0, "Cats are cute.", boundary=BoundaryReason.REAL_ACOUSTIC_GAP)]
+        spans = build_context_spans(cues)
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", side_effect=self._fake_translate_batch):
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(result[1], "cats are cute.")
+
+    def test_no_orphans_costs_zero_extra_translate_batch_calls(self):
+        """The common case (no isolated single-word span next to a real
+        gap) must add no extra model calls -- this is a rare-case pass,
+        not overhead on every job."""
+        cues = [cue(0, 0.0, 1.0, "Eda neredesin")]
+        spans = build_context_spans(cues)
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", return_value=["Eda where are you"]) as mock_batch:
+            translate_spans(cues, spans, "tr")
+        mock_batch.assert_called_once()
+
+    def test_failed_extraction_falls_back_to_the_original_translation(self):
+        """A padded probe whose translation doesn't cleanly contain the
+        anchor's own wording must never silently invent a replacement --
+        the orphan keeps its original (today's) translation."""
+        cues = [cue(0, 0.0, 1.0, "Dogs"),
+                cue(1, 5.0, 6.0, "Cats are cute.", boundary=BoundaryReason.REAL_ACOUSTIC_GAP)]
+        spans = build_context_spans(cues)
+        translations = dict(self.TRANSLATIONS)
+        translations["Dogs Cats are cute."] = "completely different wording"
+
+        def fake_batch(model, tok, bos, sentences, device, config, batch_size=12, on_progress=None):
+            return [translations[s] for s in sentences]
+
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", side_effect=fake_batch):
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(result[0], "out")   # unchanged from the ungrounded translation
+
+    def test_disabled_via_env_var_skips_the_padding_pass_entirely(self):
+        import os
+        cues = [cue(0, 0.0, 1.0, "Dogs"),
+                cue(1, 5.0, 6.0, "Cats are cute.", boundary=BoundaryReason.REAL_ACOUSTIC_GAP)]
+        spans = build_context_spans(cues)
+        with patch.dict(os.environ, {"SUBTITLE_AI_ORPHAN_CONTEXT_PADDING": "off"}), \
+             patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch", side_effect=self._fake_translate_batch) as mock_batch:
+            result = translate_spans(cues, spans, "tr")
+        self.assertEqual(result[0], "out")   # padding pass never ran
+        mock_batch.assert_called_once()      # only the main batch, no probe
+
+
+class OrphanContextPaddingEnabledTests(unittest.TestCase):
+    def test_on_by_default(self):
+        import os
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SUBTITLE_AI_ORPHAN_CONTEXT_PADDING", None)
+            self.assertTrue(orphan_context_padding_enabled())
+
+    def test_off_values(self):
+        import os
+        for v in ("off", "OFF", "0", "false", "No"):
+            with patch.dict(os.environ, {"SUBTITLE_AI_ORPHAN_CONTEXT_PADDING": v}):
+                self.assertFalse(orphan_context_padding_enabled(), v)
+
+    def test_anything_else_stays_enabled(self):
+        import os
+        with patch.dict(os.environ, {"SUBTITLE_AI_ORPHAN_CONTEXT_PADDING": "on"}):
+            self.assertTrue(orphan_context_padding_enabled())
 
 
 if __name__ == "__main__":

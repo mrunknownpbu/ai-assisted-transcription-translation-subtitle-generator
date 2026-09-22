@@ -364,6 +364,160 @@ def translate_batch(model, tok, bos: int, sentences: list[str], device: str,
     return out
 
 
+# Kept in sync with build_context_spans()'s own default -- both need the
+# same notion of "a real pause, not just a display convenience" (see
+# BoundaryReason's docstring). Not threaded through as a shared parameter
+# since nothing in this codebase currently overrides either default.
+_REAL_BOUNDARIES_FOR_CONTEXT = frozenset({BoundaryReason.REAL_ACOUSTIC_GAP, BoundaryReason.UTTERANCE_END})
+_AFFIX_STRIP_CHARS = ".,!?…\"'“”‘’"
+
+
+def orphan_context_padding_enabled() -> bool:
+    """SUBTITLE_AI_ORPHAN_CONTEXT_PADDING=off|0|false|no disables the
+    isolated-single-word soft-context grounding pass in translate_spans()
+    (see _pad_orphan_context()'s docstring). On by default -- unlike ASR
+    hotwords (asr.hotwords_enabled(), off by default), this is safe-by-
+    construction: it only ever replaces a translation with a grounded
+    candidate when a strict word-for-word diff against an independently-
+    translated anchor succeeds, and always falls back to today's
+    unchanged translation otherwise. The toggle exists so a real
+    production regression can be turned off with an env var change, not
+    a code revert -- this specific area (orphan words near a real
+    acoustic gap) has already been flagged once before as needing its
+    own scoped investigation rather than a quick patch (see CLAUDE.md)."""
+    import os
+    return os.environ.get("SUBTITLE_AI_ORPHAN_CONTEXT_PADDING", "").strip().lower() not in {
+        "off", "0", "false", "no"}
+
+
+def _find_orphan_spans(cues: list[Segment], spans: list[list[int]]) -> dict[int, tuple[int, bool]]:
+    """Maps span index -> (context_span_index, context_before) for every
+    single-cue, single-word span immediately adjacent to EXACTLY ONE real
+    acoustic-gap boundary.
+
+    Real example this targets (S01E01's closing song, see CLAUDE.md's
+    "Known, not fixed" note): a mid-song timestamp gap split "Her" from
+    its own continuation "şey olur, her şey biter" -- together, one
+    sentence ("Her şey olur, her şey biter" = "Everything happens,
+    everything ends"). The gap is real -- build_context_spans() is
+    correct not to MERGE across it for display purposes -- but the two
+    sides are still one sentence, so the span on the gap's far side (not
+    the near side) is the useful grounding context; context_before tells
+    the caller which side that is: True means the adjacent span used for
+    context comes immediately BEFORE this orphan (the gap is between the
+    orphan and whatever came earlier), False means immediately AFTER.
+
+    A span gap-adjacent on BOTH sides (isolated between two real gaps) is
+    deliberately skipped -- which neighbor is the real continuation is
+    ambiguous, and this codebase's own precedent (_prefer_chunked's
+    docstring: "Ties... keep the original... never regresses silently on
+    a guess") is to never guess when there's no confident signal."""
+    orphans: dict[int, tuple[int, bool]] = {}
+    for i, span in enumerate(spans):
+        if len(span) != 1:
+            continue
+        cue = cues[span[0]]
+        if len(cue.text.strip().split()) != 1:
+            continue
+        gap_before = cue.boundary_before in _REAL_BOUNDARIES_FOR_CONTEXT
+        gap_after = (i + 1 < len(spans)
+                    and cues[spans[i + 1][0]].boundary_before in _REAL_BOUNDARIES_FOR_CONTEXT)
+        if gap_before and not gap_after and i > 0:
+            orphans[i] = (i - 1, True)
+        elif gap_after and not gap_before and i + 1 < len(spans):
+            orphans[i] = (i + 1, False)
+    return orphans
+
+
+def _strip_anchor_affix(padded_translation: str, anchor_translation: str, *,
+                        context_before: bool) -> str | None:
+    """Strips the words of `anchor_translation` from the front
+    (context_before) or back of `padded_translation`, returning just the
+    residual -- the orphan word's own grounded translation. Returns None
+    (caller keeps the original, ungrounded translation) unless the
+    matching slice of `padded_translation` equals `anchor_translation`
+    word-for-word (case/punctuation-insensitive): NLLB is not guaranteed
+    to reproduce the anchor's exact wording once it has more context to
+    work with, and a wrong extraction would be worse than the status quo
+    -- this never guesses past an exact match."""
+    padded_words = padded_translation.split()
+    anchor_words = anchor_translation.split()
+    if not anchor_words or len(padded_words) <= len(anchor_words):
+        return None
+    if context_before:
+        candidate, residual = padded_words[:len(anchor_words)], padded_words[len(anchor_words):]
+    else:
+        candidate, residual = padded_words[-len(anchor_words):], padded_words[:-len(anchor_words)]
+
+    def _normalize(words: list[str]) -> list[str]:
+        return [w.lower().strip(_AFFIX_STRIP_CHARS) for w in words]
+
+    if _normalize(candidate) != _normalize(anchor_words):
+        return None
+    residual_text = " ".join(residual).strip()
+    return residual_text or None
+
+
+def _pad_orphan_context(cues: list[Segment], spans: list[list[int]], result: list[str], src_lang: str,
+                        glossary_map: dict[str, tuple[str, str]] | None,
+                        phrase_map: dict[str, str] | None, config: TranslationConfig | None,
+                        model, tok, bos, remote_url: str | None) -> list[str]:
+    """Post-pass over translate_spans()'s own `result`: for each span
+    _find_orphan_spans() flags, translates a short 2-sentence probe (the
+    neighbor span's nearest cue alone, and that same text padded with the
+    orphan word) and, when _strip_anchor_affix() can cleanly isolate the
+    orphan's own portion, replaces result[i] with it. Purely additive --
+    never merges spans, never changes segmentation (each span's own
+    result[i] slot is the only thing ever written), and falls back to
+    today's translation whenever the extraction isn't exact.
+
+    Uses the CLOSEST SINGLE CUE of the neighbor span (not the whole
+    span's joined text) as the anchor -- deliberately short and likely to
+    be one clean sentence, unlike the full context span (up to
+    MAX_SPAN_CUES cues) which may itself have gone through dash-line/
+    multi-sentence expansion inside translate_spans() and so would not
+    exactly match a single fresh probe translation.
+
+    Reuses _translate_sentences() (not the lower-level translate_batch())
+    so the probe gets the same glossary protect()/restore() and
+    phrase_map treatment as every other sentence -- an orphan word or its
+    anchor can itself mention a protected name. In the rare case this
+    runs against the pure local-NLLB fallback (no remote translate-server
+    configured, no model pre-loaded) it costs one extra model load/free
+    beyond the main batch -- accepted: orphan spans are rare by design
+    (real-world evidence: none found in 20 minutes of ordinary S01E01
+    dialogue, concentrated instead in sung-lyric sections -- see
+    CLAUDE.md), so this never fires on an ordinary job. `on_progress` is
+    deliberately not threaded through here, matching _apply_chunk_retry's
+    own precedent -- this is an invisible correctness refinement, not
+    part of the visible translation-progress count."""
+    orphans = _find_orphan_spans(cues, spans)
+    if not orphans:
+        return result
+    probe_sentences: list[str] = []
+    order: list[int] = []
+    for i, (context_idx, context_before) in orphans.items():
+        context_span = spans[context_idx]
+        anchor_cue = cues[context_span[-1] if context_before else context_span[0]]
+        orphan_word = cues[spans[i][0]].text
+        padded_text = (f"{anchor_cue.text} {orphan_word}" if context_before
+                      else f"{orphan_word} {anchor_cue.text}")
+        probe_sentences.extend([anchor_cue.text, padded_text])
+        order.append(i)
+    probe_translations = _translate_sentences(probe_sentences, src_lang, glossary_map=glossary_map,
+                                              phrase_map=phrase_map, config=config, model=model,
+                                              tok=tok, bos=bos, remote_url=remote_url)
+    result = list(result)
+    for slot, i in enumerate(order):
+        anchor_translation = probe_translations[slot * 2]
+        padded_translation = probe_translations[slot * 2 + 1]
+        _, context_before = orphans[i]
+        extracted = _strip_anchor_affix(padded_translation, anchor_translation, context_before=context_before)
+        if extracted:
+            result[i] = extracted
+    return result
+
+
 def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
                     glossary_map: dict[str, tuple[str, str]] | None = None,
                     phrase_map: dict[str, str] | None = None,
@@ -392,7 +546,14 @@ def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
     list of exactly itself. The two expansions nest (sentence -> dash-line
     -> atomic sentence) and are rejoined in the same order: sentences
     within a line with a plain space, lines within a span via
-    join_multi_speaker_dash_lines()."""
+    join_multi_speaker_dash_lines().
+
+    Finally, _pad_orphan_context() (skippable via
+    orphan_context_padding_enabled()) replaces any single-cue, single-word
+    span translated in complete isolation next to a real acoustic gap
+    with a context-grounded candidate, when one can be extracted with
+    confidence -- see that function's docstring for the real "Her"/
+    "out" defect this targets."""
     sentences = [" ".join(cues[i].text for i in span) for span in spans]
     dash_groups = [split_multi_speaker_dash_lines(s) or [s] for s in sentences]
     nested = [[split_into_sentences(line) or [line] for line in group] for group in dash_groups]
@@ -412,6 +573,9 @@ def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
             cursor += n
             lines.append(" ".join(piece))
         result.append(join_multi_speaker_dash_lines(lines) if len(lines) > 1 else lines[0])
+    if orphan_context_padding_enabled():
+        result = _pad_orphan_context(cues, spans, result, src_lang, glossary_map, phrase_map,
+                                     config, model, tok, bos, remote_url)
     return result
 
 
