@@ -357,6 +357,18 @@ class SrtTranslationApiTests(MediaRootApiTestCase):
         self.assertEqual(job["destination_srt_path"], "Show/S01E01.en.srt")
         self.assertEqual(job["video_path"], "Show/S01E01.mkv")
         self.assertFalse(job["source_is_uploaded"])
+        self.assertFalse(job["overwrite_original"])
+        self.assertFalse(job["overwrite_english"])
+
+    def test_overwrite_original_defaults_false_and_is_settable(self):
+        # Governs whether the original-language SIBLING file this job
+        # also writes alongside the video (worker.py's
+        # _process_srt_translation) replaces an existing one -- distinct
+        # from overwrite_english, which governs only the translated
+        # output.
+        r = self.client.post("/api/srt-translations", json=self._body(overwrite_original=True))
+        self.assertEqual(r.status_code, 201)
+        self.assertTrue(r.json()["job"]["overwrite_original"])
 
     def test_tvdb_id_derived_from_required_video_path(self):
         series_dir = self.root / "Series {tvdb-777}"

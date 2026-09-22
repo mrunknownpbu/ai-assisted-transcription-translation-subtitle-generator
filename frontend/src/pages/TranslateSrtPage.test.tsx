@@ -87,6 +87,7 @@ describe("TranslateSrtPage", () => {
     expect(screen.getByText("Browse library")).toBeInTheDocument();
     expect(screen.getByText("Upload from this computer")).toBeInTheDocument();
     expect(screen.queryByText("English subtitle already exists")).not.toBeInTheDocument();
+    expect(screen.queryByText("Original-language subtitle already exists")).not.toBeInTheDocument();
   });
 
   it("shows the overwrite control only when an English subtitle already exists", async () => {
@@ -95,6 +96,23 @@ describe("TranslateSrtPage", () => {
     await waitFor(() => screen.getByText(/S01E01\.mkv/));
     fireEvent.click(screen.getByText(/S01E01\.mkv/));
     expect(await screen.findByText("English subtitle already exists")).toBeInTheDocument();
+  });
+
+  it("shows the original-language overwrite control when a non-English subtitle already exists", async () => {
+    existingSubtitles = ["S01E01.tr.srt"];
+    renderPage();
+    await waitFor(() => screen.getByText(/S01E01\.mkv/));
+    fireEvent.click(screen.getByText(/S01E01\.mkv/));
+    expect(await screen.findByText("Original-language subtitle already exists")).toBeInTheDocument();
+  });
+
+  it("does not treat a protected English variant as an original-language subtitle", async () => {
+    existingSubtitles = ["S01E01.en.hi.srt"];
+    renderPage();
+    await waitFor(() => screen.getByText(/S01E01\.mkv/));
+    fireEvent.click(screen.getByText(/S01E01\.mkv/));
+    await screen.findByText("Browse library");
+    expect(screen.queryByText("Original-language subtitle already exists")).not.toBeInTheDocument();
   });
 
   it("submits video_path + source_srt_path when a library file is selected", async () => {
@@ -113,6 +131,24 @@ describe("TranslateSrtPage", () => {
     expect(body.video_path).toBe("S01E01.mkv");
     expect(body.source_srt_path).toBe("ep.tr.srt");
     expect(body.source_upload_id).toBeUndefined();
+    expect(body.overwrite_original).toBe(false);
+  });
+
+  it("toggling the original-language overwrite control to Replace sends overwrite_original: true", async () => {
+    existingSubtitles = ["S01E01.tr.srt"];
+    renderPage();
+    await waitFor(() => screen.getByText(/S01E01\.mkv/));
+    fireEvent.click(screen.getByText(/S01E01\.mkv/));
+    await waitFor(() => screen.getByText(/ep\.tr\.srt/));
+    fireEvent.click(screen.getByText(/ep\.tr\.srt/));
+
+    const select = await screen.findByLabelText("Original-language subtitle already exists");
+    fireEvent.change(select, { target: { value: "replace" } });
+
+    fireEvent.click(await screen.findByText("Translate"));
+    await waitFor(() => expect(findRequest(fetchMock, "/api/srt-translations")).toBeTruthy());
+    const body = JSON.parse(findRequest(fetchMock, "/api/srt-translations")!.body as string);
+    expect(body.overwrite_original).toBe(true);
   });
 
   it("uploading a file and submitting sends source_upload_id instead", async () => {

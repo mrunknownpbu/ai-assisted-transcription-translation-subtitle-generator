@@ -608,6 +608,7 @@ class SrtTranslationJobCreationTests(JobStoreTestCase):
         self.assertEqual(job["source_lang"], "auto")
         self.assertEqual(job["target_lang"], "en")
         self.assertFalse(job["overwrite_english"])
+        self.assertFalse(job["overwrite_original"])
 
     def test_video_jobs_default_to_job_type_video(self):
         job = self.store.create("Show/S01E01.mkv", "tr")
@@ -715,3 +716,39 @@ class SrtTranslationJobCreationTests(JobStoreTestCase):
         self.store.finish(claimed["id"], "failed")
         retried = self.store.retry(claimed["id"])
         self.assertFalse(retried["source_is_uploaded"])
+
+    def test_overwrite_original_persists_when_true(self):
+        # Governs the original-language SIBLING file worker.py also
+        # writes alongside the video (source_srt_path's own content,
+        # e.g. an uploaded human-made .srt, committed as that episode's
+        # own <stem>.<lang>.srt) -- independent of overwrite_english.
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "out/ep.en.srt", video_path="Show/S01E01.mkv",
+            overwrite_original=True)
+        self.assertTrue(job["overwrite_original"])
+        self.assertTrue(self.store.get(job["id"])["overwrite_original"])
+
+    def test_retry_of_srt_translation_job_inherits_overwrite_original(self):
+        # Real bug this guards against (2026-09-22): retry() computed the
+        # inherited/overridden overwrite_original value but never passed
+        # it to create_srt_translation(), so every srt_translation retry
+        # silently reset it to the schema default (False) regardless of
+        # the original job's own flag or an explicit override -- the
+        # exact failure mode the video-job path's docstring already
+        # warns about.
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "out/ep.en.srt", video_path="Show/S01E01.mkv",
+            overwrite_original=True)
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"])
+        self.assertTrue(retried["overwrite_original"])
+
+    def test_retry_can_explicitly_override_overwrite_original(self):
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "out/ep.en.srt", video_path="Show/S01E01.mkv",
+            overwrite_original=True)
+        claimed = self.store.claim()
+        self.store.finish(claimed["id"], "failed")
+        retried = self.store.retry(claimed["id"], overwrite_original=False)
+        self.assertFalse(retried["overwrite_original"])

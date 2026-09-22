@@ -18,12 +18,18 @@ subtitles unusable in practice: hallucinated text and mistimed lines.
   → ASR → translation → English subtitle. Audio is the sole source of
   truth here; no subtitle file is ever read as transcription input.
 - **Workflow B — subtitle translation**: an existing original-language
-  `.srt` (e.g. a downloaded fansub) → translation → English subtitle. No
-  ASR, no audio extraction -- the uploaded/selected `.srt` is already the
-  transcription, and is never treated as though it came from ASR. Started
-  from the "Translate Subtitle" page, it reuses the same translation
-  engine, glossary, GPU lock, and job queue as Workflow A, but is a
-  structurally separate pipeline (`srt_translation.py`).
+  `.srt` (e.g. a downloaded fansub, or a human-made subtitle) →
+  translation → English subtitle. No ASR, no audio extraction -- the
+  uploaded/selected `.srt` is already the transcription, and is never
+  treated as though it came from ASR. Started from the "Translate
+  Subtitle" page, it reuses the same translation engine, glossary, GPU
+  lock, and job queue as Workflow A, but is a structurally separate
+  pipeline (`srt_translation.py`). The source `.srt` is also committed to
+  the library as that episode's own original-language subtitle (same
+  sibling-pair shape a transcription job produces, e.g. `S01E01.tr.srt`
+  + `S01E01.en.srt`) -- `overwrite_original` controls whether an existing
+  one there is kept or replaced, independent of `overwrite_english` for
+  the translated output.
 
 ## Pipeline
 

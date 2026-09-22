@@ -11,6 +11,14 @@ type SourceSelection =
   | { mode: "upload"; uploadId: string; filename: string }
   | null;
 
+// English-only suffixes (the translation target itself, plus the
+// protected hearing-impaired/forced/SDH variants output.PROTECTED_SUFFIXES
+// never touches) -- anything else in existing_subtitles for this video is
+// an original-language file. DISPLAY ONLY: the server independently
+// derives the real destination from the detected source language and
+// enforces PROTECTED_SUFFIXES regardless of anything computed here.
+const ENGLISH_SUBTITLE_SUFFIXES = [".en.srt", ".en.hi.srt", ".en.forced.srt", ".en.sdh.srt"];
+
 function computeDestination(videoPath: string): string {
   // Mirrors output.resolve_output_path()'s naming exactly: <video stem>.en.srt
   // beside the video. This is DISPLAY ONLY -- the server independently
@@ -29,6 +37,7 @@ export function TranslateSrtPage() {
   const [source, setSource] = useState<SourceSelection>(null);
   const [sourceTab, setSourceTab] = useState<"library" | "upload">("library");
   const [sourceLang, setSourceLang] = useState("auto");
+  const [overwriteOriginal, setOverwriteOriginal] = useState(false);
   const [overwriteEnglish, setOverwriteEnglish] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -40,6 +49,7 @@ export function TranslateSrtPage() {
   const selectVideo = (path: string) => {
     setVideoPath(path);
     setSource(null);
+    setOverwriteOriginal(false);
     setOverwriteEnglish(false);
   };
 
@@ -58,7 +68,11 @@ export function TranslateSrtPage() {
     });
   };
 
-  const existingEnglish = (media.data?.existing_subtitles ?? []).some((p) => p.endsWith(".en.srt"));
+  const existingSubtitles = media.data?.existing_subtitles ?? [];
+  const existingEnglish = existingSubtitles.some((p) => p.endsWith(".en.srt"));
+  const existingOriginal = existingSubtitles.some(
+    (p) => !ENGLISH_SUBTITLE_SUFFIXES.some((suffix) => p.endsWith(suffix)),
+  );
   const destinationPreview = videoPath ? computeDestination(videoPath) : "";
 
   const submit = () => {
@@ -70,6 +84,7 @@ export function TranslateSrtPage() {
           ? { source_srt_path: source.path }
           : { source_upload_id: source.uploadId }),
         source_lang: sourceLang,
+        overwrite_original: overwriteOriginal,
         overwrite_english: overwriteEnglish,
       },
       {
@@ -123,6 +138,23 @@ export function TranslateSrtPage() {
 
             <div className="panel-head">
               <h2>Original-language subtitle</h2>
+            </div>
+            {existingOriginal && (
+              <label className="existing-row">
+                Original-language subtitle already exists
+                <select
+                  value={overwriteOriginal ? "replace" : "keep"}
+                  onChange={(e) => setOverwriteOriginal(e.target.value === "replace")}
+                >
+                  <option value="keep">Keep</option>
+                  <option value="replace">Replace</option>
+                </select>
+              </label>
+            )}
+            <div className="selection-empty">
+              The source you pick below is also committed to the library as this
+              episode's own original-language subtitle (alongside the English
+              translation), same as a transcription job's output.
             </div>
             <div className="nav" role="tablist">
               <button

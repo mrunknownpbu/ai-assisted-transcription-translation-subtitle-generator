@@ -244,6 +244,11 @@ export interface SrtTranslationRequest {
   source_upload_id?: string | null;
   source_lang?: string;
   target_lang?: string;
+  // Governs the original-language SIBLING file this job also writes
+  // beside the video (source_srt_path's own content committed as that
+  // episode's own <stem>.<lang>.srt) -- independent of overwrite_english,
+  // which governs only the translated output.
+  overwrite_original?: boolean;
   overwrite_english?: boolean;
 }
 

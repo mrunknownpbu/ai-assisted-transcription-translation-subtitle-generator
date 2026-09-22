@@ -211,6 +211,16 @@ class SrtTranslationRequest(BaseModel):
     target_lang: str = TARGET_LANG
 
     _check_target_lang = field_validator("target_lang")(_require_english_target)
+    # Governs the original-language SIBLING file this job also writes
+    # alongside the video (see worker.py's _process_srt_translation and
+    # srt_translation.py's SrtTranslationResult.source_language_srt_path)
+    # -- e.g. an uploaded/library-selected human-made .srt becomes that
+    # episode's own <video stem>.<lang>.srt in the library, same as a
+    # video job's ASR transcript does. False (default) keeps whatever
+    # already exists there untouched; True replaces it with this job's
+    # source text. Independent of overwrite_english, which governs only
+    # the translated output.
+    overwrite_original: bool = False
     overwrite_english: bool = False
 
 
@@ -526,7 +536,8 @@ def create_srt_translation_job(request: SrtTranslationRequest) -> dict:
         job = get_store().create_srt_translation(
             str(source.relative_to(source_root)), str(destination.relative_to(media_root)),
             source_lang=request.source_lang, target_lang=TARGET_LANG,
-            video_path=str(video.relative_to(media_root)), overwrite_english=request.overwrite_english,
+            video_path=str(video.relative_to(media_root)),
+            overwrite_original=request.overwrite_original, overwrite_english=request.overwrite_english,
             source_is_uploaded=source_is_uploaded)
     except JobStoreError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

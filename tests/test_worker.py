@@ -595,6 +595,29 @@ class SrtTranslationWorkerTests(SrtTranslationWorkerTestCase):
             (self.media_root / "Show" / "S01E01.tr.srt").read_text(encoding="utf-8"), "stale")
         self.assertEqual(len(final["outputs"]), 1)  # only the English output committed
 
+    def test_source_language_sibling_respects_overwrite_original_replace(self):
+        # The other half of test_..._keep above -- now that
+        # create_srt_translation() actually threads overwrite_original
+        # through (it used to silently drop it), this is a real,
+        # reachable "replace" path, e.g. re-uploading a corrected
+        # human-made subtitle over a previous ASR-derived one.
+        (self.media_root / "Show" / "S01E01.tr.srt").write_text("stale", encoding="utf-8")
+        job = self.store.create_srt_translation(
+            "in/ep.tr.srt", "Show/S01E01.en.srt", video_path="Show/S01E01.mkv",
+            overwrite_original=True)
+        self.assertTrue(job["overwrite_original"])
+        with patch.object(worker_mod.srt_translation, "run_srt_translation_pipeline") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_srt_result(
+                Path(kw["work_dir"]), with_source_language_copy=True)
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["status"], "completed")
+        self.assertEqual(
+            (self.media_root / "Show" / "S01E01.tr.srt").read_text(encoding="utf-8"),
+            "1\n00:00:00,000 --> 00:00:01,000\nMerhaba\n")
+        self.assertEqual(len(final["outputs"]), 2)  # both siblings committed
+
     def test_refreshes_glossary_suggestions_for_srt_translation_jobs(self):
         job = self.store.create_srt_translation(
             "in/ep.tr.srt", "Show/S01E01.en.srt", video_path="Show/S01E01.mkv")

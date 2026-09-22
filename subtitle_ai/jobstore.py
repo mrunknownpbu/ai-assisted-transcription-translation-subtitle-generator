@@ -280,7 +280,8 @@ class JobStore:
 
     def create_srt_translation(self, source_srt_path: str, destination_srt_path: str, *,
                                source_lang: str | None = "auto", target_lang: str = "en",
-                               video_path: str | None = None, overwrite_english: bool = False,
+                               video_path: str | None = None, overwrite_original: bool = False,
+                               overwrite_english: bool = False,
                                source_is_uploaded: bool = False,
                                retry_of_job_id: str | None = None, attempt: int = 1) -> dict:
         """A job that translates an already-transcribed original-language
@@ -294,10 +295,16 @@ class JobStore:
         say "no value".
 
         Deliberately reuses target_lang/overwrite_english/tvdb_id exactly
-        as video jobs do; overwrite_original and every audio-stream field
-        stay at their schema defaults, unused, since there is no
-        "original" audio track being kept or replaced here -- only ever
-        one output file, destination_srt_path.
+        as video jobs do. overwrite_original is NOT unused here (an
+        earlier version of this docstring claimed it was, before
+        worker.py grew the original-language-sibling write it now gates
+        -- see _process_srt_translation): when `video_path` is given, the
+        job also writes source_srt_path's own content back out as that
+        episode's <video stem>.<detected lang>.srt in the library (the
+        same sibling-pair shape a video/ASR job produces), and this flag
+        decides whether an existing file there is kept or replaced. Every
+        audio-stream field still stays at its schema default, unused --
+        there is genuinely no audio track in this workflow.
 
         Duplicate-active-job check is scoped to job_type='srt_translation'
         and keyed on destination_srt_path (not video_path, which two
@@ -320,7 +327,7 @@ class JobStore:
                              video_path=video_path or "", source_lang=source_lang,
                              target_lang=target_lang, source_language_mode=source_language_mode,
                              requested_audio_stream=None, stream_selection_mode="AUTO",
-                             overwrite_original=False, overwrite_english=overwrite_english,
+                             overwrite_original=overwrite_original, overwrite_english=overwrite_english,
                              created_at=now, updated_at=now, retry_of_job_id=retry_of_job_id,
                              attempt=attempt, tvdb_id=tvdb_id, source_srt_path=source_srt_path,
                              destination_srt_path=destination_srt_path,
@@ -550,7 +557,8 @@ class JobStore:
                 original["source_srt_path"], _english_destination(original),
                 source_lang=source_lang or original["source_lang"],
                 target_lang=TARGET_LANG,
-                video_path=original["video_path"] or None, overwrite_english=overwrite_english,
+                video_path=original["video_path"] or None,
+                overwrite_original=overwrite_original, overwrite_english=overwrite_english,
                 source_is_uploaded=original["source_is_uploaded"],
                 retry_of_job_id=job_id, attempt=original["attempt"] + 1)
         stream_override = (original.get("requested_audio_stream") if audio_stream_index == "unset"
