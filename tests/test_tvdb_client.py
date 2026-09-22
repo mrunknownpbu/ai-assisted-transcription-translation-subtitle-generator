@@ -59,10 +59,6 @@ class NoCredentialsTests(TvdbClientTestCase):
         tvdb_client.API_KEY = None
         self.assertIsNone(tvdb_client.episode(383383, 1, 1))
 
-    def test_characters_returns_empty_list_without_api_key(self):
-        tvdb_client.API_KEY = None
-        self.assertEqual(tvdb_client.characters(383383), [])
-
     def test_no_network_call_is_attempted_without_a_key(self):
         tvdb_client.API_KEY = None
         with patch("tvdb_client.httpx.post") as post, patch("tvdb_client.httpx.get") as get:

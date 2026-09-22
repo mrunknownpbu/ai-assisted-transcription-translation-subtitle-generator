@@ -160,13 +160,15 @@ def episode(tvdb_id: int, season: int, episode_number: int,
     return None
 
 
-def characters(tvdb_id: int) -> list[dict]:
-    """Cast/character records where TheTVDB has them. Used only to seed or
-    enrich the local series entity glossary -- never the sole source, since
-    TVDB does not reliably carry local nicknames like "Melo" -> "Melek
-    Yucel"; those stay in the local glossary YAML."""
-    data = series(tvdb_id)
-    if not data:
-        return []
-    cast = data.get("characters")
-    return cast if isinstance(cast, list) else []
+# A characters()/cast-list function used to live here, for seeding or
+# enriching the series entity glossary from TVDB's cast records. Removed
+# 2026-09-23 (IMPROVEMENT_PLAN.md 3.3) as confirmed dead code: it had no
+# application caller (only its own unit test exercised it), and no
+# TVDB_API_KEY has ever been configured in this deployment, so it was
+# never exercised against a real API response either. auto_glossary.py's
+# corpus-mining of a series' own already-completed episodes is the
+# established, validated source of candidate entity names (see its module
+# docstring) and needs no TVDB dependency. See CLAUDE.md's "TheTVDB
+# integration is metadata-only" note for the full reasoning -- revive
+# this (from git history) only alongside a real TVDB_API_KEY and a way to
+# validate its output against real cast data, not speculatively.

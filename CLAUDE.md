@@ -15,12 +15,13 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-23: 757 passing, 0 failures. (History: 708 after
+Baseline as of 2026-09-23: 756 passing, 0 failures. (History: 708 after
 fixing `test_glossary_profile.py`'s stale `"Eda Yıldız"` canonical
 assertion 2026-09-22 -- see `IMPROVEMENT_PLAN.md` section 1.1 -- then 727
 after the lightweight-sampler-model tests (section 2.1), 737 after the
-VRAM pre-flight tests (section 2.2), then 757 after the orphan-context-
-padding tests (section 3.2). Update this line rather than leaving it to
+VRAM pre-flight tests (section 2.2), 757 after the orphan-context-padding
+tests (section 3.2), then 756 after removing `tvdb_client.characters()`'s
+dead-code test (section 3.3). Update this line rather than leaving it to
 drift the next time the count moves.)
 
 Frontend: `cd frontend && npx tsc --noEmit && npm test -- --run`.
@@ -187,13 +188,17 @@ true` is always a deliberate human/session decision, never automatic.
 ## TheTVDB integration is metadata-only, unused for entities
 
 `tvdb_client.py` exists and works (series title enrichment is wired into
-`glossary_profile.load_profile()`), but `tvdb_client.characters()` --
-fetching TheTVDB's cast list -- is dead code, called nowhere. No
-`TVDB_API_KEY` is configured in production, so none of this currently
-does anything. Don't assume TVDB is a source of entity/character data
-for the glossary; `auto_glossary.py`'s corpus-mining is the only thing
-that actually populates candidate names today, and it works from the
-show's own real dialogue, not billing/cast metadata.
+`glossary_profile.load_profile()`). Its `characters()` function (cast-
+list fetching) was removed 2026-09-23 (IMPROVEMENT_PLAN.md 3.3) as
+confirmed dead code -- no application caller, and no `TVDB_API_KEY` has
+ever been configured in this deployment, so it was never exercised
+against a real API response either. Don't assume TVDB is a source of
+entity/character data for the glossary; `auto_glossary.py`'s corpus-
+mining is the only thing that actually populates candidate names today,
+and it works from the show's own real dialogue, not billing/cast
+metadata. If cast-list enrichment is wanted again, it needs a real
+`TVDB_API_KEY` and a way to validate output against real data before
+merging, not a speculative revival.
 
 ## Readability vs. content-completeness: an accepted, disclosed tradeoff
 
