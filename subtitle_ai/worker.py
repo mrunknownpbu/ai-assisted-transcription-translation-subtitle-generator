@@ -34,6 +34,100 @@ logger = logging.getLogger(__name__)
 
 _WORK_SWEEP_INTERVAL_SECONDS = 3600.0
 
+# Real gap this closes (IMPROVEMENT_PLAN.md 4.3): pipeline.py/
+# srt_translation.py already emit fine-grained per-stage events (ASR_
+# PROGRESS with position/total, TRANSLATION_PROGRESS with done/total,
+# plus milestone events for every other stage), but nothing previously
+# wrote any of that into the job row's own `stage`/`progress` columns --
+# those only ever took 3 values each in practice (stage: QUEUED/RUNNING/
+# <terminal status>; progress: 0, then 100 on completion), so the UI had
+# real data available but nothing to read it from. _stage_progress_for_
+# event() below maps an event to (human-readable stage label, 0-100
+# progress), and _build_on_event() writes it into the job row on every
+# event that has one, so /api/jobs and the SSE job_changed stream both
+# carry it live.
+#
+# Milestone percentages are a disclosed, directional heuristic, not a
+# measured promise of linear real-time correspondence -- ASR is the
+# dominant real cost on a shared GPU (this project's own measured real
+# episode: translation was ~3 of ~49 minutes total even on the OLD
+# all-local-CPU translation path this codebase no longer uses by
+# default; today's remote-GPU translation is faster still, per
+# translate_server.py's ~8x benchmark, so the 15% band below is already
+# a generous upper bound, not a tight measurement). Values only ever
+# increase across a job's real event sequence, since each milestone here
+# is strictly ordered by when pipeline.py/srt_translation.py actually
+# emit it.
+_VIDEO_STAGE_MILESTONES: dict[str, tuple[str, float]] = {
+    "MEDIA_INSPECTION_STARTED": ("Inspecting media", 0),
+    "AUDIO_SELECTED": ("Inspecting media", 2),
+    "AUDIO_EXTRACTION_STARTED": ("Extracting audio", 2),
+    "AUDIO_EXTRACTION_COMPLETED": ("Extracting audio", 3),
+    "ASR_CACHE_HIT": ("Transcribing (cached)", 73),
+    "ASR_STARTED": ("Transcribing", 3),
+    "ASR_COMPLETED": ("Transcribing", 73),
+    "LANGUAGE_DETECTED": ("Detecting language", 74),
+    "HALLUCINATION_CHECK_STARTED": ("Checking for hallucinations", 75),
+    "HALLUCINATION_CHECK_COMPLETED": ("Checking for hallucinations", 76),
+    "SOURCE_SEGMENTATION_COMPLETED": ("Segmenting transcript", 78),
+    "TRANSLATION_STARTED": ("Translating", 78),
+    "TRANSLATION_SKIPPED": ("Translating", 93),
+    "TRANSLATION_COMPLETED": ("Translating", 93),
+    "ENTITY_RECOVERY_APPLIED": ("Finalizing translation", 94),
+    "TARGET_SEGMENTATION_COMPLETED": ("Formatting subtitles", 96),
+    "PROJECTION_VALIDATED": ("Validating output", 97),
+    "READABILITY_TIMING_EXTENDED": ("Validating output", 97),
+    "QC_COMPLETED": ("Running quality checks", 98),
+    "OUTPUT_COMMITTED": ("Writing output", 99),
+    "JOB_COMPLETED": ("Completed", 100),
+}
+# ASR_PROGRESS/TRANSLATION_PROGRESS interpolate WITHIN their milestone
+# band instead of jumping straight to the band's end value: (stage
+# label, band-start %, band-end %, position-key, total-key) -- the last
+# two name the event's own data fields (pipeline.py's on_progress
+# callbacks use different key names per stage).
+_VIDEO_FINE_PROGRESS: dict[str, tuple[str, float, float, str, str]] = {
+    "ASR_PROGRESS": ("Transcribing", 3, 73, "position", "total"),
+    "TRANSLATION_PROGRESS": ("Translating", 78, 93, "done", "total"),
+}
+
+_SRT_STAGE_MILESTONES: dict[str, tuple[str, float]] = {
+    "SRT_PARSE_STARTED": ("Parsing SRT", 0),
+    "SRT_PARSE_COMPLETED": ("Parsing SRT", 3),
+    "LANGUAGE_DETECTED": ("Detecting language", 5),
+    "TRANSLATION_STARTED": ("Translating", 5),
+    "TRANSLATION_SKIPPED": ("Translating", 90),
+    "TRANSLATION_COMPLETED": ("Translating", 90),
+    "ENTITY_RECOVERY_APPLIED": ("Finalizing translation", 92),
+    "TARGET_SEGMENTATION_COMPLETED": ("Formatting subtitles", 95),
+    "QC_COMPLETED": ("Running quality checks", 97),
+    "OUTPUT_COMMITTED": ("Writing output", 99),
+    "JOB_COMPLETED": ("Completed", 100),
+}
+_SRT_FINE_PROGRESS: dict[str, tuple[str, float, float, str, str]] = {
+    "SRT_TRANSLATION_PROGRESS": ("Translating", 5, 90, "done", "total"),
+}
+
+
+def _stage_progress_for_event(job_type: str, name: str, data: dict) -> tuple[str, float] | None:
+    """Maps one pipeline event to (stage label, 0-100 progress) for the
+    job row's `stage`/`progress` columns. Returns None for an event with
+    no mapped milestone -- still logged via append_log(), just doesn't
+    move the needle; an unmapped event never regresses progress backward
+    or raises."""
+    is_srt = job_type == "srt_translation"
+    milestones = _SRT_STAGE_MILESTONES if is_srt else _VIDEO_STAGE_MILESTONES
+    fine = _SRT_FINE_PROGRESS if is_srt else _VIDEO_FINE_PROGRESS
+    if name in fine:
+        label, start, end, pos_key, total_key = fine[name]
+        total = data.get(total_key) or 0
+        position = data.get(pos_key) or 0
+        fraction = max(0.0, min(1.0, (position / total) if total else 0.0))
+        return label, start + fraction * (end - start)
+    if name in milestones:
+        return milestones[name]
+    return None
+
 
 class JobCancelled(RuntimeError):
     pass
@@ -194,29 +288,40 @@ class Worker(threading.Thread):
             self._process(job)
         logger.info("worker thread stopped")
 
-    def _build_on_event(self, job_id: str):
+    def _build_on_event(self, job_id: str, job_type: str = "video"):
         """Shared by both job types -- LANGUAGE_DETECTED's data shape
         (language/probability/mode) is identical whether it came from
         pipeline.py's audio-based detection or srt_translation.py's
         text-based one, so no job-type branch is needed for it.
         AUDIO_SELECTED simply never fires for an srt_translation job
         (that pipeline has no audio stream), so its branch is a no-op
-        there rather than something that needs excluding."""
+        there rather than something that needs excluding. `job_type`
+        selects which of _stage_progress_for_event()'s two milestone
+        tables applies -- defaulted so existing direct callers (and the
+        one pre-existing test that predates this parameter) keep working
+        unchanged."""
         def on_event(name, data):
             # Updated on every pipeline-stage event, not just once per
             # poll loop, so a long-running job's heartbeat stays fresh
             # instead of looking stale for its whole duration.
             self.last_heartbeat = time.time()
             self.store.append_log(job_id, f"{name} {data}")
+            fields: dict = {}
             if name == "LANGUAGE_DETECTED":
-                self.store.update(job_id, detected_language=data["language"],
-                                  language_confidence=data["probability"],
-                                  source_language_mode=data["mode"])
+                fields.update(detected_language=data["language"],
+                             language_confidence=data["probability"],
+                             source_language_mode=data["mode"])
             elif name == "AUDIO_SELECTED":
-                self.store.update(job_id, selected_audio_stream=data["index"],
-                                  embedded_stream_language=data.get("embedded_language"),
-                                  stream_selection_mode=data.get("selection_mode"),
-                                  selected_stream_reason=data.get("reason"))
+                fields.update(selected_audio_stream=data["index"],
+                             embedded_stream_language=data.get("embedded_language"),
+                             stream_selection_mode=data.get("selection_mode"),
+                             selected_stream_reason=data.get("reason"))
+            stage_progress = _stage_progress_for_event(job_type, name, data)
+            if stage_progress is not None:
+                stage, progress = stage_progress
+                fields.update(stage=stage, progress=progress)
+            if fields:
+                self.store.update(job_id, **fields)
             if self.store.is_cancel_requested(job_id):
                 raise JobCancelled()
         return on_event
@@ -250,7 +355,7 @@ class Worker(threading.Thread):
             source_root = self.srt_upload_dir if job.get("source_is_uploaded") else self.media_root
             source_path = resolve_media_path(source_root, job["source_srt_path"], must_exist=True)
             work_dir = self.work_root / job_id
-            on_event = self._build_on_event(job_id)
+            on_event = self._build_on_event(job_id, "srt_translation")
 
             # Only ever the global/category glossary layer when no episode
             # is associated (job["video_path"] == "") -- find_tvdb_id("")
@@ -358,7 +463,7 @@ class Worker(threading.Thread):
                           if source_lang != "auto" else None)
 
             work_dir = self.work_root / job_id
-            on_event = self._build_on_event(job_id)
+            on_event = self._build_on_event(job_id, "video")
 
             # A retry must always run ASR fresh, never reuse a cached
             # transcript from the attempt it's retrying (or any earlier

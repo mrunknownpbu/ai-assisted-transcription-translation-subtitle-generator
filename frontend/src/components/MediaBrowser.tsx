@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useBrowse } from "../api/hooks";
 import { fmtBytes } from "../format";
@@ -8,11 +8,34 @@ interface Props {
   onSelect: (path: string) => void;
   fileType?: "video" | "srt";
   title?: string;
+  // IMPROVEMENT_PLAN.md 4.1 -- all optional, so the existing single-select
+  // callers (TranslateSrtPage's two uses) are completely unaffected.
+  // onPathChange lets a parent (LibraryPage) track the currently-browsed
+  // directory to drive its own batch-queue panel, sharing this same
+  // useBrowse() query/cache rather than fetching the listing twice.
+  onPathChange?: (path: string) => void;
+  batchSelectable?: boolean;
+  batchSelected?: Set<string>;
+  onToggleBatchSelect?: (path: string) => void;
 }
 
-export function MediaBrowser({ selectedPath, onSelect, fileType = "video", title = "Media library" }: Props) {
+export function MediaBrowser({
+  selectedPath,
+  onSelect,
+  fileType = "video",
+  title = "Media library",
+  onPathChange,
+  batchSelectable = false,
+  batchSelected,
+  onToggleBatchSelect,
+}: Props) {
   const [path, setPath] = useState("");
   const { data, isLoading, error } = useBrowse(path, fileType);
+
+  useEffect(() => {
+    onPathChange?.(path);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path]);
 
   const crumbs = path ? path.split("/") : [];
 
@@ -53,14 +76,30 @@ export function MediaBrowser({ selectedPath, onSelect, fileType = "video", title
               &#128193; {entry.name}
             </button>
           ) : (
-            <button
-              key={entry.path}
-              className={`browser-row${entry.path === selectedPath ? " selected" : ""}`}
-              title={fmtBytes(entry.size)}
-              onClick={() => onSelect(entry.path)}
-            >
-              {entry.type === "srt" ? "\u{1F4C4}" : "\u{1F3AC}"} {entry.name}
-            </button>
+            <div key={entry.path} className="browser-row-wrap">
+              {batchSelectable && entry.type === "video" && (
+                <input
+                  type="checkbox"
+                  className="browser-row-checkbox"
+                  aria-label={`Select ${entry.name} for batch queueing`}
+                  checked={batchSelected?.has(entry.path) ?? false}
+                  onChange={() => onToggleBatchSelect?.(entry.path)}
+                />
+              )}
+              <button
+                className={`browser-row${entry.path === selectedPath ? " selected" : ""}`}
+                title={fmtBytes(entry.size)}
+                onClick={() => onSelect(entry.path)}
+              >
+                {entry.type === "srt" ? "\u{1F4C4}" : "\u{1F3AC}"} {entry.name}
+                {entry.type === "video" && entry.has_english_subtitle && (
+                  <span className="browser-row-done" title="English subtitle already exists">
+                    {" "}
+                    ✓
+                  </span>
+                )}
+              </button>
+            </div>
           ),
         )}
       </div>

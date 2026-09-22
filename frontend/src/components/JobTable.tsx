@@ -6,6 +6,7 @@ import type { Job } from "../api/types";
 import { fmtDateTime, fmtElapsed } from "../format";
 import { useToast } from "./Toast";
 import { JobStatusBadge } from "./JobStatusBadge";
+import { ProgressBar } from "./ProgressBar";
 
 const ACTIVE = new Set(["queued", "running"]);
 const RETRYABLE = new Set(["completed", "failed", "cancelled", "skipped"]);
@@ -77,7 +78,9 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                 {job.stage}
                 {job.detected_language && ` (${job.detected_language})`}
               </td>
-              <td>{Math.round(job.progress)}%</td>
+              <td>
+                <ProgressBar progress={job.progress} status={job.status} elapsedSeconds={job.elapsed_seconds} />
+              </td>
               <td>{fmtElapsed(job.elapsed_seconds)}</td>
               <td>{qcSummary(job)}</td>
               <td className="actions">

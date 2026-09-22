@@ -97,6 +97,9 @@ export interface BrowseEntry {
   path: string;
   type: "directory" | "video" | "srt";
   size?: number;
+  // Only present (and meaningful) on type: "video" entries -- see
+  // api.py's browse() docstring comment (IMPROVEMENT_PLAN.md 4.1).
+  has_english_subtitle?: boolean;
 }
 
 export interface BrowseResponse {
@@ -259,4 +262,37 @@ export interface UploadSrtResponse {
 
 export interface LanguagesResponse {
   languages: string[];
+}
+
+// IMPROVEMENT_PLAN.md 4.2: inline subtitle review/fix editor. `lines`
+// (not a flattened `text`) preserves the real 2-line display structure
+// -- see api.py's get_job_srt()/srt.parse_lines() docstrings.
+export interface SrtEditorCue {
+  index: number;
+  start: number;
+  end: number;
+  lines: string[];
+}
+
+export interface SrtEditorResponse {
+  cues: SrtEditorCue[];
+  // Only from QC stages that are genuinely cue-indexed (output/
+  // readability/timing) -- see api.py's _CUE_INDEXED_QC_STAGES comment.
+  // A cue NOT in this list may still have entity/hallucination/
+  // translation findings against it; job.needs_review is still the
+  // complete count, this is just what can be safely deep-linked here.
+  flagged_indices: number[];
+}
+
+export interface SrtCueEdit {
+  index: number;
+  lines: string[];
+}
+
+export interface SrtEditRequest {
+  edits: SrtCueEdit[];
+}
+
+export interface SrtEditResponse {
+  cues: SrtEditorCue[];
 }

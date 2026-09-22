@@ -15,13 +15,15 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-23: 756 passing, 0 failures. (History: 708 after
-fixing `test_glossary_profile.py`'s stale `"Eda Yıldız"` canonical
-assertion 2026-09-22 -- see `IMPROVEMENT_PLAN.md` section 1.1 -- then 727
-after the lightweight-sampler-model tests (section 2.1), 737 after the
-VRAM pre-flight tests (section 2.2), 757 after the orphan-context-padding
-tests (section 3.2), then 756 after removing `tvdb_client.characters()`'s
-dead-code test (section 3.3). Update this line rather than leaving it to
+Baseline as of 2026-09-23: 795 passing, 0 failures (plus 41 frontend
+tests -- `cd frontend && npm test -- --run`). (History: 708 after fixing
+`test_glossary_profile.py`'s stale `"Eda Yıldız"` canonical assertion
+2026-09-22 -- see `IMPROVEMENT_PLAN.md` section 1.1 -- then 727 after the
+lightweight-sampler-model tests (2.1), 737 after VRAM pre-flight (2.2),
+757 after orphan-context-padding (3.2), 756 after removing
+`tvdb_client.characters()`'s dead-code test (3.3), 768 after the worker
+stage/progress tests (4.3), then 795 after the batch-queueing and SRT-
+editor tests (4.1/4.2). Update this line rather than leaving it to
 drift the next time the count moves.)
 
 Frontend: `cd frontend && npx tsc --noEmit && npm test -- --run`.

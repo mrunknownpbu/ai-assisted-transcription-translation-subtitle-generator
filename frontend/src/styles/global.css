@@ -57,6 +57,12 @@ main { padding: 16px 24px 32px; display: flex; flex-direction: column; gap: 16px
   .workspace { grid-template-columns: 1fr; }
 }
 
+/* IMPROVEMENT_PLAN.md 4.1: wraps MediaBrowser + the batch-queue panel as
+   ONE grid cell so the 2-column .workspace layout above is unaffected. */
+.browser-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.batch-actions { display: flex; gap: 8px; margin: 8px 0; }
+.batch-actions .text-button { flex: 1; }
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -109,6 +115,17 @@ main { padding: 16px 24px 32px; display: flex; flex-direction: column; gap: 16px
 .browser-row:last-child { border-bottom: none; }
 .browser-row:hover { background: #1e242c; }
 .browser-row.selected { background: #1c2c4a; }
+
+/* Video rows with a batch-select checkbox (IMPROVEMENT_PLAN.md 4.1) wrap
+   the checkbox + the existing .browser-row button in a flex row -- the
+   border/last-child rules move here since .browser-row is no longer a
+   direct child of .browser in that case. */
+.browser-row-wrap { display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--border); }
+.browser-row-wrap:last-child { border-bottom: none; }
+.browser-row-wrap:hover { background: #1e242c; }
+.browser-row-wrap .browser-row { border-bottom: none; padding-left: 0; flex: 1; min-width: 0; }
+.browser-row-checkbox { flex-shrink: 0; cursor: pointer; accent-color: var(--accent); }
+.browser-row-done { color: var(--ok); }
 
 .selection-empty { color: var(--muted); }
 .summary, .existing { margin-top: 10px; }
@@ -165,6 +182,32 @@ tr.status-failed { color: #ffb4ae; }
 .badge-completed { color: var(--ok); border-color: var(--ok); }
 .badge-failed { color: var(--danger); border-color: var(--danger); }
 .badge-cancelled, .badge-skipped { color: var(--muted); }
+
+.progress-cell { display: flex; flex-direction: column; gap: 3px; min-width: 110px; }
+.progress-bar { width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: var(--accent); transition: width 0.4s ease; }
+.progress-bar-fill.status-completed { background: var(--ok); }
+.progress-bar-fill.status-failed { background: var(--danger); }
+
+/* IMPROVEMENT_PLAN.md 4.2: inline subtitle review/fix editor. */
+.srt-editor-list { max-height: 480px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.srt-editor-row { display: flex; gap: 10px; align-items: flex-start; padding: 6px; border: 1px solid var(--border); border-radius: 6px; }
+.srt-editor-row.flagged { border-color: var(--warn); background: #241d10; }
+.srt-editor-meta { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); min-width: 90px; flex-shrink: 0; }
+.srt-editor-time { white-space: nowrap; }
+.srt-editor-flag { color: var(--warn); font-size: 13px; }
+.srt-editor-text {
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: inherit;
+  resize: vertical;
+}
+.progress-bar-fill.status-cancelled, .progress-bar-fill.status-skipped { background: var(--muted); }
+.progress-text { font-size: 11px; color: var(--muted); white-space: nowrap; }
 
 .detail { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
 .detail h3 { margin: 0 0 8px; font-size: 13px; }

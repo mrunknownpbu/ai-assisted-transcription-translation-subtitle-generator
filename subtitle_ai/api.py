@@ -24,6 +24,7 @@ import alerting
 import audio_streams
 import glossary_profile
 import media
+import srt
 import translate
 import workdir
 from events import EventBus
@@ -276,8 +277,13 @@ def browse(path: str = Query(""), file_type: str = Query("video", pattern=r"^(vi
             entries.append({"name": entry.name, "path": rel, "type": "srt",
                             "size": resolved.stat().st_size})
         elif resolved.is_file() and wanted_suffix is None and resolved.suffix.lower() in VIDEO_EXTENSIONS:
+            # Cheap filesystem check (a glob, no ffprobe) -- same pattern
+            # media_metadata()'s own existing_subtitles uses -- so a batch-
+            # queue UI (IMPROVEMENT_PLAN.md 4.1) can tell which episodes in
+            # a directory are already done without an N+1 fetch per video.
+            has_english = any(resolved.parent.glob(f"{resolved.stem}.en.srt"))
             entries.append({"name": entry.name, "path": rel, "type": "video",
-                            "size": resolved.stat().st_size})
+                            "size": resolved.stat().st_size, "has_english_subtitle": has_english})
     return {"path": str(directory.relative_to(root)) if directory != root else "", "entries": entries}
 
 
@@ -740,6 +746,122 @@ def get_job(job_id: str) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
     return job
+
+
+# Only these QC stages' finding.index is a target-SRT-cue index (0-based,
+# matching srt.parse_lines()'s own enumeration order) -- confirmed by
+# reading each stage's own run() loop: qc/output_qc.py, qc/readability_qc.py,
+# and qc/timing_qc.py all enumerate the SAME final target-cue list this
+# endpoint parses. qc/translation_qc.py's index is a pre-segmentation
+# SENTENCE index (a different, earlier list -- see its own run()
+# docstring), qc/transcription_qc.py's hallucination findings are ASR-
+# SEGMENT-indexed, and qc/entity_qc.py's single call per job carries no
+# per-cue index at all (srt_translation.py/pipeline.py both call it once
+# over the whole joined text). Cross-referencing any of those three here
+# would silently point the editor at the wrong cue -- disclosed
+# limitation, not a bug: job.needs_review still counts every stage, this
+# is only what can be safely deep-linked to one exact cue today.
+_CUE_INDEXED_QC_STAGES = ("output", "readability", "timing")
+
+
+def _job_target_srt_path(job: dict) -> Path | None:
+    """The job's own TARGET (English) output path -- never the source-
+    language sibling. srt_translation jobs store it directly
+    (destination_srt_path); video jobs derive it the same way worker.py
+    does, since only video_path/target language are stored, not a
+    separate output-path column."""
+    if job["job_type"] == "srt_translation":
+        if not job.get("destination_srt_path"):
+            return None
+        return resolve_media_path(get_media_root(), job["destination_srt_path"], must_exist=False)
+    if not job.get("video_path"):
+        return None
+    return resolve_output_path(get_media_root(), job["video_path"], TARGET_LANG)
+
+
+@app.get("/api/jobs/{job_id}/srt")
+def get_job_srt(job_id: str) -> dict:
+    """Read view of a completed job's target subtitle cues, for the
+    inline review/fix editor (IMPROVEMENT_PLAN.md 4.2). Uses
+    srt.parse_lines() (not srt.parse()) specifically so the editor can
+    show and preserve each cue's real 2-line display structure -- see
+    that function's own docstring for the round-trip defect plain
+    parse() has. `flagged_indices` only draws from _CUE_INDEXED_QC_STAGES
+    (see its own comment for why the other stages can't be safely
+    included)."""
+    job = get_store().get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    try:
+        target = _job_target_srt_path(job)
+    except OutputSafetyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if target is None or not target.is_file():
+        raise HTTPException(status_code=404, detail="no target subtitle output for this job yet")
+    if target.stat().st_size > MAX_SRT_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="target subtitle exceeds the size limit for editing")
+    cues = srt.parse_lines(target)
+    flagged: set[int] = set()
+    for stage in _CUE_INDEXED_QC_STAGES:
+        result = (job.get("qc") or {}).get(stage)
+        if not result:
+            continue
+        for finding in result.get("findings", []):
+            if finding.get("index") is not None:
+                flagged.add(finding["index"])
+    return {
+        "cues": [{"index": i, "start": c.start, "end": c.end, "lines": c.lines} for i, c in enumerate(cues)],
+        "flagged_indices": sorted(flagged),
+    }
+
+
+class SrtCueEdit(BaseModel):
+    index: int
+    lines: list[str]
+
+    @field_validator("lines")
+    @classmethod
+    def _non_empty(cls, value: list[str]) -> list[str]:
+        if not value or not any(line.strip() for line in value):
+            raise ValueError("cue text cannot be empty")
+        return value
+
+
+class SrtEditRequest(BaseModel):
+    edits: list[SrtCueEdit]
+
+
+@app.put("/api/jobs/{job_id}/srt", dependencies=[Depends(require_api_key)])
+def update_job_srt(job_id: str, request: SrtEditRequest) -> dict:
+    """Applies TEXT-only edits to a completed job's target subtitle file,
+    atomically, in place -- never touches the job row (status/qc/stage/
+    progress all untouched) and never re-runs any pipeline stage, exactly
+    the "without re-running the GPU pipeline" requirement (IMPROVEMENT_
+    PLAN.md 4.2). Re-reads the CURRENT file fresh from disk as the source
+    of truth and only overwrites the `lines` of the cues named in
+    `edits` -- cue count and timing are never accepted from the client,
+    so a stale client can never insert/remove/retime a cue or revert a
+    concurrent edit to one it didn't touch."""
+    job = get_store().get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    try:
+        target = _job_target_srt_path(job)
+    except OutputSafetyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if target is None or not target.is_file():
+        raise HTTPException(status_code=404, detail="no target subtitle output for this job yet")
+    if target.stat().st_size > MAX_SRT_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="target subtitle exceeds the size limit for editing")
+    cues = srt.parse_lines(target)
+    for edit in request.edits:
+        if not 0 <= edit.index < len(cues):
+            raise HTTPException(status_code=422,
+                                detail=f"cue index {edit.index} out of range (0..{len(cues) - 1})")
+    for edit in request.edits:
+        cues[edit.index].lines = edit.lines
+    write_srt_atomic(target, srt.render(cues), allow_overwrite=True)
+    return {"cues": [{"index": i, "start": c.start, "end": c.end, "lines": c.lines} for i, c in enumerate(cues)]}
 
 
 @app.post("/api/jobs/{job_id}/cancel", dependencies=[Depends(require_api_key)])

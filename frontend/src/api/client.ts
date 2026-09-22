@@ -14,6 +14,9 @@ import type {
   RetryRequest,
   SeriesDetailResponse,
   SeriesListResponse,
+  SrtEditRequest,
+  SrtEditResponse,
+  SrtEditorResponse,
   SrtTranslationRequest,
   UpdateGlossaryEntityRequest,
   UpdateGlossaryEntityResponse,
@@ -109,4 +112,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  getJobSrt: (id: string) => request<SrtEditorResponse>(`/api/jobs/${id}/srt`),
+  updateJobSrt: (id: string, body: SrtEditRequest) =>
+    request<SrtEditResponse>(`/api/jobs/${id}/srt`, { method: "PUT", body: JSON.stringify(body) }),
 };

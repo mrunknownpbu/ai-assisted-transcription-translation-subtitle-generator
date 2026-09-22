@@ -2,7 +2,9 @@ import { Link, useParams } from "react-router-dom";
 
 import { useJob } from "../api/hooks";
 import { JobStatusBadge } from "../components/JobStatusBadge";
+import { ProgressBar } from "../components/ProgressBar";
 import { QcFindingsList } from "../components/QcFindingsList";
+import { SrtEditor } from "../components/SrtEditor";
 import { fmtElapsed, fmtPercent } from "../format";
 
 export function JobDetailPage() {
@@ -33,7 +35,7 @@ export function JobDetailPage() {
       </div>
       <div className="option-row">
         <span>Progress</span>
-        <strong>{Math.round(job.progress)}%</strong>
+        <ProgressBar progress={job.progress} status={job.status} elapsedSeconds={job.elapsed_seconds} />
       </div>
       <div className="option-row">
         <span>Elapsed</span>
@@ -81,6 +83,8 @@ export function JobDetailPage() {
           <div className="error">{job.error}</div>
         </div>
       )}
+
+      {job.status === "completed" && <SrtEditor jobId={job.id} />}
 
       <div className="detail">
         <h3>QC findings</h3>

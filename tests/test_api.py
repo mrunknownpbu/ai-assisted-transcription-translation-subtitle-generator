@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import api
 import audio_streams
+import srt
 from media import MediaError
 
 SERIES_GLOSSARY_YAML = """
@@ -699,6 +700,36 @@ class BrowseTests(MediaRootApiTestCase):
         self.assertIn("S01E01.mkv", names)
         self.assertNotIn("S01E01.tr.srt", names)
 
+    def test_video_entry_reports_no_english_subtitle_by_default(self):
+        # IMPROVEMENT_PLAN.md 4.1: a batch-queue UI needs this per-video,
+        # without an extra /api/media fetch for every entry in a folder.
+        r = self.client.get("/api/browse", params={"path": "Show"})
+        entry = next(e for e in r.json()["entries"] if e["name"] == "S01E01.mkv")
+        self.assertFalse(entry["has_english_subtitle"])
+
+    def test_video_entry_reports_true_when_an_english_sibling_exists(self):
+        (self.root / "Show" / "S01E01.en.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
+        r = self.client.get("/api/browse", params={"path": "Show"})
+        entry = next(e for e in r.json()["entries"] if e["name"] == "S01E01.mkv")
+        self.assertTrue(entry["has_english_subtitle"])
+
+    def test_a_non_english_sibling_subtitle_does_not_count(self):
+        (self.root / "Show" / "S01E01.tr.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nMerhaba\n", encoding="utf-8")
+        r = self.client.get("/api/browse", params={"path": "Show"})
+        entry = next(e for e in r.json()["entries"] if e["name"] == "S01E01.mkv")
+        self.assertFalse(entry["has_english_subtitle"])
+
+    def test_srt_file_type_entries_have_no_has_english_subtitle_key(self):
+        # That field only means something for a video entry -- an srt
+        # listing entry shouldn't carry a stale/misleading copy of it.
+        (self.root / "Show" / "S01E01.tr.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nHi\n", encoding="utf-8")
+        r = self.client.get("/api/browse", params={"path": "Show", "file_type": "srt"})
+        entry = next(e for e in r.json()["entries"] if e["name"] == "S01E01.tr.srt")
+        self.assertNotIn("has_english_subtitle", entry)
+
 
 class MediaMetadataTests(MediaRootApiTestCase):
     def test_non_video_extension_rejected(self):
@@ -931,6 +962,135 @@ class DeleteGlossaryEntityTests(SeriesApiTestCase):
     def test_404_when_series_has_no_glossary_file(self):
         r = self.client.post("/api/series/999999/glossary/delete", json={"canonical": "Eda"})
         self.assertEqual(r.status_code, 404)
+
+
+class JobSrtEditorTests(MediaRootApiTestCase):
+    """IMPROVEMENT_PLAN.md 4.2: GET/PUT /api/jobs/{id}/srt -- the inline
+    subtitle review/fix editor's backend. Never touches job status/qc/
+    pipeline state; only reads/writes the target .srt file in place."""
+
+    def _completed_video_job(self, qc: dict | None = None) -> str:
+        created = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"}).json()["job"]
+        store = api.get_store()
+        store.claim()
+        store.finish(created["id"], "completed", outputs=[], qc=qc or {})
+        return created["id"]
+
+    def _write_target_srt(self, content: str) -> Path:
+        path = self.root / "Show" / "S01E01.en.srt"
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    SAMPLE = (
+        "1\n00:00:01,000 --> 00:00:02,000\nHello there.\n\n"
+        "2\n00:00:03,000 --> 00:00:04,000\nFirst line\nSecond line\n"
+    )
+
+    def test_get_returns_cues_with_preserved_line_breaks(self):
+        job_id = self._completed_video_job()
+        self._write_target_srt(self.SAMPLE)
+        r = self.client.get(f"/api/jobs/{job_id}/srt")
+        self.assertEqual(r.status_code, 200)
+        cues = r.json()["cues"]
+        self.assertEqual(cues[0]["lines"], ["Hello there."])
+        self.assertEqual(cues[1]["lines"], ["First line", "Second line"])
+
+    def test_get_404_when_no_output_written_yet(self):
+        job_id = self._completed_video_job()
+        r = self.client.get(f"/api/jobs/{job_id}/srt")
+        self.assertEqual(r.status_code, 404)
+
+    def test_get_404_for_missing_job(self):
+        r = self.client.get("/api/jobs/does-not-exist/srt")
+        self.assertEqual(r.status_code, 404)
+
+    def test_flagged_indices_include_cue_indexed_qc_stages(self):
+        qc = {"output": {"stage": "output", "population": 2, "flagged": 1,
+                         "findings": [{"category": "readability_error", "reason": "x",
+                                      "confidence": 1.0, "index": 1, "evidence": {}}]}}
+        job_id = self._completed_video_job(qc=qc)
+        self._write_target_srt(self.SAMPLE)
+        r = self.client.get(f"/api/jobs/{job_id}/srt")
+        self.assertEqual(r.json()["flagged_indices"], [1])
+
+    def test_flagged_indices_exclude_sentence_indexed_translation_stage(self):
+        # translation_qc's index is a pre-segmentation SENTENCE index, a
+        # DIFFERENT space from the target-cue index this endpoint uses --
+        # including it here would point at the wrong cue.
+        qc = {"translation": {"stage": "translation", "population": 5, "flagged": 1,
+                              "findings": [{"category": "entity_error", "reason": "x",
+                                           "confidence": 0.9, "index": 0, "evidence": {}}]}}
+        job_id = self._completed_video_job(qc=qc)
+        self._write_target_srt(self.SAMPLE)
+        r = self.client.get(f"/api/jobs/{job_id}/srt")
+        self.assertEqual(r.json()["flagged_indices"], [])
+
+    def test_put_edits_only_the_named_cue(self):
+        job_id = self._completed_video_job()
+        self._write_target_srt(self.SAMPLE)
+        r = self.client.put(f"/api/jobs/{job_id}/srt",
+                            json={"edits": [{"index": 0, "lines": ["Edited hello."]}]})
+        self.assertEqual(r.status_code, 200)
+        cues = r.json()["cues"]
+        self.assertEqual(cues[0]["lines"], ["Edited hello."])
+        self.assertEqual(cues[1]["lines"], ["First line", "Second line"])  # untouched
+
+    def test_put_persists_to_disk(self):
+        job_id = self._completed_video_job()
+        target = self._write_target_srt(self.SAMPLE)
+        self.client.put(f"/api/jobs/{job_id}/srt",
+                        json={"edits": [{"index": 0, "lines": ["Edited hello."]}]})
+        reparsed = srt.parse_lines(target)
+        self.assertEqual(reparsed[0].lines, ["Edited hello."])
+
+    def test_put_never_touches_job_status_or_progress(self):
+        job_id = self._completed_video_job()
+        self._write_target_srt(self.SAMPLE)
+        before = self.client.get(f"/api/jobs/{job_id}").json()
+        self.client.put(f"/api/jobs/{job_id}/srt",
+                        json={"edits": [{"index": 0, "lines": ["Edited hello."]}]})
+        after = self.client.get(f"/api/jobs/{job_id}").json()
+        self.assertEqual(after["status"], before["status"])
+        self.assertEqual(after["progress"], before["progress"])
+        self.assertEqual(after["stage"], before["stage"])
+
+    def test_put_out_of_range_index_rejected_with_422(self):
+        job_id = self._completed_video_job()
+        self._write_target_srt(self.SAMPLE)
+        r = self.client.put(f"/api/jobs/{job_id}/srt", json={"edits": [{"index": 99, "lines": ["x"]}]})
+        self.assertEqual(r.status_code, 422)
+
+    def test_put_empty_text_rejected(self):
+        job_id = self._completed_video_job()
+        self._write_target_srt(self.SAMPLE)
+        r = self.client.put(f"/api/jobs/{job_id}/srt", json={"edits": [{"index": 0, "lines": ["   "]}]})
+        self.assertEqual(r.status_code, 422)
+
+    def test_put_out_of_range_edit_leaves_the_file_untouched(self):
+        # Real risk: validating edits one at a time while applying them
+        # as it goes would let an earlier valid edit land on disk before
+        # a later invalid one is caught -- a partial, inconsistent write.
+        job_id = self._completed_video_job()
+        target = self._write_target_srt(self.SAMPLE)
+        self.client.put(f"/api/jobs/{job_id}/srt",
+                        json={"edits": [{"index": 0, "lines": ["Should not apply."]}, {"index": 99, "lines": ["x"]}]})
+        reparsed = srt.parse_lines(target)
+        self.assertEqual(reparsed[0].lines, ["Hello there."])
+
+    def test_srt_translation_job_edits_its_destination_path(self):
+        source = self.root / "Show" / "S01E01.tr.srt"
+        source.write_text("1\n00:00:00,000 --> 00:00:01,000\nMerhaba\n", encoding="utf-8")
+        created = self.client.post("/api/srt-translations",
+                                   json={"video_path": "Show/S01E01.mkv",
+                                        "source_srt_path": "Show/S01E01.tr.srt"}).json()["job"]
+        store = api.get_store()
+        store.claim()
+        store.finish(created["id"], "completed", outputs=[], qc={})
+        target = self._write_target_srt(self.SAMPLE)
+        r = self.client.put(f"/api/jobs/{created['id']}/srt",
+                            json={"edits": [{"index": 0, "lines": ["Edited."]}]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(srt.parse_lines(target)[0].lines, ["Edited."])
 
 
 class EventStreamTests(ApiTestCase):

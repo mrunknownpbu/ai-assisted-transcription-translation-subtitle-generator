@@ -908,5 +908,117 @@ class WorkerHeartbeatTests(WorkerTestCase):
         self.assertGreater(self.worker.last_heartbeat, 0.0)
 
 
+class StageProgressForEventTests(unittest.TestCase):
+    """IMPROVEMENT_PLAN.md 4.3: _stage_progress_for_event() is what makes
+    the job row's stage/progress columns actually move during a run,
+    instead of sitting at ("RUNNING", 0) for the whole job."""
+
+    def test_video_milestone_returns_its_mapped_stage_and_percent(self):
+        self.assertEqual(
+            worker_mod._stage_progress_for_event("video", "ASR_STARTED", {}),
+            ("Transcribing", 3))
+
+    def test_srt_milestone_uses_the_srt_table_not_the_video_one(self):
+        # TRANSLATION_STARTED exists in both tables at different percents
+        # -- this proves job_type actually selects the right one, not
+        # just that SOME mapping exists.
+        self.assertEqual(
+            worker_mod._stage_progress_for_event("srt_translation", "TRANSLATION_STARTED", {}),
+            ("Translating", 5))
+        self.assertEqual(
+            worker_mod._stage_progress_for_event("video", "TRANSLATION_STARTED", {}),
+            ("Translating", 78))
+
+    def test_unmapped_event_returns_none(self):
+        self.assertIsNone(worker_mod._stage_progress_for_event("video", "ASR_CACHE_STORED", {}))
+
+    def test_asr_progress_interpolates_within_its_band(self):
+        label, pct = worker_mod._stage_progress_for_event(
+            "video", "ASR_PROGRESS", {"position": 50, "total": 100})
+        self.assertEqual(label, "Transcribing")
+        self.assertAlmostEqual(pct, 3 + 0.5 * (73 - 3))
+
+    def test_translation_progress_interpolates_within_its_band(self):
+        label, pct = worker_mod._stage_progress_for_event(
+            "video", "TRANSLATION_PROGRESS", {"done": 3, "total": 4})
+        self.assertEqual(label, "Translating")
+        self.assertAlmostEqual(pct, 78 + 0.75 * (93 - 78))
+
+    def test_zero_total_never_divides_by_zero(self):
+        # A degenerate 0-span/0-sentence job must not crash progress
+        # reporting -- treated as 0% through the band, not an error.
+        label, pct = worker_mod._stage_progress_for_event(
+            "video", "ASR_PROGRESS", {"position": 0, "total": 0})
+        self.assertEqual(label, "Transcribing")
+        self.assertEqual(pct, 3)
+
+    def test_progress_never_exceeds_the_bands_end_even_if_position_overshoots(self):
+        label, pct = worker_mod._stage_progress_for_event(
+            "video", "TRANSLATION_PROGRESS", {"done": 999, "total": 4})
+        self.assertEqual(pct, 93)
+
+    def test_milestones_are_monotonically_non_decreasing_in_real_event_order(self):
+        # The real order pipeline.py actually emits these in (see its own
+        # _emit() call sequence) -- progress must never go backward as a
+        # real job's events fire in this order.
+        order = ["MEDIA_INSPECTION_STARTED", "AUDIO_SELECTED", "AUDIO_EXTRACTION_STARTED",
+                "AUDIO_EXTRACTION_COMPLETED", "ASR_STARTED", "ASR_COMPLETED", "LANGUAGE_DETECTED",
+                "HALLUCINATION_CHECK_STARTED", "HALLUCINATION_CHECK_COMPLETED",
+                "SOURCE_SEGMENTATION_COMPLETED", "TRANSLATION_STARTED", "TRANSLATION_COMPLETED",
+                "ENTITY_RECOVERY_APPLIED", "TARGET_SEGMENTATION_COMPLETED", "PROJECTION_VALIDATED",
+                "QC_COMPLETED", "OUTPUT_COMMITTED", "JOB_COMPLETED"]
+        percents = [worker_mod._stage_progress_for_event("video", name, {})[1] for name in order]
+        for a, b in zip(percents, percents[1:]):
+            self.assertLessEqual(a, b, f"{order[percents.index(a)]} -> regressed progress")
+
+
+class BuildOnEventStageProgressTests(WorkerTestCase):
+    """Integration: _build_on_event() must actually persist stage/progress
+    to the job row, not just compute them."""
+
+    def test_asr_progress_event_updates_the_job_rows_stage_and_progress(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        claimed = self.store.claim()
+        on_event = self.worker._build_on_event(claimed["id"], "video")
+        on_event("ASR_PROGRESS", {"position": 10, "total": 20, "segments": 5})
+        row = self.store.get(claimed["id"])
+        self.assertEqual(row["stage"], "Transcribing")
+        self.assertAlmostEqual(row["progress"], 3 + 0.5 * (73 - 3))
+
+    def test_srt_job_type_uses_the_srt_milestone_table(self):
+        job = self.store.create_srt_translation(
+            video_path="", source_srt_path="in.srt", destination_srt_path="in.en.srt",
+            source_lang="tr", target_lang="en")
+        claimed = self.store.claim()
+        on_event = self.worker._build_on_event(claimed["id"], "srt_translation")
+        on_event("SRT_TRANSLATION_PROGRESS", {"done": 9, "total": 10})
+        row = self.store.get(claimed["id"])
+        self.assertEqual(row["stage"], "Translating")
+        self.assertAlmostEqual(row["progress"], 5 + 0.9 * (90 - 5))
+
+    def test_language_detected_still_updates_its_own_fields_alongside_stage(self):
+        # Real regression risk: merging stage/progress into the SAME
+        # update() call as the existing per-event field updates must not
+        # drop the existing fields.
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        claimed = self.store.claim()
+        on_event = self.worker._build_on_event(claimed["id"], "video")
+        on_event("LANGUAGE_DETECTED", {"language": "tr", "probability": 0.87, "mode": "AUTO"})
+        row = self.store.get(claimed["id"])
+        self.assertEqual(row["detected_language"], "tr")
+        self.assertAlmostEqual(row["language_confidence"], 0.87)
+        self.assertEqual(row["stage"], "Detecting language")
+
+    def test_unmapped_event_leaves_stage_and_progress_unchanged(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        claimed = self.store.claim()
+        before = self.store.get(claimed["id"])
+        on_event = self.worker._build_on_event(claimed["id"], "video")
+        on_event("ASR_CACHE_STORED", {"key": "abc"})
+        after = self.store.get(claimed["id"])
+        self.assertEqual(after["stage"], before["stage"])
+        self.assertEqual(after["progress"], before["progress"])
+
+
 if __name__ == "__main__":
     unittest.main()

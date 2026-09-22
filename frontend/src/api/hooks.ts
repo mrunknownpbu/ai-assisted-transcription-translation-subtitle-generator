@@ -6,6 +6,7 @@ import type {
   JobRequest,
   PromoteGlossaryEntityRequest,
   RetryRequest,
+  SrtEditRequest,
   SrtTranslationRequest,
   UpdateGlossaryEntityRequest,
 } from "./types";
@@ -140,5 +141,24 @@ export function useDeleteJob() {
   return useMutation({
     mutationFn: (id: string) => api.deleteJob(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+}
+
+// IMPROVEMENT_PLAN.md 4.2. `enabled` is caller-controlled (JobDetailPage
+// only fetches once the "Edit subtitles" panel is actually opened) --
+// most job views never need this, so it shouldn't fire alongside useJob().
+export function useJobSrt(id: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["job-srt", id],
+    queryFn: () => api.getJobSrt(id as string),
+    enabled: enabled && id !== undefined,
+  });
+}
+
+export function useUpdateJobSrt(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: SrtEditRequest) => api.updateJobSrt(id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["job-srt", id] }),
   });
 }
