@@ -93,9 +93,9 @@ The following recommendations are organized into actionable categories for ongoi
 
 ### 2. 🎮 GPU & Memory Optimization (Tesla P4 + Tdarr Coexistence)
 
-#### 2.1 Lightweight Whisper Model for Stream Sampling (`audio_streams.py`)
+#### 2.1 Lightweight Whisper Model for Stream Sampling (`audio_streams.py`) -- **Done (2026-09-23)**
 * **Issue:** When an operator clicks "Analyze" in the web UI or when multi-window language identification runs, `asr.py` loads `large-v3` because it is the only model cached in `/models`. This spikes VRAM by ~3 GB for a short 20-second sample and creates severe VRAM contention with active ASR/translation jobs and Tdarr transcoding.
-* **Action:** Pre-cache and designate a lightweight model (e.g., `faster-whisper-small` or `base`, ~200–400 MB VRAM) specifically for stream sampling and dominant language voting. Keep `large-v3` reserved exclusively for the full transcription pass.
+* **Action:** Added `SUBTITLE_AI_SAMPLE_MODEL` env var (default `"small"`, ~200 MB VRAM). `audio_streams.default_sampler()` now reads this env var via `_sample_model_name()` and attempts to load the configured lightweight model. If the model fails to load (e.g. not pre-cached in the read-only `/models` mount), it logs a warning and transparently falls back to `large-v3`, preserving existing behavior on day zero. Added `scripts/download_sample_model.py` — a one-time host-side helper to pre-cache the model into `${CONFIG_PATH}/subtitle-ai/models` before container restart. Updated `.env.example` with full documentation. 6 new unit tests cover env var reading, explicit model override, fallback-to-large-v3, and the `large-v3`-direct path.
 
 #### 2.2 Dynamic VRAM Pre-Flight Headroom Checks
 * **Issue:** On an 8 GB Tesla P4 sharing resources with Tdarr transcode workers, transcode bursts can suddenly reduce available VRAM below model allocation requirements, causing unrecoverable CUDA OOMs.

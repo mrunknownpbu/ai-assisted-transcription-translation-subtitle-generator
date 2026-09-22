@@ -204,5 +204,121 @@ class RecommendStreamTests(unittest.TestCase):
         self.assertIn("%", rec.reason)
 
 
+
+class SampleModelNameTests(unittest.TestCase):
+    """_sample_model_name() reads SUBTITLE_AI_SAMPLE_MODEL with a safe default."""
+
+    def test_default_is_small(self):
+        import os
+        from unittest.mock import patch
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SUBTITLE_AI_SAMPLE_MODEL", None)
+            self.assertEqual(audio_streams._sample_model_name(), "small")
+
+    def test_env_var_overrides_default(self):
+        import os
+        with __import__("unittest.mock", fromlist=["patch"]).patch.dict(
+                os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "base"}):
+            self.assertEqual(audio_streams._sample_model_name(), "base")
+
+    def test_blank_env_var_falls_back_to_small(self):
+        import os
+        with __import__("unittest.mock", fromlist=["patch"]).patch.dict(
+                os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "  "}):
+            self.assertEqual(audio_streams._sample_model_name(), "small")
+
+
+class DefaultSamplerModelResolutionTests(unittest.TestCase):
+    """default_sampler() uses the env-var model and falls back to large-v3
+    gracefully when the configured lightweight model fails to load."""
+
+    def test_explicit_model_name_is_used(self):
+        """Passing model_name="base" overrides the env var."""
+        from unittest.mock import MagicMock, patch
+        from pathlib import Path
+
+        fake_wav = Path("/fake/sample.wav")
+
+        class FakeModel:
+            def __init__(self, name, **kw):
+                pass
+
+            def transcribe(self, path, **kw):
+                info = MagicMock()
+                info.language = "tr"
+                info.language_probability = 0.95
+                return iter([]), info
+
+        with patch("faster_whisper.WhisperModel", FakeModel), \
+             patch("asr.AsrConfig") as MockCfg:
+            MockCfg.return_value.compute_type = "int8"
+            sampler = audio_streams.default_sampler(model_name="base")
+            lang, prob = sampler(fake_wav)
+        self.assertEqual(lang, "tr")
+        self.assertAlmostEqual(prob, 0.95)
+
+    def test_fallback_to_large_v3_when_small_fails(self):
+        """If the env-var model (small) raises on load, the sampler falls back
+        to large-v3 and still returns a valid result -- no exception escapes."""
+        import os
+        from unittest.mock import MagicMock, patch
+        from pathlib import Path
+
+        fake_wav = Path("/fake/sample.wav")
+        loaded_names: list[str] = []
+
+        class FakeModel:
+            def __init__(self, name, **kw):
+                if name == "small":
+                    raise OSError("model not in /models")
+                loaded_names.append(name)
+
+            def transcribe(self, path, **kw):
+                info = MagicMock()
+                info.language = "tr"
+                info.language_probability = 0.9
+                return iter([]), info
+
+        with patch.dict(os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "small"}), \
+             patch("faster_whisper.WhisperModel", FakeModel), \
+             patch("asr.AsrConfig") as MockCfg:
+            MockCfg.return_value.compute_type = "int8"
+            sampler = audio_streams.default_sampler()
+            lang, prob = sampler(fake_wav)
+
+        self.assertEqual(lang, "tr")
+        self.assertEqual(loaded_names, ["large-v3"],
+                         "should have fallen back to large-v3 after small failed")
+
+    def test_no_fallback_needed_when_model_is_already_large_v3(self):
+        """When SUBTITLE_AI_SAMPLE_MODEL=large-v3, skip the try/except path
+        entirely and load large-v3 directly -- no spurious fallback log."""
+        import os
+        from unittest.mock import MagicMock, patch
+        from pathlib import Path
+
+        fake_wav = Path("/fake/sample.wav")
+        loaded_names: list[str] = []
+
+        class FakeModel:
+            def __init__(self, name, **kw):
+                loaded_names.append(name)
+
+            def transcribe(self, path, **kw):
+                info = MagicMock()
+                info.language = "en"
+                info.language_probability = 0.85
+                return iter([]), info
+
+        with patch.dict(os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "large-v3"}), \
+             patch("faster_whisper.WhisperModel", FakeModel), \
+             patch("asr.AsrConfig") as MockCfg:
+            MockCfg.return_value.compute_type = "int8"
+            sampler = audio_streams.default_sampler()
+            sampler(fake_wav)
+
+        self.assertEqual(loaded_names, ["large-v3"])
+
+
 if __name__ == "__main__":
     unittest.main()

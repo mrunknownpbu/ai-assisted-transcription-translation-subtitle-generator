@@ -332,16 +332,16 @@ _stream_sampler = None
 
 def get_stream_sampler():
     # Lazily loaded once per process and reused -- avoids paying model-
-    # load latency on every GUI click. NOT a small model: this deployment's
-    # read-only /models only has large-v3 cached (see audio_streams.
-    # default_sampler()'s own docstring), so this is exactly as VRAM-heavy
-    # as the real ASR pass. Confirmed by direct reproduction: this cached
-    # sampler plus a freshly-loaded main ASR model measured at 7743MB
-    # combined on an 8GB card whose real usable capacity is ~7834MB (per
-    # an actual production OOM's own error message) -- a razor-thin,
-    # unacceptable margin, not a comfortable one. release_stream_sampler()
-    # below is called by worker.py before a real job's own model load, so
-    # a real job never has to compete with this for VRAM.
+    # load latency on every GUI click.  Uses SUBTITLE_AI_SAMPLE_MODEL
+    # (default "small", ~200 MB VRAM) rather than large-v3 (~3 GB) -- see
+    # audio_streams.default_sampler() and _sample_model_name(). If the small
+    # model has not been pre-cached in /models yet it falls back to large-v3
+    # automatically, matching the previous behaviour.  The confirmed
+    # near-OOM condition (sampler + large-v3 ASR = 7743 MB on an 8 GB card)
+    # is eliminated once scripts/download_sample_model.py has been run once.
+    # release_stream_sampler() below is called by worker.py before a real
+    # job's own GPU-heavy work starts, so even in large-v3 fallback mode the
+    # two never hold VRAM at the same time.
     global _stream_sampler
     if _stream_sampler is None:
         _stream_sampler = audio_streams.default_sampler()

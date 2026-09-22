@@ -180,35 +180,74 @@ def extract_sample(video_path: str | Path, stream_index: int, work_dir: Path, *,
     return out
 
 
-def default_sampler(model_name: str = "large-v3"):
+def _sample_model_name() -> str:
+    """Model name for stream-sampling / language-ID. Configurable via
+    SUBTITLE_AI_SAMPLE_MODEL (default \"small\"). When a small model is
+    pre-cached in /models and this env var is set (or left at the default),
+    VRAM consumed per Analyze click drops from ~3 GB (large-v3) to ~200 MB,
+    eliminating the near-OOM condition on the Tesla P4. See scripts/
+    download_sample_model.py for the one-time pre-cache step."""
+    import os
+    return os.environ.get("SUBTITLE_AI_SAMPLE_MODEL", "small").strip() or "small"
+
+
+def default_sampler(model_name: str | None = None):
     """Lazily loads a faster-whisper model once, returning a
     (wav_path) -> (language, probability) callable.
 
-    Defaults to large-v3 -- the same model used for the real
-    transcription -- because that is the only faster-whisper model this
-    deployment's read-only /models actually has cached; faster-whisper
-    cannot download a smaller one (e.g. "base") into it at runtime. A
-    deployment that pre-downloads a smaller model into /models during the
-    image build MAY pass model_name="base"/"small" here for less
-    transient VRAM pressure while a full job might already be using the
-    GPU -- but that is an opt-in, not a default this code can assume."""
+    model_name defaults to the value of SUBTITLE_AI_SAMPLE_MODEL (default
+    \"small\"). A lightweight model (~200 MB VRAM for \"small\" vs ~3 GB for
+    \"large-v3\") slashes the transient VRAM spike from every \"Analyze\" click,
+    eliminating the near-OOM condition on the Tesla P4 8GB.
+
+    If the requested model cannot load -- typically because it has not yet
+    been pre-cached into the read-only /models mount (see scripts/
+    download_sample_model.py) -- the sampler logs a warning and transparently
+    falls back to \"large-v3\", preserving the previous behaviour on day zero
+    before the operator runs the download script.
+
+    compute_type is sourced from asr.AsrConfig's own default (not a second
+    hardcoded value). Real defect this closes (2026-09-17): when this
+    function previously hardcoded \"float16\" independently of asr.py, fixing
+    the ASR stage's float16/Tesla-P4 mismatch still left THIS sampler broken,
+    confirmed by a real job's AUDIO_STREAM_RECOMMENDED falling back to
+    \"language sampling failed\" instead of real per-stream language detection.
+    """
+    import logging
+    _log = logging.getLogger(__name__)
+    resolved_name = model_name if model_name is not None else _sample_model_name()
+    fallback_name = "large-v3"
     state: dict = {}
 
     def sample(wav_path: Path) -> tuple[str, float]:
         if "model" not in state:
             from faster_whisper import WhisperModel
-            # compute_type sourced from asr.AsrConfig's own default, not a
-            # second hardcoded "float16" -- real defect (2026-09-17): this
-            # function used to hardcode float16 independently of asr.py's
-            # AsrConfig, so fixing the ASR stage's float16/Tesla-P4
-            # mismatch here still left THIS model construction broken,
-            # confirmed by a real job's AUDIO_STREAM_RECOMMENDED falling
-            # back to "language sampling failed" and a weaker default
-            # disposition instead of real per-stream language detection.
             from asr import AsrConfig
-            state["model"] = WhisperModel(model_name, device="cuda",
-                                          compute_type=AsrConfig().compute_type,
-                                          download_root="/models")
+            compute_type = AsrConfig().compute_type
+            # Try the configured lightweight model first; fall back to
+            # large-v3 if it cannot load.  The most common cause is the
+            # model not being present in the read-only /models mount -- in
+            # that case faster-whisper raises an OSError or HfHubHTTPError
+            # (it can't write a download into a read-only directory). We
+            # catch broadly because the failure modes differ across versions.
+            load_name = resolved_name
+            if load_name != fallback_name:
+                try:
+                    state["model"] = WhisperModel(load_name, device="cuda",
+                                                  compute_type=compute_type,
+                                                  download_root="/models")
+                except Exception as exc:  # noqa: BLE001
+                    _log.warning(
+                        "stream sampler: could not load %r (%s); "
+                        "falling back to %r. "
+                        "Run scripts/download_sample_model.py once to pre-cache it.",
+                        load_name, exc, fallback_name,
+                    )
+                    load_name = fallback_name
+            if "model" not in state:
+                state["model"] = WhisperModel(load_name, device="cuda",
+                                              compute_type=compute_type,
+                                              download_root="/models")
         model = state["model"]
         _segments, info = model.transcribe(str(wav_path), beam_size=1, vad_filter=True)
         return info.language, float(info.language_probability)
