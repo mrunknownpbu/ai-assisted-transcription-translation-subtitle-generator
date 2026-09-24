@@ -419,9 +419,17 @@ def _find_orphan_spans(cues: list[Segment], spans: list[list[int]]) -> dict[int,
         cue = cues[span[0]]
         if len(cue.text.strip().split()) != 1:
             continue
-        gap_before = cue.boundary_before in _REAL_BOUNDARIES_FOR_CONTEXT
+        # getattr, not attribute access: translate_spans() is shared with
+        # srt_translation.py, whose cues (ValidatedCue) are parsed from a
+        # user-supplied .srt and carry NO acoustic-gap provenance at all.
+        # Real production failure (2026-09-24, job 6813fc33): plain access
+        # raised AttributeError AFTER the whole 2,450-sentence translation
+        # had already succeeded, discarding ~2.5 minutes of work. A cue with
+        # no boundary information is simply never an orphan.
+        gap_before = getattr(cue, "boundary_before", None) in _REAL_BOUNDARIES_FOR_CONTEXT
         gap_after = (i + 1 < len(spans)
-                    and cues[spans[i + 1][0]].boundary_before in _REAL_BOUNDARIES_FOR_CONTEXT)
+                    and getattr(cues[spans[i + 1][0]], "boundary_before", None)
+                    in _REAL_BOUNDARIES_FOR_CONTEXT)
         if gap_before and not gap_after and i > 0:
             orphans[i] = (i - 1, True)
         elif gap_after and not gap_before and i + 1 < len(spans):

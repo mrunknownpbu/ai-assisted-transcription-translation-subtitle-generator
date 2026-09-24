@@ -641,6 +641,34 @@ class PadOrphanContextIntegrationTests(unittest.TestCase):
         mock_batch.assert_called_once()      # only the main batch, no probe
 
 
+class SrtCuesWithoutBoundaryProvenanceTests(unittest.TestCase):
+    """Regression for a real production failure (2026-09-24, job
+    6813fc33): srt_translation.py passes ValidatedCue objects (number/
+    start/end/text only -- no boundary_before) into the SAME
+    translate_spans() the video pipeline uses. _find_orphan_spans()
+    accessed cue.boundary_before directly, so any SRT with a single-word
+    cue (extremely common: "Hey.", "Eda!") crashed AFTER the entire
+    translation had already finished. No existing test caught it because
+    test_srt_translation.py mocks translate_spans() entirely."""
+
+    class _SrtCue:  # exactly ValidatedCue's shape
+        def __init__(self, number, start, end, text):
+            self.number, self.start, self.end, self.text = number, start, end, text
+
+    def test_find_orphan_spans_tolerates_cues_with_no_boundary_before(self):
+        cues = [self._SrtCue(1, 0.0, 1.0, "Hey"), self._SrtCue(2, 1.0, 2.0, "How are you")]
+        self.assertEqual(_find_orphan_spans(cues, [[0], [1]]), {})
+
+    def test_translate_spans_completes_for_srt_shaped_cues_with_a_single_word_cue(self):
+        cues = [self._SrtCue(1, 0.0, 1.0, "Hey"), self._SrtCue(2, 1.0, 2.0, "How are you")]
+        fake = {"Hey": "Hey", "How are you": "How are you"}
+        with patch("translate.load_model", return_value=(object(), object(), 0)), \
+             patch("translate.translate_batch",
+                   side_effect=lambda m, t, b, sents, *a, **k: [fake[s] for s in sents]):
+            result = translate_spans(cues, [[0], [1]], "tr")
+        self.assertEqual(result, ["Hey", "How are you"])
+
+
 class OrphanContextPaddingEnabledTests(unittest.TestCase):
     def test_on_by_default(self):
         import os
