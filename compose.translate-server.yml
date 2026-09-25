@@ -36,6 +36,11 @@ services:
       # or queued). Blank-safe; previously documented but never forwarded,
       # so setting it in .env silently did nothing.
       TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS: ${TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS:-}
+      # Empty = "tr". Source language whose tokenizer/model is warmed at
+      # boot so the first real request doesn't pay model-load latency
+      # (see translate.NLLB_LANG for valid codes). Blank/unrecognised falls
+      # back to "tr" -- a blank must not silently disable the warm-up.
+      TRANSLATE_SERVER_DEFAULT_LANG: ${TRANSLATE_SERVER_DEFAULT_LANG:-}
     ports:
       - "8091:8091"
     volumes:

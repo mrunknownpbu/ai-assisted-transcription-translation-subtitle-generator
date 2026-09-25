@@ -141,13 +141,35 @@ async def _idle_unload_loop():
         _unload_if_idle()
 
 
+def _default_lang_from_env(default: str = "tr") -> str:
+    """TRANSLATE_SERVER_DEFAULT_LANG (the source language warmed at boot),
+    tolerant of a blank or unrecognised value. Unlike the numeric knobs
+    this one never crashed on a blank -- but it failed SILENTLY, which is
+    worse to forward: compose.translate-server.yml passes it as
+    `${TRANSLATE_SERVER_DEFAULT_LANG:-}`, so an unset .env entry arrives as
+    "", `"" in NLLB_LANG` is False, and the boot-time warm-up (today's
+    default behavior: Turkish) would quietly stop happening, making the
+    first real request pay the model-load latency. Blank/unset therefore
+    means the default; a code NLLB_LANG doesn't know falls back to it with
+    a warning instead of skipping the warm-up without a trace. (Warming the
+    default costs at most one extra tokenizer -- the model itself is
+    language-agnostic -- so falling back on a typo is harmless.)"""
+    raw = os.environ.get("TRANSLATE_SERVER_DEFAULT_LANG", "").strip().lower()
+    if not raw:
+        return default
+    if raw not in NLLB_LANG:
+        _logger.warning("ignoring unrecognised TRANSLATE_SERVER_DEFAULT_LANG=%r; using %r", raw, default)
+        return default
+    return raw
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     _state["config"] = TranslationConfig()
     # Warm the common case at boot so the first real request doesn't pay
     # model-load latency -- configurable since this deployment isn't
     # exclusively Turkish (see translate.NLLB_LANG for the full list).
-    default_lang = os.environ.get("TRANSLATE_SERVER_DEFAULT_LANG", "tr")
+    default_lang = _default_lang_from_env()
     if default_lang in NLLB_LANG:
         with _infer_lock:
             _load_for(NLLB_LANG[default_lang])

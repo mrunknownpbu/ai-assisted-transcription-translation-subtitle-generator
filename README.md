@@ -234,14 +234,16 @@ Cleanup problems are logged and never change a job's result.
 | `SUBTITLE_AI_VRAM_MARGIN_GB` | `3.2` | Free VRAM the pre-flight check waits for before loading a large model. Must be a number. |
 | `SUBTITLE_AI_ORPHAN_CONTEXT_PADDING` | on | `off`, `0`, `false` or `no` disables the isolated-word grounding pass. |
 | `TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS` | `120` | Remote translate-server only: idle seconds before its NLLB model is unloaded (see "Remote translate-server"). |
+| `TRANSLATE_SERVER_DEFAULT_LANG` | `tr` | Remote translate-server only: source language warmed at boot so the first request doesn't pay model-load latency. |
 
 All of these are forwarded from `.env` (see `.env.example`): by `compose.yml`
 for the main app, and by `compose.translate-server.yml` for the remote host
-(`TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS`, plus `SUBTITLE_AI_VRAM_MARGIN_GB`,
-which both hosts honour). An empty or unset value means the default, and the
-two numeric settings (`SUBTITLE_AI_VRAM_MARGIN_GB`,
-`TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS`) fall back to their defaults if blank
-or non-numeric rather than failing to start.
+(`TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS`, `TRANSLATE_SERVER_DEFAULT_LANG`, plus
+`SUBTITLE_AI_VRAM_MARGIN_GB`, which both hosts honour). An empty or unset
+value means the default, and invalid values (a non-numeric or negative
+number, or a language code the translation model doesn't know) fall back to
+the default with a logged warning rather than failing to start or silently
+disabling the feature.
 
 To pre-cache the `small` sampler model once on the host (the app's `/models`
 mount is read-only, so it can't download it itself), run this from a Python

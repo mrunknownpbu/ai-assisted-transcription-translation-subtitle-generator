@@ -262,6 +262,69 @@ class IdleUnloadTests(unittest.TestCase):
         self.assertEqual(translate_server._state["active_requests"], 0)
 
 
+class DefaultLangEnvParsingTests(unittest.TestCase):
+    """compose.translate-server.yml forwards TRANSLATE_SERVER_DEFAULT_LANG
+    as `${...:-}`, so an unset .env entry arrives as "". This one never
+    crashed on a blank -- it failed SILENTLY: `"" in NLLB_LANG` is False,
+    so the boot-time warm-up of the default language would just stop
+    happening. The behavioral tests below guard exactly that."""
+
+    def setUp(self):
+        _reset_state()
+
+    def _parse(self, value):
+        import os
+        with patch.dict(os.environ, {"TRANSLATE_SERVER_DEFAULT_LANG": value}):
+            return translate_server._default_lang_from_env()
+
+    def test_blank_falls_back_to_tr(self):
+        self.assertEqual(self._parse(""), "tr")
+
+    def test_whitespace_only_falls_back_to_tr(self):
+        self.assertEqual(self._parse("  "), "tr")
+
+    def test_valid_code_is_used(self):
+        self.assertEqual(self._parse("ja"), "ja")
+
+    def test_code_is_normalised_for_case_and_whitespace(self):
+        self.assertEqual(self._parse(" JA "), "ja")
+
+    def test_unrecognised_code_falls_back_to_tr(self):
+        self.assertEqual(self._parse("klingon"), "tr")
+
+    def test_unset_falls_back_to_tr(self):
+        import os
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TRANSLATE_SERVER_DEFAULT_LANG", None)
+            self.assertEqual(translate_server._default_lang_from_env(), "tr")
+
+    def _startup_loaded_languages(self, value):
+        import os
+        with patch.dict(os.environ, {"TRANSLATE_SERVER_DEFAULT_LANG": value}), \
+             patch("translate_server.load_model", return_value=(object(), object(), 0)) as mock_load:
+            with TestClient(translate_server.app) as client:
+                body = client.get("/health").json()
+        return body["loaded_languages"], mock_load.call_count
+
+    def test_blank_value_still_warms_turkish_at_startup(self):
+        # The actual regression this guards: forwarding a blank must not
+        # silently turn the boot-time warm-up off.
+        loaded, model_loads = self._startup_loaded_languages("")
+        self.assertIn(NLLB_LANG["tr"], loaded)
+        self.assertEqual(model_loads, 1)
+
+    def test_valid_override_warms_that_language_instead(self):
+        loaded, model_loads = self._startup_loaded_languages("ja")
+        self.assertIn(NLLB_LANG["ja"], loaded)
+        self.assertNotIn(NLLB_LANG["tr"], loaded)
+        self.assertEqual(model_loads, 1)
+
+    def test_unrecognised_value_still_warms_the_default(self):
+        loaded, model_loads = self._startup_loaded_languages("klingon")
+        self.assertIn(NLLB_LANG["tr"], loaded)
+        self.assertEqual(model_loads, 1)
+
+
 class IdleUnloadEnvParsingTests(unittest.TestCase):
     """compose.translate-server.yml forwards
     TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS as `${...:-}`, so an unset .env
