@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { useBrowse } from "../api/hooks";
+import type { BrowseEntry } from "../api/types";
 import { fmtBytes } from "../format";
 
 interface Props {
@@ -17,6 +18,11 @@ interface Props {
   batchSelectable?: boolean;
   batchSelected?: Set<string>;
   onToggleBatchSelect?: (path: string) => void;
+  // Returns a human reason a video can't be batch-queued (its checkbox is
+  // then disabled, with the reason as a tooltip), or null if it can. Lets a
+  // page keep ineligible rows out of the selection instead of silently
+  // dropping them at submit time. Omitted = every video is selectable.
+  batchDisabledReason?: (entry: BrowseEntry) => string | null;
 }
 
 export function MediaBrowser({
@@ -28,6 +34,7 @@ export function MediaBrowser({
   batchSelectable = false,
   batchSelected,
   onToggleBatchSelect,
+  batchDisabledReason,
 }: Props) {
   const [path, setPath] = useState("");
   const { data, isLoading, error } = useBrowse(path, fileType);
@@ -83,6 +90,8 @@ export function MediaBrowser({
                   className="browser-row-checkbox"
                   aria-label={`Select ${entry.name} for batch queueing`}
                   checked={batchSelected?.has(entry.path) ?? false}
+                  disabled={batchDisabledReason?.(entry) != null}
+                  title={batchDisabledReason?.(entry) ?? undefined}
                   onChange={() => onToggleBatchSelect?.(entry.path)}
                 />
               )}

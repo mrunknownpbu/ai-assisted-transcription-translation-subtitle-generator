@@ -181,3 +181,135 @@ describe("TranslateSrtPage", () => {
     expect(await screen.findByText("Translate")).toBeDisabled();
   });
 });
+
+describe("TranslateSrtPage batch translate", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let posted: Array<Record<string, unknown>>;
+  let failFor: string | null;
+
+  const video = (n: number, extra: Record<string, unknown>) => ({
+    name: `E0${n}.mkv`,
+    path: `E0${n}.mkv`,
+    type: "video",
+    size: 100,
+    has_english_subtitle: false,
+    source_subtitles: [],
+    ...extra,
+  });
+
+  beforeEach(() => {
+    posted = [];
+    failFor = null;
+    fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/browse")) {
+        return jsonResponse({
+          path: "",
+          entries: [
+            video(1, { source_subtitles: ["E01.tr.srt"] }), // ready
+            video(2, { has_english_subtitle: true, source_subtitles: ["E02.tr.srt"] }), // done
+            video(3, {}), // no source subtitle
+            video(4, { source_subtitles: ["E04.tr.srt", "E04.ar.srt"] }), // ambiguous
+            video(5, { source_subtitles: ["E05.tr.srt"] }), // ready
+          ],
+        });
+      }
+      if (url.startsWith("/api/languages")) return jsonResponse({ languages: ["en", "tr"] });
+      if (url === "/api/srt-translations" && init?.method === "POST") {
+        const body = JSON.parse(init.body as string);
+        posted.push(body);
+        if (failFor && body.video_path === failFor) return jsonResponse({ detail: "already queued" }, 409);
+        return jsonResponse({ job: { id: `job-${posted.length}`, job_type: "srt_translation" } }, 201);
+      }
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function openBatch() {
+    renderPage();
+    await waitFor(() => screen.getByText(/E01\.mkv/));
+    fireEvent.click(screen.getByText("Batch translate…"));
+    await screen.findByText(/ready to translate/);
+  }
+
+  it("batch mode is off by default -- no checkboxes", async () => {
+    renderPage();
+    await waitFor(() => screen.getByText(/E01\.mkv/));
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("shows how many episodes are ready and why the rest are skipped", async () => {
+    await openBatch();
+    expect(screen.getByText(/5 videos here:\s*2 ready to translate/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 already have English, 1 have no source subtitle,\s*1 have several source subtitles/),
+    ).toBeInTheDocument();
+  });
+
+  it("disables the checkbox for an episode that can't be queued, with the reason", async () => {
+    await openBatch();
+    const done = screen.getByLabelText("Select E02.mkv for batch queueing");
+    expect(done).toBeDisabled();
+    expect(done).toHaveAttribute("title", "English subtitle already exists");
+    expect(screen.getByLabelText("Select E03.mkv for batch queueing")).toBeDisabled();
+    // Several sources is ambiguous -- must not be auto-picked.
+    expect(screen.getByLabelText("Select E04.mkv for batch queueing")).toBeDisabled();
+    expect(screen.getByLabelText("Select E01.mkv for batch queueing")).not.toBeDisabled();
+  });
+
+  it("select all ready ticks only the two eligible episodes", async () => {
+    await openBatch();
+    fireEvent.click(screen.getByText("Select all ready"));
+    const ticked = (screen.getAllByRole("checkbox") as HTMLInputElement[]).filter((c) => c.checked);
+    expect(ticked).toHaveLength(2);
+  });
+
+  it("queue posts one job per ready episode with its OWN source subtitle", async () => {
+    await openBatch();
+    fireEvent.click(screen.getByText("Select all ready"));
+    fireEvent.click(screen.getByText("Translate 2 selected"));
+
+    await waitFor(() => expect(screen.getByText("Queued 2 translation jobs.")).toBeInTheDocument());
+    const byVideo = Object.fromEntries(posted.map((b) => [b.video_path, b]));
+    expect(byVideo["E01.mkv"].source_srt_path).toBe("E01.tr.srt");
+    expect(byVideo["E05.mkv"].source_srt_path).toBe("E05.tr.srt");
+    // Existing files are never replaced by a batch.
+    expect(posted.every((b) => b.overwrite_english === false && b.overwrite_original === false)).toBe(true);
+    expect(posted.every((b) => b.source_lang === "auto")).toBe(true);
+    expect(posted).toHaveLength(2);
+  });
+
+  it("uses the source language chosen in the batch panel", async () => {
+    await openBatch();
+    fireEvent.change(screen.getByLabelText("Source language"), { target: { value: "tr" } });
+    fireEvent.click(screen.getByText("Select all ready"));
+    fireEvent.click(screen.getByText("Translate 2 selected"));
+    await waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted.every((b) => b.source_lang === "tr")).toBe(true);
+  });
+
+  it("a failed episode stays ticked and the reason is shown", async () => {
+    failFor = "E05.mkv";
+    await openBatch();
+    fireEvent.click(screen.getByText("Select all ready"));
+    fireEvent.click(screen.getByText("Translate 2 selected"));
+
+    await waitFor(() =>
+      expect(screen.getByText("Queued 1, 1 failed to queue (already queued).")).toBeInTheDocument(),
+    );
+    const e1 = screen.getByLabelText("Select E01.mkv for batch queueing") as HTMLInputElement;
+    const e5 = screen.getByLabelText("Select E05.mkv for batch queueing") as HTMLInputElement;
+    expect(e1.checked).toBe(false); // queued -> cleared
+    expect(e5.checked).toBe(true); // failed -> still ticked, retryable
+  });
+
+  it("the translate button is disabled with nothing selected", async () => {
+    await openBatch();
+    expect(screen.getByText("Translate 0 selected")).toBeDisabled();
+  });
+});

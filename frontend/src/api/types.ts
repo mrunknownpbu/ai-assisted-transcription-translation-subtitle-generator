@@ -100,6 +100,11 @@ export interface BrowseEntry {
   // Only present (and meaningful) on type: "video" entries -- see
   // api.py's browse() docstring comment (IMPROVEMENT_PLAN.md 4.1).
   has_english_subtitle?: boolean;
+  // Library-relative paths of the original-language subtitles beside this
+  // video (<stem>.<lang>.srt, never the English target or its protected
+  // variants). Drives the Translate Subtitle page's batch queue: exactly
+  // one is a safe automatic pick; several is ambiguous.
+  source_subtitles?: string[];
 }
 
 export interface BrowseResponse {

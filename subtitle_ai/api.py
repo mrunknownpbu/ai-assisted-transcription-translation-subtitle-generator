@@ -30,10 +30,16 @@ import workdir
 from events import EventBus
 from jobstore import JobStore, JobStoreError
 from media import VIDEO_EXTENSIONS
-from output import (MAX_SRT_FILE_BYTES, TARGET_LANG, OutputSafetyError, resolve_media_path,
-                    resolve_output_path, write_srt_atomic)
+from output import (MAX_SRT_FILE_BYTES, PROTECTED_SUFFIXES, TARGET_LANG, OutputSafetyError,
+                    resolve_media_path, resolve_output_path, write_srt_atomic)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# Subtitle files that are NOT an original-language source for translation:
+# the English target itself, plus the protected hearing-impaired/forced/SDH
+# English variants output.PROTECTED_SUFFIXES never touches. Anything else
+# beside a video (<stem>.tr.srt, <stem>.ja.srt, ...) is a translation source.
+_ENGLISH_SUBTITLE_SUFFIXES = (".en.srt",) + PROTECTED_SUFFIXES
 
 _event_bus = EventBus()
 
@@ -265,6 +271,16 @@ def browse(path: str = Query(""), file_type: str = Query("video", pattern=r"^(vi
     root = Path(get_media_root()).resolve()
     wanted_suffix = ".srt" if file_type == "srt" else None
     entries = []
+    # Per-request cache of directory-name sets: a video's siblings live in
+    # ITS resolved parent (which differs from `directory` for a symlinked
+    # video), and every video in one folder shares the same set.
+    _names_cache: dict[Path, set[str]] = {}
+
+    def sibling_names(parent: Path) -> set[str]:
+        if parent not in _names_cache:
+            _names_cache[parent] = {p.name for p in parent.iterdir()}
+        return _names_cache[parent]
+
     for entry in sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
         try:
             resolved = resolve_media_path(root, entry, must_exist=True)
@@ -277,13 +293,33 @@ def browse(path: str = Query(""), file_type: str = Query("video", pattern=r"^(vi
             entries.append({"name": entry.name, "path": rel, "type": "srt",
                             "size": resolved.stat().st_size})
         elif resolved.is_file() and wanted_suffix is None and resolved.suffix.lower() in VIDEO_EXTENSIONS:
-            # Cheap filesystem check (a glob, no ffprobe) -- same pattern
-            # media_metadata()'s own existing_subtitles uses -- so a batch-
-            # queue UI (IMPROVEMENT_PLAN.md 4.1) can tell which episodes in
-            # a directory are already done without an N+1 fetch per video.
-            has_english = any(resolved.parent.glob(f"{resolved.stem}.en.srt"))
+            # Cheap filesystem check (one directory listing per parent, no
+            # ffprobe) so the batch-queue UIs -- Library's video batch
+            # (IMPROVEMENT_PLAN.md 4.1) and Translate Subtitle's batch --
+            # can tell which episodes are already done, and which have an
+            # original-language subtitle ready to translate, without an
+            # N+1 fetch per video. Sibling files are looked up in a set of
+            # names rather than globbed: a glob treats `[`/`]` in an
+            # episode's own filename (common in fansub "[Group]" tags) as a
+            # pattern and silently matches nothing.
+            names = sibling_names(resolved.parent)
+            stem = resolved.stem
+            sources = []
+            for name in sorted(names):
+                if not (name.startswith(stem + ".") and name.lower().endswith(".srt")):
+                    continue
+                if name.lower().endswith(_ENGLISH_SUBTITLE_SUFFIXES):
+                    continue  # the translation target itself / protected en.* variants
+                try:
+                    candidate = resolve_media_path(root, resolved.parent / name, must_exist=True)
+                except OutputSafetyError:
+                    continue  # a symlink escaping the root is never listed
+                if candidate.is_file():
+                    sources.append(str(candidate.relative_to(root)))
             entries.append({"name": entry.name, "path": rel, "type": "video",
-                            "size": resolved.stat().st_size, "has_english_subtitle": has_english})
+                            "size": resolved.stat().st_size,
+                            "has_english_subtitle": f"{stem}.en.srt" in names,
+                            "source_subtitles": sources})
     return {"path": str(directory.relative_to(root)) if directory != root else "", "entries": entries}
 
 

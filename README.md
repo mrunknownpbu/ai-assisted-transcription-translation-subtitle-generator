@@ -46,7 +46,14 @@ API (`8099` in `compose.yml`):
   silently dropped.
 - **Series** (`/series`) — per-series glossary: promote auto-mined name
   candidates to protected entities, edit or delete them.
-- **Translate Subtitle** (`/translate`) — Workflow B.
+- **Translate Subtitle** (`/translate`) — Workflow B. **Batch translate**
+  mode translates every episode in a folder that already has an
+  original-language subtitle beside it (`<stem>.<lang>.srt`) and no English
+  one yet, in one click. It only auto-picks the source when there is exactly
+  one such subtitle: an episode with several (which language is the
+  dialogue?), none, or an English subtitle already is skipped, with the
+  reason shown on its disabled checkbox. Existing files are never replaced by
+  a batch, and a job that fails to queue stays ticked with the reason shown.
 - **Jobs** (`/jobs`, `/jobs/:id`) — the queue and per-job detail: live
   stage, progress bar and ETA, QC findings, log, and cancel / retry /
   delete.

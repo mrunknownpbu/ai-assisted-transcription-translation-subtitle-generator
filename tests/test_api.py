@@ -721,6 +721,62 @@ class BrowseTests(MediaRootApiTestCase):
         entry = next(e for e in r.json()["entries"] if e["name"] == "S01E01.mkv")
         self.assertFalse(entry["has_english_subtitle"])
 
+    # --- source_subtitles: what the Translate Subtitle batch queue keys on ---
+
+    def _video_entry(self):
+        r = self.client.get("/api/browse", params={"path": "Show"})
+        return next(e for e in r.json()["entries"] if e["name"] == "S01E01.mkv")
+
+    def _write_srt(self, name):
+        (self.root / "Show" / name).write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n", encoding="utf-8")
+
+    def test_source_subtitles_empty_when_no_sibling_subtitle(self):
+        self.assertEqual(self._video_entry()["source_subtitles"], [])
+
+    def test_source_subtitles_lists_an_original_language_sibling(self):
+        self._write_srt("S01E01.tr.srt")
+        self.assertEqual(self._video_entry()["source_subtitles"], ["Show/S01E01.tr.srt"])
+
+    def test_source_subtitles_excludes_the_english_target_and_protected_variants(self):
+        # .en.srt is the translation TARGET; en.hi/en.forced/en.sdh are the
+        # protected variants output.PROTECTED_SUFFIXES never touches --
+        # none of them is something to translate FROM.
+        for name in ("S01E01.en.srt", "S01E01.en.hi.srt", "S01E01.en.forced.srt", "S01E01.en.sdh.srt"):
+            self._write_srt(name)
+        self.assertEqual(self._video_entry()["source_subtitles"], [])
+
+    def test_source_subtitles_lists_every_original_language_sibling(self):
+        # More than one is genuinely ambiguous -- the API just reports
+        # them all and lets the client decide not to guess.
+        self._write_srt("S01E01.tr.srt")
+        self._write_srt("S01E01.ar.srt")
+        self.assertEqual(self._video_entry()["source_subtitles"],
+                         ["Show/S01E01.ar.srt", "Show/S01E01.tr.srt"])
+
+    def test_source_subtitles_ignores_another_episodes_subtitles(self):
+        # A stem that is a string PREFIX of another episode's stem must
+        # not claim its subtitle: "S01E01" vs "S01E010.tr.srt".
+        self._write_srt("S01E010.tr.srt")
+        self.assertEqual(self._video_entry()["source_subtitles"], [])
+
+    def test_source_subtitles_work_for_filenames_with_brackets(self):
+        # Regression guard for the old glob-based lookup: glob treats [ ]
+        # as a character class, so a "[Group]" fansub tag silently matched
+        # nothing -- both has_english_subtitle and the source list.
+        (self.root / "Show" / "[Grp] Ep 01.mkv").write_bytes(b"x")
+        for name in ("[Grp] Ep 01.tr.srt", "[Grp] Ep 01.en.srt"):
+            (self.root / "Show" / name).write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n", encoding="utf-8")
+        r = self.client.get("/api/browse", params={"path": "Show"})
+        entry = next(e for e in r.json()["entries"] if e["name"] == "[Grp] Ep 01.mkv")
+        self.assertTrue(entry["has_english_subtitle"])
+        self.assertEqual(entry["source_subtitles"], ["Show/[Grp] Ep 01.tr.srt"])
+
+    def test_srt_file_type_entries_have_no_source_subtitles_key(self):
+        self._write_srt("S01E01.tr.srt")
+        r = self.client.get("/api/browse", params={"path": "Show", "file_type": "srt"})
+        entry = next(e for e in r.json()["entries"] if e["name"] == "S01E01.tr.srt")
+        self.assertNotIn("source_subtitles", entry)
+
     def test_srt_file_type_entries_have_no_has_english_subtitle_key(self):
         # That field only means something for a video entry -- an srt
         # listing entry shouldn't carry a stale/misleading copy of it.

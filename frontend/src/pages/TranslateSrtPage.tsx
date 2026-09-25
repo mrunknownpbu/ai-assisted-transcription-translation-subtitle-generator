@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError } from "../api/client";
-import { useCreateSrtTranslationJob, useLanguages, useMedia, useUploadSrt } from "../api/hooks";
+import { useBrowse, useCreateSrtTranslationJob, useLanguages, useMedia, useUploadSrt } from "../api/hooks";
+import type { BrowseEntry } from "../api/types";
 import { MediaBrowser } from "../components/MediaBrowser";
 import { useToast } from "../components/Toast";
 
@@ -30,9 +31,36 @@ function computeDestination(videoPath: string): string {
   return `${dir}${stem}.en.srt`;
 }
 
+// Why a video can't go into the batch queue, or null if it can. The batch
+// only ever auto-picks a source when there is exactly one original-language
+// subtitle beside the video and no English one yet -- several candidates is
+// genuinely ambiguous (which language is the dialogue?), and guessing wrong
+// means a wrong-language translation committed to the library.
+function batchIneligibleReason(entry: BrowseEntry): string | null {
+  if (entry.has_english_subtitle) return "English subtitle already exists";
+  const sources = entry.source_subtitles ?? [];
+  if (sources.length === 0) return "No original-language subtitle beside this video";
+  if (sources.length > 1) return "Several original-language subtitles -- queue this one manually";
+  return null;
+}
+
 export function TranslateSrtPage() {
   const navigate = useNavigate();
   const { notify } = useToast();
+
+  // Batch queueing (the subtitle-translation counterpart of LibraryPage's
+  // batch mode). currentBrowsePath mirrors the episode browser's own
+  // navigation via its onPathChange prop, so this panel reads the SAME
+  // cached listing (identical useBrowse key) instead of fetching twice.
+  const [batchMode, setBatchMode] = useState(false);
+  const [currentBrowsePath, setCurrentBrowsePath] = useState("");
+  const [batchSelected, setBatchSelected] = useState<Set<string>>(new Set());
+  const [batchMessage, setBatchMessage] = useState<{ text: string; kind: "ok" | "error" } | null>(null);
+  const [batchQueueing, setBatchQueueing] = useState(false);
+  // Every video entry seen so far, by path: a selection can span folders,
+  // and the source subtitle for each queued video must come from ITS OWN
+  // listing, not whichever folder is currently open.
+  const seenEntries = useRef(new Map<string, BrowseEntry>());
   const [videoPath, setVideoPath] = useState<string | null>(null);
   const [source, setSource] = useState<SourceSelection>(null);
   const [sourceTab, setSourceTab] = useState<"library" | "upload">("library");
@@ -45,6 +73,72 @@ export function TranslateSrtPage() {
   const media = useMedia(videoPath);
   const uploadSrt = useUploadSrt();
   const createJob = useCreateSrtTranslationJob();
+  const dirListing = useBrowse(currentBrowsePath, "video");
+
+  const videoEntries = dirListing.data?.entries.filter((e) => e.type === "video") ?? [];
+  useEffect(() => {
+    for (const e of dirListing.data?.entries ?? []) {
+      if (e.type === "video") seenEntries.current.set(e.path, e);
+    }
+  }, [dirListing.data]);
+  const readyPaths = videoEntries.filter((e) => batchIneligibleReason(e) === null).map((e) => e.path);
+  const alreadyDone = videoEntries.filter((e) => e.has_english_subtitle).length;
+  const noSource = videoEntries.filter((e) => !e.has_english_subtitle && (e.source_subtitles ?? []).length === 0)
+    .length;
+  const ambiguous = videoEntries.filter((e) => !e.has_english_subtitle && (e.source_subtitles ?? []).length > 1)
+    .length;
+
+  const toggleBatchSelect = (path: string) => {
+    setBatchSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const queueBatch = async () => {
+    // Re-derive eligibility from the remembered entry at submit time (the
+    // listing may have refreshed since the box was ticked) and take the
+    // source from that entry -- never from the folder currently on screen.
+    const jobs = Array.from(batchSelected)
+      .map((path) => seenEntries.current.get(path))
+      .filter((e): e is BrowseEntry => e !== undefined && batchIneligibleReason(e) === null);
+    if (jobs.length === 0) return;
+    setBatchQueueing(true);
+    setBatchMessage(null);
+    const results = await Promise.allSettled(
+      jobs.map((e) =>
+        createJob.mutateAsync({
+          video_path: e.path,
+          source_srt_path: (e.source_subtitles as string[])[0],
+          source_lang: sourceLang,
+          overwrite_original: false,
+          overwrite_english: false,
+        }),
+      ),
+    );
+    setBatchQueueing(false);
+    const succeeded = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.length - succeeded;
+    const firstFailure = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    const why =
+      firstFailure && firstFailure.reason instanceof ApiError ? ` (${firstFailure.reason.message})` : "";
+    setBatchMessage(
+      failed === 0
+        ? { text: `Queued ${succeeded} translation job${succeeded === 1 ? "" : "s"}.`, kind: "ok" }
+        : { text: `Queued ${succeeded}, ${failed} failed to queue${why}.`, kind: "error" },
+    );
+    // Only clear what actually queued -- a failed one stays ticked so it
+    // is visible and retryable, never silently dropped.
+    setBatchSelected((prev) => {
+      const next = new Set(prev);
+      jobs.forEach((e, i) => {
+        if (results[i].status === "fulfilled") next.delete(e.path);
+      });
+      return next;
+    });
+  };
 
   const selectVideo = (path: string) => {
     setVideoPath(path);
@@ -99,12 +193,84 @@ export function TranslateSrtPage() {
 
   return (
     <section className="workspace">
-      <MediaBrowser
-        selectedPath={videoPath}
-        onSelect={selectVideo}
-        fileType="video"
-        title="Associated episode (required)"
-      />
+      <div className="browser-column">
+        <MediaBrowser
+          selectedPath={videoPath}
+          onSelect={selectVideo}
+          fileType="video"
+          title="Associated episode (required)"
+          onPathChange={setCurrentBrowsePath}
+          batchSelectable={batchMode}
+          batchSelected={batchSelected}
+          onToggleBatchSelect={toggleBatchSelect}
+          batchDisabledReason={batchIneligibleReason}
+        />
+        <div className="panel batch-panel">
+          <div className="panel-head">
+            <h2>Batch translate</h2>
+            <button className="text-button" onClick={() => setBatchMode((v) => !v)}>
+              {batchMode ? "Done" : "Batch translate…"}
+            </button>
+          </div>
+          {batchMode && (
+            <>
+              <div className="selection-empty">
+                Translates each episode's existing original-language subtitle (the
+                <code> .srt </code>beside the video) to English. Only episodes with exactly one
+                such subtitle and no English one yet can be queued; existing files are kept,
+                never replaced.
+              </div>
+              <div className="option-row">
+                <span>
+                  {videoEntries.length} video{videoEntries.length === 1 ? "" : "s"} here:{" "}
+                  {readyPaths.length} ready to translate
+                </span>
+              </div>
+              {(alreadyDone > 0 || noSource > 0 || ambiguous > 0) && (
+                <div className="lang-info">
+                  Skipped: {alreadyDone} already have English, {noSource} have no source subtitle,{" "}
+                  {ambiguous} have several source subtitles.
+                </div>
+              )}
+              <label className="existing-row">
+                Source language
+                <select value={sourceLang} onChange={(e) => setSourceLang(e.target.value)}>
+                  <option value="auto">Auto Detect</option>
+                  {(languages.data?.languages ?? []).map((code) => (
+                    <option key={code} value={code}>
+                      {code}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="batch-actions">
+                <button
+                  className="text-button"
+                  onClick={() => setBatchSelected(new Set(readyPaths))}
+                  disabled={readyPaths.length === 0}
+                >
+                  Select all ready
+                </button>
+                <button
+                  className="text-button"
+                  onClick={() => setBatchSelected(new Set())}
+                  disabled={batchSelected.size === 0}
+                >
+                  Clear selection
+                </button>
+              </div>
+              <button
+                className="primary"
+                onClick={queueBatch}
+                disabled={batchSelected.size === 0 || batchQueueing}
+              >
+                {batchQueueing ? "Queueing…" : `Translate ${batchSelected.size} selected`}
+              </button>
+              {batchMessage && <div className={`message ${batchMessage.kind}`}>{batchMessage.text}</div>}
+            </>
+          )}
+        </div>
+      </div>
       <div className="panel selection-panel">
         <div className="panel-head">
           <h2>Translate existing subtitle</h2>
