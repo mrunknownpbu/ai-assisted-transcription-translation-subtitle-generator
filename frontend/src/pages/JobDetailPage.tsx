@@ -19,13 +19,19 @@ export function JobDetailPage() {
   return (
     <section className="panel">
       <div className="panel-head">
-        <h2>{isSrt ? job.source_srt_path : job.video_path}</h2>
+        <h2>{job.video_path}</h2>
         <JobStatusBadge status={job.status} />
       </div>
       {isSrt && (
         <div className="option-row">
           <span>Type</span>
           <strong>SRT Translation → {job.destination_srt_path}</strong>
+        </div>
+      )}
+      {isSrt && (
+        <div className="option-row">
+          <span>Source subtitle</span>
+          <strong>{job.source_is_uploaded ? "Uploaded from computer" : job.source_srt_path}</strong>
         </div>
       )}
 

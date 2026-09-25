@@ -209,7 +209,18 @@ export function TranslateSrtPage() {
     if (jobs.length === 0) return;
     setBatchQueueing(true);
     setBatchMessage(null);
-    const results = await Promise.allSettled(jobs.map((j) => createJob.mutateAsync(j.body)));
+    // One at a time, in episode order. The worker runs the oldest queued job
+    // first and the server stamps created_at on ARRIVAL, so firing all the
+    // requests at once (Promise.allSettled) made the run order a network race.
+    jobs.sort((a, b) => a.body.video_path.localeCompare(b.body.video_path, undefined, { numeric: true }));
+    const results: PromiseSettledResult<unknown>[] = [];
+    for (const j of jobs) {
+      try {
+        results.push({ status: "fulfilled", value: await createJob.mutateAsync(j.body) });
+      } catch (reason) {
+        results.push({ status: "rejected", reason });
+      }
+    }
     setBatchQueueing(false);
     const succeeded = results.filter((r) => r.status === "fulfilled").length;
     const failed = results.length - succeeded;

@@ -38,9 +38,11 @@ const RUNNING_JOB = {
 describe("JobsPage", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let requestedUrls: string[];
+  let extraJobs: Array<Record<string, unknown>>;
 
   beforeEach(() => {
     requestedUrls = [];
+    extraJobs = [];
     fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       requestedUrls.push(url);
@@ -50,6 +52,7 @@ describe("JobsPage", () => {
         // Mirrors the real backend's (now case-insensitive) filtering --
         // this fixture only has one lowercase-"running" job.
         const matches = !status || status.toLowerCase() === "running";
+        if (extraJobs.length > 0) return jsonResponse({ jobs: extraJobs, total: extraJobs.length });
         return jsonResponse({ jobs: matches ? [RUNNING_JOB] : [], total: matches ? 1 : 0 });
       }
       return jsonResponse({}, 404);
@@ -96,5 +99,31 @@ describe("JobsPage", () => {
     // locale-dependent (see format.test.ts for the unit-level assertion).
     const cells = screen.getAllByTitle(/2026/);
     expect(cells.length).toBeGreaterThan(0);
+  });
+  it("an SRT job shows the episode file name, never the internal upload hash", async () => {
+    extraJobs = [
+      {
+        ...RUNNING_JOB, id: "job-up", job_type: "srt_translation", status: "queued",
+        video_path: "Show/Season 01/Show S01E05.mkv",
+        source_srt_path: "0b70c0d7b1ad4250895c336647eeee85.srt", source_is_uploaded: true,
+      },
+    ];
+    renderPage();
+    const cell = await screen.findByText("Show S01E05.mkv");
+    expect(screen.queryByText(/0b70c0d7/)).not.toBeInTheDocument();
+    // The source stays discoverable from the tooltip.
+    expect(cell).toHaveAttribute("title", expect.stringContaining("Source: uploaded from computer"));
+  });
+
+  it("a library-sourced SRT job's tooltip names its source subtitle", async () => {
+    extraJobs = [
+      {
+        ...RUNNING_JOB, id: "job-lib", job_type: "srt_translation", status: "queued",
+        video_path: "Show/S01E06.mkv", source_srt_path: "Show/S01E06.tr.srt", source_is_uploaded: false,
+      },
+    ];
+    renderPage();
+    const cell = await screen.findByText("S01E06.mkv");
+    expect(cell).toHaveAttribute("title", expect.stringContaining("Source: Show/S01E06.tr.srt"));
   });
 });

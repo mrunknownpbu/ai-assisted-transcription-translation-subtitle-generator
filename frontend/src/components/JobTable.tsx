@@ -61,11 +61,19 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
           )}
           {jobs.map((job) => {
             const isSrt = job.job_type === "srt_translation";
-            const fileIdentity = isSrt ? job.source_srt_path ?? "" : job.video_path;
+            // An SRT-translation job is identified by the EPISODE it translates,
+            // not its source file: an uploaded source is stored under an
+            // internal <hash>.srt name that means nothing to the user.
+            const fileIdentity = job.video_path;
+            const fileTitle = isSrt
+              ? `${job.video_path}\nSource: ${
+                  job.source_is_uploaded ? "uploaded from computer" : job.source_srt_path ?? "unknown"
+                }`
+              : job.video_path;
             return (
             <tr key={job.id} className={job.status === "failed" ? "status-failed" : ""}>
               <td>{isSrt ? "SRT Translation" : "Video"}</td>
-              <td className="file-cell" title={fileIdentity}>
+              <td className="file-cell" title={fileTitle}>
                 {fileIdentity.split("/").pop()}
               </td>
               <td className="date-cell" title={fmtDateTime(job.created_at)}>

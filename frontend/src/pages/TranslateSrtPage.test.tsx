@@ -453,6 +453,32 @@ describe("TranslateSrtPage batch translate", () => {
     expect(screen.getByText("Translate 0 selected")).toBeDisabled();
   });
 
+  it("queues jobs one at a time in episode order, not as a parallel race", async () => {
+    // The server stamps created_at on arrival and the worker runs oldest-first,
+    // so the POST order IS the run order. Make later requests answer FASTER than
+    // earlier ones: a parallel submit would then arrive out of order.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const base = fetchMock.getMockImplementation() as (i: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/srt-translations" && init?.method === "POST") {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+      }
+      return base(input, init);
+    });
+    await openBatch();
+    // Upload out of order (E05 before E01) -- the queue must still be E01, E03, E05.
+    await upload("x E05.srt", "x E03.srt", "x E01.srt");
+    await screen.findByLabelText("Episode for x E01.srt");
+    fireEvent.click(screen.getByText("Translate 3 selected"));
+    await waitFor(() => expect(posted).toHaveLength(3));
+    expect(posted.map((b) => b.video_path)).toEqual(["E01.mkv", "E03.mkv", "E05.mkv"]);
+    expect(maxInFlight).toBe(1);
+  });
+
   it("the translate button is disabled with nothing selected", async () => {
     await openBatch();
     expect(screen.getByText("Translate 0 selected")).toBeDisabled();
