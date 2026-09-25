@@ -181,7 +181,9 @@ export interface RetryRequest {
 export interface SeriesSummary {
   tvdb_id: number | null;
   title: string | null;
+  // Jobs (every retry / re-run is its own row) vs. distinct episode files.
   total: number;
+  episodes: number;
   counts: Record<string, number>;
   last_updated: number;
 }

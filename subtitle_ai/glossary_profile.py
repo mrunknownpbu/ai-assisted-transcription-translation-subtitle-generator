@@ -37,6 +37,18 @@ def find_series_root(path: str) -> Path | None:
     return None
 
 
+def title_from_video_path(path: str) -> str | None:
+    """A display name for the series, taken from its folder name with the
+    `{tvdb-<id>}` tag removed (`.../Show (2020) {tvdb-383383}/S01/x.mkv` ->
+    `Show (2020)`). The fallback for a series with no glossary `title:` and
+    no TVDB lookup, so a Series page never has to show a bare "Series #123".
+    None under the same condition as find_series_root()."""
+    root = find_series_root(path)
+    if root is None:
+        return None
+    return _TVDB_PATTERN.sub("", root.name).strip() or None
+
+
 @dataclass
 class Profile:
     tvdb_id: int | None

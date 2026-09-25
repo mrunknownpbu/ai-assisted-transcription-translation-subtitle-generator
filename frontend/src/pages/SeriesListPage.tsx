@@ -8,7 +8,14 @@ function SeriesCardBody({ s }: { s: SeriesSummary }) {
     <div className="panel">
       <h3>{s.title ?? (s.tvdb_id === null ? "Ungrouped" : `Series #${s.tvdb_id}`)}</h3>
       <div className="series-counts">
-        <span>{s.total} episodes</span>
+        <span>
+          {s.episodes} episode{s.episodes === 1 ? "" : "s"}
+        </span>
+        {s.total !== s.episodes && (
+          <span>
+            {s.total} job{s.total === 1 ? "" : "s"}
+          </span>
+        )}
         {Object.entries(s.counts)
           .filter(([, n]) => n > 0)
           .map(([status, n]) => (

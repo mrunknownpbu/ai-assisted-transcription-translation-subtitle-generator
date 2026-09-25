@@ -599,9 +599,17 @@ def queue_counts() -> dict:
 
 
 def _series_title(tvdb_id: int | None) -> str | None:
-    if tvdb_id is None or not get_glossary_dir():
+    """Glossary `title:` (or TVDB) first; failing that, the series folder's
+    own name -- the tag `{tvdb-<id>}` is already in every video path, so a
+    series never has to show as a bare "Series #<id>"."""
+    if tvdb_id is None:
         return None
-    return glossary_profile.load_profile(get_glossary_dir(), tvdb_id=tvdb_id).title
+    if get_glossary_dir():
+        title = glossary_profile.load_profile(get_glossary_dir(), tvdb_id=tvdb_id).title
+        if title:
+            return title
+    path = get_store().latest_video_path(tvdb_id)
+    return glossary_profile.title_from_video_path(path) if path else None
 
 
 @app.get("/api/series")

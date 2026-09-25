@@ -385,15 +385,31 @@ class JobStore:
             rows = conn.execute(
                 "SELECT tvdb_id, status, COUNT(*) as n, MAX(updated_at) as last_updated "
                 "FROM jobs GROUP BY tvdb_id, status").fetchall()
+            # `total` counts JOBS (every retry and re-run is its own row);
+            # `episodes` is the number of distinct files those jobs ran on,
+            # which is what the Series page means by "episodes".
+            episodes = {r["tvdb_id"]: r["n"] for r in conn.execute(
+                "SELECT tvdb_id, COUNT(DISTINCT video_path) as n FROM jobs GROUP BY tvdb_id")}
         series: dict[int | None, dict] = {}
         for r in rows:
             key = r["tvdb_id"]
             entry = series.setdefault(key, {"tvdb_id": key, "counts": {s.upper(): 0 for s in STATUSES},
-                                            "total": 0, "last_updated": 0.0})
+                                            "total": 0, "episodes": episodes.get(key, 0),
+                                            "last_updated": 0.0})
             entry["counts"][r["status"].upper()] = r["n"]
             entry["total"] += r["n"]
             entry["last_updated"] = max(entry["last_updated"], r["last_updated"] or 0.0)
         return sorted(series.values(), key=lambda e: e["last_updated"], reverse=True)
+
+    def latest_video_path(self, tvdb_id: int) -> str | None:
+        """The video_path of this series' most recently updated job -- enough
+        to recover the series folder name for display (see
+        glossary_profile.title_from_video_path)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT video_path FROM jobs WHERE tvdb_id=? ORDER BY updated_at DESC LIMIT 1",
+                (tvdb_id,)).fetchone()
+        return row["video_path"] if row else None
 
     def list_by_tvdb_id(self, tvdb_id: int | None) -> list[dict]:
         # video_path sorts naturally today because every real filename in
