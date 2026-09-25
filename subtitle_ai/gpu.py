@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import fcntl
 import gc
+import logging
 import os
 import tempfile
 import threading
@@ -67,11 +68,38 @@ def free_gpu(device: str = "cuda") -> None:
             torch.cuda.empty_cache()
 
 
+_logger = logging.getLogger(__name__)
+
+
+def _vram_margin_from_env(default: float = 3.2) -> float:
+    """SUBTITLE_AI_VRAM_MARGIN_GB, tolerant of a blank or unparseable
+    value. Blank matters because compose.yml forwards this as
+    `${SUBTITLE_AI_VRAM_MARGIN_GB:-}` (the same "empty = default"
+    convention its other optional settings use), so an unset .env entry
+    arrives as "" -- a bare float("") here would crash the app at import
+    time. An unparseable or negative value falls back to the default with
+    a warning rather than refusing to start: a typo in an optional tuning
+    knob must never take the whole service (or the remote translate-
+    server) down."""
+    raw = os.environ.get("SUBTITLE_AI_VRAM_MARGIN_GB", "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        _logger.warning("ignoring invalid SUBTITLE_AI_VRAM_MARGIN_GB=%r; using %sGB", raw, default)
+        return default
+    if value < 0:
+        _logger.warning("ignoring negative SUBTITLE_AI_VRAM_MARGIN_GB=%r; using %sGB", raw, default)
+        return default
+    return value
+
+
 # Default headroom before constructing a model -- matches this project's own
 # measured model sizes (NLLB ~2.8GB, large-v3 ASR ~3GB) plus a buffer, not
 # an arbitrary round number. Configurable per deployment (a different card
 # or model mix) without a code change.
-DEFAULT_VRAM_MARGIN_GB = float(os.environ.get("SUBTITLE_AI_VRAM_MARGIN_GB", "3.2"))
+DEFAULT_VRAM_MARGIN_GB = _vram_margin_from_env()
 
 
 class InsufficientVramError(RuntimeError):

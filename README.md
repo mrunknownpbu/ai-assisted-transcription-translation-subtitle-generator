@@ -31,6 +31,43 @@ subtitles unusable in practice: hallucinated text and mistimed lines.
   one there is kept or replaced, independent of `overwrite_english` for
   the translated output.
 
+## Web UI
+
+The app serves a React UI (built into the image) on the same port as the
+API (`8099` in `compose.yml`):
+
+- **Library** (`/`) — browse the media library and queue a video for
+  Workflow A, optionally choosing the audio stream ("Analyze" samples each
+  track's spoken language) and whether to keep or replace existing
+  subtitles. **Batch queue** mode adds checkboxes to video rows, marks
+  episodes that already have an English subtitle with a ✓, and can queue
+  every untranscribed episode in a folder at once with standard
+  parameters. A video that fails to queue stays checked instead of being
+  silently dropped.
+- **Series** (`/series`) — per-series glossary: promote auto-mined name
+  candidates to protected entities, edit or delete them.
+- **Translate Subtitle** (`/translate`) — Workflow B.
+- **Jobs** (`/jobs`, `/jobs/:id`) — the queue and per-job detail: live
+  stage, progress bar and ETA, QC findings, log, and cancel / retry /
+  delete.
+
+**Live progress.** A job's `stage` and `progress` advance through the real
+pipeline milestones (e.g. *Transcribing* → *Translating* → *Writing
+output*), with ASR and translation interpolating smoothly within their
+share of the bar. The percentages are a directional heuristic (ASR is the
+dominant cost of a video job), not a wall-clock promise; the ETA is a
+linear extrapolation and is not shown below 2%.
+
+**Reviewing and fixing subtitles.** A completed job has an *Edit
+subtitles* panel that edits the target `.en.srt` in place: text only
+(timing and cue count can't be changed), written atomically, without
+re-running any pipeline stage or changing the job record. Each cue's
+original line breaks are preserved. Cues flagged by the timing,
+readability and output QC stages sort to the top. Translation, entity and
+hallucination findings are indexed by sentence or ASR segment rather than
+by final subtitle cue, so they can't be pointed at one cue and are not
+highlighted there; the job's `needs_review` count still includes them.
+
 ## Pipeline
 
 Workflow A (video transcription) moves through the following stages:
@@ -46,7 +83,18 @@ Workflow A (video transcription) moves through the following stages:
 5. **Hallucination detection** — flag and suppress ASR output that isn't
    grounded in actual audio (a known failure mode of Whisper-family
    models on silence, music, and noise).
-6. **Translation** — translate the transcript into the target language.
+6. **Translation** — translate the transcript into the target language,
+   one sentence at a time (NLLB silently drops everything after the first
+   sentence of a multi-sentence input). Two bounded refinements guard
+   against known failure modes: a long unpunctuated run-on is retried in
+   fixed-size word chunks and the chunked result is kept only when it
+   preserves more protected entities or avoids severe truncation; and a
+   single-word cue isolated by a real acoustic pause (e.g. one word of a
+   sung line) is re-translated with its neighbouring cue as grounding
+   context, replacing the context-free result only on an exact-match
+   extraction (segmentation is never changed; see "Tuning knobs" below).
+   The second applies to Workflow A only, since an uploaded `.srt` carries
+   no acoustic-gap information.
 7. **Target segmentation** — re-split translated text into subtitle-sized
    lines appropriate for the target language (translated text rarely
    maps 1:1 onto the source segmentation).
@@ -77,6 +125,19 @@ Workflow A (video transcription) moves through the following stages:
 - **GPU lock**: GPU-heavy stages (model load through inference) are
   serialized across all processes sharing the same GPU, preventing
   concurrent jobs from exhausting VRAM on single-GPU deployments.
+- **VRAM pre-flight check**: the GPU lock only serializes *this project's*
+  processes, so it can't see another program on the same card (a Tdarr,
+  Jellyfin or Plex transcode burst). Before every in-process CUDA model
+  load (ASR, local NLLB, the remote translate-server's NLLB, the stream
+  sampler) the app polls free VRAM for up to 20 s and, if the required
+  headroom never appears, fails the job with `InsufficientVramError`
+  rather than attempting a load that would likely CUDA-OOM. Default margin
+  is 3.2 GB (the sampler's lightweight model needs only 0.5 GB).
+- **Lightweight stream sampling**: the library's "Analyze" button (spoken
+  language per audio track) uses a small Whisper model (`small`, roughly
+  200 MB of VRAM) instead of `large-v3` (roughly 3 GB), so an Analyze click
+  can't crowd out a running job. If the small model isn't cached it falls
+  back to `large-v3` with a logged warning.
 
 ## Output language
 
@@ -97,9 +158,11 @@ throughput; see `asr.AsrConfig.compute_type`'s docstring). Translation
 VRAM-headroom analysis behind this and the safety margin tuned into
 `num_beams`/`batch_size`) -- this does mean real, ongoing GPU contention
 with any other process sharing the card (e.g. a hardware-transcode tool),
-which is not eliminated. Run `python -m pytest tests -q` (see `.github/
-workflows/test.yml` for the exact CPU-only setup) rather than trusting a
-hardcoded number here, since it drifts with every change.
+which is not eliminated (the VRAM pre-flight check above bounds the damage
+but doesn't remove the contention). Translation can optionally be
+offloaded to a second GPU host (see "Remote translate-server"). Run the
+tests (see "Development" below) rather than trusting a hardcoded number
+here, since it drifts with every change.
 
 ## Running it
 
@@ -158,6 +221,43 @@ running jobs, and only ever removes direct child directories of the work
 root -- never the transcript cache, job database, or SRT upload staging.
 Cleanup problems are logged and never change a job's result.
 
+### Tuning knobs
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SUBTITLE_AI_API_KEY` | unset (open; intended for a LAN) | When set, mutating endpoints (cancel, retry, delete, glossary writes, subtitle edits) require a matching `X-API-Key` header. Job creation and read endpoints stay open. |
+| `SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS` | `24` | How long a failed job's scratch directory is kept (see below). |
+| `SUBTITLE_AI_ASR_HOTWORDS` | off | `on` feeds glossary names to Whisper as hotwords (see "ASR decoding defaults"). |
+| `FAILURE_WEBHOOK_URL` | unset | A plain JSON POST is sent to this URL when a job fails (works with anything that accepts one, or a relay in front of it). |
+| `TVDB_API_KEY`, `TVDB_API_PIN` | unset | Optional TheTVDB series-title enrichment; the app never depends on it. |
+| `SUBTITLE_AI_SAMPLE_MODEL` | `small` | Whisper model the library's "Analyze" button uses. |
+| `SUBTITLE_AI_VRAM_MARGIN_GB` | `3.2` | Free VRAM the pre-flight check waits for before loading a large model. Must be a number. |
+| `SUBTITLE_AI_ORPHAN_CONTEXT_PADDING` | on | `off`, `0`, `false` or `no` disables the isolated-word grounding pass. |
+
+All of these are forwarded by `compose.yml` from `.env` (see `.env.example`;
+an empty or unset value means the default, and `SUBTITLE_AI_VRAM_MARGIN_GB`
+falls back to its default if blank or non-numeric rather than failing to
+start). `SUBTITLE_AI_VRAM_MARGIN_GB` is also forwarded by
+`compose.translate-server.yml` for the remote host.
+
+To pre-cache the `small` sampler model once on the host (the app's `/models`
+mount is read-only, so it can't download it itself), run this from a Python
+environment that has `faster-whisper`, pointing `CONFIG_PATH` at the same
+appdata directory `compose.yml` mounts (or set `MODELS_DIR` directly):
+
+```bash
+CONFIG_PATH=/path/to/appdata python scripts/download_sample_model.py
+```
+
+### Database backups
+
+`scripts/backup_jobs_db.sh [source_db] [backup_dir]` takes a safe online
+backup of the SQLite job store (sqlite3's `.backup`, fine against the live
+WAL database; no need to stop the container), gzips it, and prunes backups
+older than 14 days. Its default paths match one specific deployment, so
+pass both arguments for yours. No schedule is installed automatically; the
+script's header has a suggested cron line.
+
 ### Remote translate-server (optional)
 
 `translate_server.py` can run on a separate GPU host (`TRANSLATE_SERVER_URL`
@@ -167,11 +267,28 @@ NLLB model resident regardless of how many source languages it serves (a
 further language costs only a small tokenizer), runs one translation at a
 time, and unloads the model after `TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS`
 (default `120`) with no activity so a shared GPU is freed between jobs.
-It never unloads while a request is running or queued. An unsupported
-`src_lang` returns HTTP 422; `GET /health` reports `model_loaded`.
+It never unloads while a request is running or queued, and applies the same
+VRAM pre-flight check before loading the model (that GPU is typically shared
+with a media server's hardware transcoding). An unsupported `src_lang`
+returns HTTP 422; `GET /health` reports `model_loaded`.
 
-Run tests with:
+## Development
+
+Backend tests (the `uv run` form works from a fresh shell; see `.github/
+workflows/test.yml` for the exact CPU-only CI setup):
 
 ```bash
-pytest
+PYTHONPATH=subtitle_ai uv run --with pytest pytest tests -q
 ```
+
+Frontend (React + Vite + Vitest, in `frontend/`):
+
+```bash
+cd frontend && npx tsc --noEmit && npm test -- --run
+```
+
+Deploying (`scripts/deploy.sh`) builds the image, redeploys the main app,
+ships the same image to the translate-server host, and health-checks both;
+set `SKIP_REMOTE=1` for changes that don't touch `translate.py` or
+`translate_server.py`. `CLAUDE.md` holds deploy and operations notes;
+`IMPROVEMENT_PLAN.md` tracks the roadmap and what has shipped.

@@ -56,6 +56,17 @@ services:
       # off). See .env.example for what each does.
       SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS: ${SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS:-}
       SUBTITLE_AI_ASR_HOTWORDS: ${SUBTITLE_AI_ASR_HOTWORDS:-}
+      # Empty = code defaults, same convention as above (all three are
+      # blank-safe): "small" Whisper model for the library's Analyze
+      # button (falls back to large-v3 if not pre-cached -- see
+      # scripts/download_sample_model.py); 3.2GB of free VRAM required
+      # before a large model load (gpu.preflight_vram_check()); orphan-
+      # word context grounding on (off/0/false/no disables it).
+      # Previously read by the app but never forwarded here, so setting
+      # them in .env silently did nothing.
+      SUBTITLE_AI_SAMPLE_MODEL: ${SUBTITLE_AI_SAMPLE_MODEL:-}
+      SUBTITLE_AI_VRAM_MARGIN_GB: ${SUBTITLE_AI_VRAM_MARGIN_GB:-}
+      SUBTITLE_AI_ORPHAN_CONTEXT_PADDING: ${SUBTITLE_AI_ORPHAN_CONTEXT_PADDING:-}
     volumes:
       - ${DATA_PATH}:/data
       # Read-only: confirmed safe by real GPU inference runs this session

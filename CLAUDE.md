@@ -15,7 +15,7 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-23: 795 passing, 0 failures (plus 41 frontend
+Baseline as of 2026-09-25: 805 passing, 0 failures (plus 41 frontend
 tests -- `cd frontend && npm test -- --run`). (History: 708 after fixing
 `test_glossary_profile.py`'s stale `"Eda Yıldız"` canonical assertion
 2026-09-22 -- see `IMPROVEMENT_PLAN.md` section 1.1 -- then 727 after the

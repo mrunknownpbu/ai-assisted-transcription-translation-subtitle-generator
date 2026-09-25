@@ -91,6 +91,51 @@ class TimeoutTests(unittest.TestCase):
             self.assertLessEqual(call.args[0], 20)
 
 
+class MarginEnvParsingTests(unittest.TestCase):
+    """compose.yml forwards SUBTITLE_AI_VRAM_MARGIN_GB as
+    `${SUBTITLE_AI_VRAM_MARGIN_GB:-}`, so an unset .env entry reaches the
+    container as "" -- a bare float("") at import time would have crashed
+    the whole app (and the remote translate-server) on startup."""
+
+    def _parse(self, value):
+        import os
+        with patch.dict(os.environ, {"SUBTITLE_AI_VRAM_MARGIN_GB": value}):
+            return gpu._vram_margin_from_env()
+
+    def test_blank_falls_back_to_default(self):
+        self.assertEqual(self._parse(""), 3.2)
+
+    def test_whitespace_only_falls_back_to_default(self):
+        self.assertEqual(self._parse("   "), 3.2)
+
+    def test_valid_value_is_used(self):
+        self.assertEqual(self._parse("2.5"), 2.5)
+
+    def test_surrounding_whitespace_is_tolerated(self):
+        self.assertEqual(self._parse(" 4 "), 4.0)
+
+    def test_garbage_falls_back_to_default_instead_of_raising(self):
+        self.assertEqual(self._parse("lots"), 3.2)
+
+    def test_negative_falls_back_to_default(self):
+        self.assertEqual(self._parse("-1"), 3.2)
+
+    def test_unset_falls_back_to_default(self):
+        import os
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SUBTITLE_AI_VRAM_MARGIN_GB", None)
+            self.assertEqual(gpu._vram_margin_from_env(), 3.2)
+
+    def test_module_import_survives_a_blank_value(self):
+        # The actual production failure mode: importing gpu.py itself.
+        import importlib
+        import os
+        with patch.dict(os.environ, {"SUBTITLE_AI_VRAM_MARGIN_GB": ""}):
+            reloaded = importlib.reload(gpu)
+            self.assertEqual(reloaded.DEFAULT_VRAM_MARGIN_GB, 3.2)
+        importlib.reload(gpu)  # restore real env for any tests running after this one
+
+
 class DefaultMarginTests(unittest.TestCase):
     def test_default_margin_is_3_2gb_unless_overridden_by_env(self):
         import importlib

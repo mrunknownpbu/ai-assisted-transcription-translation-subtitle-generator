@@ -26,6 +26,11 @@ services:
     container_name: subtitle-ai-translate-server
     command: ["uvicorn", "translate_server:app", "--host", "0.0.0.0", "--port", "8091"]
     gpus: all
+    environment:
+      # Empty = the code default (3.2GB of free VRAM required before the
+      # NLLB load -- see gpu.preflight_vram_check(); this card is shared
+      # with Jellyfin/Plex transcoding). Blank-safe by design.
+      SUBTITLE_AI_VRAM_MARGIN_GB: ${SUBTITLE_AI_VRAM_MARGIN_GB:-}
     ports:
       - "8091:8091"
     volumes:
