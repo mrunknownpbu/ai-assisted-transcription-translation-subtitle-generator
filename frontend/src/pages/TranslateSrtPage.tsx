@@ -35,9 +35,11 @@ function computeDestination(videoPath: string): string {
 // only ever auto-picks a source when there is exactly one original-language
 // subtitle beside the video and no English one yet -- several candidates is
 // genuinely ambiguous (which language is the dialogue?), and guessing wrong
-// means a wrong-language translation committed to the library.
-function batchIneligibleReason(entry: BrowseEntry): string | null {
-  if (entry.has_english_subtitle) return "English subtitle already exists";
+// means a wrong-language translation committed to the library. With
+// replaceExisting (an explicit opt-in) an existing English subtitle no longer
+// disqualifies the video -- the job then overwrites it.
+function batchIneligibleReason(entry: BrowseEntry, replaceExisting = false): string | null {
+  if (entry.has_english_subtitle && !replaceExisting) return "English subtitle already exists";
   const sources = entry.source_subtitles ?? [];
   if (sources.length === 0) return "No original-language subtitle beside this video";
   if (sources.length > 1) return "Several original-language subtitles -- queue this one manually";
@@ -53,6 +55,7 @@ export function TranslateSrtPage() {
   // navigation via its onPathChange prop, so this panel reads the SAME
   // cached listing (identical useBrowse key) instead of fetching twice.
   const [batchMode, setBatchMode] = useState(false);
+  const [batchReplace, setBatchReplace] = useState(false);
   const [currentBrowsePath, setCurrentBrowsePath] = useState("");
   const [batchSelected, setBatchSelected] = useState<Set<string>>(new Set());
   const [batchMessage, setBatchMessage] = useState<{ text: string; kind: "ok" | "error" } | null>(null);
@@ -81,12 +84,14 @@ export function TranslateSrtPage() {
       if (e.type === "video") seenEntries.current.set(e.path, e);
     }
   }, [dirListing.data]);
-  const readyPaths = videoEntries.filter((e) => batchIneligibleReason(e) === null).map((e) => e.path);
-  const alreadyDone = videoEntries.filter((e) => e.has_english_subtitle).length;
-  const noSource = videoEntries.filter((e) => !e.has_english_subtitle && (e.source_subtitles ?? []).length === 0)
-    .length;
-  const ambiguous = videoEntries.filter((e) => !e.has_english_subtitle && (e.source_subtitles ?? []).length > 1)
-    .length;
+  const readyPaths = videoEntries.filter((e) => batchIneligibleReason(e, batchReplace) === null).map((e) => e.path);
+  const readyToReplace = videoEntries.filter(
+    (e) => e.has_english_subtitle && batchIneligibleReason(e, batchReplace) === null,
+  ).length;
+  const alreadyDone = batchReplace ? 0 : videoEntries.filter((e) => e.has_english_subtitle).length;
+  const skipsEnglish = (e: BrowseEntry) => !e.has_english_subtitle || batchReplace;
+  const noSource = videoEntries.filter((e) => skipsEnglish(e) && (e.source_subtitles ?? []).length === 0).length;
+  const ambiguous = videoEntries.filter((e) => skipsEnglish(e) && (e.source_subtitles ?? []).length > 1).length;
 
   const toggleBatchSelect = (path: string) => {
     setBatchSelected((prev) => {
@@ -103,7 +108,7 @@ export function TranslateSrtPage() {
     // source from that entry -- never from the folder currently on screen.
     const jobs = Array.from(batchSelected)
       .map((path) => seenEntries.current.get(path))
-      .filter((e): e is BrowseEntry => e !== undefined && batchIneligibleReason(e) === null);
+      .filter((e): e is BrowseEntry => e !== undefined && batchIneligibleReason(e, batchReplace) === null);
     if (jobs.length === 0) return;
     setBatchQueueing(true);
     setBatchMessage(null);
@@ -114,7 +119,9 @@ export function TranslateSrtPage() {
           source_srt_path: (e.source_subtitles as string[])[0],
           source_lang: sourceLang,
           overwrite_original: false,
-          overwrite_english: false,
+          // Only ever true for a video that really has an English file, and
+          // only because the user ticked "Replace existing English".
+          overwrite_english: batchReplace && Boolean(e.has_english_subtitle),
         }),
       ),
     );
@@ -203,7 +210,7 @@ export function TranslateSrtPage() {
           batchSelectable={batchMode}
           batchSelected={batchSelected}
           onToggleBatchSelect={toggleBatchSelect}
-          batchDisabledReason={batchIneligibleReason}
+          batchDisabledReason={(entry) => batchIneligibleReason(entry, batchReplace)}
         />
         <div className="panel batch-panel">
           <div className="panel-head">
@@ -217,9 +224,28 @@ export function TranslateSrtPage() {
               <div className="selection-empty">
                 Translates each episode's existing original-language subtitle (the
                 <code> .srt </code>beside the video) to English. Only episodes with exactly one
-                such subtitle and no English one yet can be queued; existing files are kept,
-                never replaced.
+                such subtitle can be queued. Episodes that already have English are skipped
+                unless you tick "Replace existing English" below.
               </div>
+              <label className="existing-row">
+                <input
+                  type="checkbox"
+                  checked={batchReplace}
+                  onChange={(e) => {
+                    setBatchReplace(e.target.checked);
+                    // Ticks made under the other mode may no longer be eligible.
+                    setBatchSelected(new Set());
+                    setBatchMessage(null);
+                  }}
+                />
+                Replace existing English subtitles
+              </label>
+              {batchReplace && (
+                <div className="lang-info">
+                  Selected episodes' current <code>.en.srt</code> will be overwritten
+                  ({readyToReplace} in this folder have one). Manual edits to them are lost.
+                </div>
+              )}
               <div className="option-row">
                 <span>
                   {videoEntries.length} video{videoEntries.length === 1 ? "" : "s"} here:{" "}

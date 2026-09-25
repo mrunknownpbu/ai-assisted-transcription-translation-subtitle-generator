@@ -308,6 +308,42 @@ describe("TranslateSrtPage batch translate", () => {
     expect(e5.checked).toBe(true); // failed -> still ticked, retryable
   });
 
+  it("replace-existing makes an episode that already has English eligible", async () => {
+    await openBatch();
+    fireEvent.click(screen.getByLabelText("Replace existing English subtitles"));
+    // E02 has English + one source -> now ready; E03/E04 stay skipped for their own reasons.
+    expect(screen.getByLabelText("Select E02.mkv for batch queueing")).not.toBeDisabled();
+    expect(screen.getByLabelText("Select E03.mkv for batch queueing")).toBeDisabled();
+    expect(screen.getByLabelText("Select E04.mkv for batch queueing")).toBeDisabled();
+    expect(screen.getByText(/5 videos here:\s*3 ready to translate/)).toBeInTheDocument();
+    expect(screen.getByText(/will be overwritten\s*\(1 in this folder have one\)/)).toBeInTheDocument();
+  });
+
+  it("replace-existing sends overwrite_english only for episodes that have English", async () => {
+    await openBatch();
+    fireEvent.click(screen.getByLabelText("Replace existing English subtitles"));
+    fireEvent.click(screen.getByText("Select all ready"));
+    fireEvent.click(screen.getByText("Translate 3 selected"));
+
+    await waitFor(() => expect(posted).toHaveLength(3));
+    const byVideo = Object.fromEntries(posted.map((b) => [b.video_path, b]));
+    expect(byVideo["E02.mkv"].overwrite_english).toBe(true);
+    expect(byVideo["E02.mkv"].source_srt_path).toBe("E02.tr.srt");
+    expect(byVideo["E01.mkv"].overwrite_english).toBe(false);
+    expect(byVideo["E05.mkv"].overwrite_english).toBe(false);
+    expect(posted.every((b) => b.overwrite_original === false)).toBe(true);
+  });
+
+  it("turning replace-existing off again drops selections that are no longer eligible", async () => {
+    await openBatch();
+    const toggle = screen.getByLabelText("Replace existing English subtitles");
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByLabelText("Select E02.mkv for batch queueing"));
+    fireEvent.click(toggle);
+    expect(screen.getByText("Translate 0 selected")).toBeDisabled();
+    expect(screen.getByLabelText("Select E02.mkv for batch queueing")).toBeDisabled();
+  });
+
   it("the translate button is disabled with nothing selected", async () => {
     await openBatch();
     expect(screen.getByText("Translate 0 selected")).toBeDisabled();

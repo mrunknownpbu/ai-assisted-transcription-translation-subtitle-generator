@@ -52,8 +52,10 @@ API (`8099` in `compose.yml`):
   one yet, in one click. It only auto-picks the source when there is exactly
   one such subtitle: an episode with several (which language is the
   dialogue?), none, or an English subtitle already is skipped, with the
-  reason shown on its disabled checkbox. Existing files are never replaced by
-  a batch, and a job that fails to queue stays ticked with the reason shown.
+  reason shown on its disabled checkbox. By default existing files are kept;
+  tick **Replace existing English subtitles** to re-translate episodes that
+  already have one (their `.en.srt` is overwritten; the source subtitle is
+  never touched). A job that fails to queue stays ticked with the reason shown.
 - **Jobs** (`/jobs`, `/jobs/:id`) — the queue and per-job detail: live
   stage, progress bar and ETA, QC findings, log, and cancel / retry /
   delete.
