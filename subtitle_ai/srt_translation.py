@@ -104,6 +104,13 @@ def parse_and_validate(path: str | Path) -> list[ValidatedCue]:
         raise SrtValidationError(f"source .srt is {size} bytes, exceeds the "
                                  f"{MAX_SRT_FILE_BYTES} byte limit")
     raw = Path(path).read_text(encoding="utf-8-sig").replace("\r\n", "\n")
+    if srt.is_webvtt(raw):
+        # A WebVTT file named .srt (common for streaming-service releases):
+        # convert to SRT text, then validate exactly as any other source.
+        try:
+            raw = srt.webvtt_to_srt(raw)
+        except ValueError as exc:
+            raise SrtValidationError(str(exc)) from exc
     cues: list[ValidatedCue] = []
     for block in raw.split("\n\n"):
         lines = block.strip("\n").split("\n")
