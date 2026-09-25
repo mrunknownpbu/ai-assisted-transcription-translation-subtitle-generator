@@ -28,6 +28,13 @@ dependencies = [
 # known open question in the rebuild's final report, not silently assumed
 # equivalent.
 
+[tool.uv]
+# triton (~555MB) is a hard requirement of the torch wheel but is only used by
+# torch.compile/inductor, which this project never calls; torch and
+# transformers import and run without it. An impossible marker makes uv skip
+# it. Re-check if anything ever starts using torch.compile.
+override-dependencies = ["triton; sys_platform == 'never'"]
+
 [tool.uv.sources]
 torch = { index = "pytorch-cu121" }
 

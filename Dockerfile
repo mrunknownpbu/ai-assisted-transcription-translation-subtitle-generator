@@ -13,12 +13,17 @@ FROM python:3.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive
 
+# ffmpeg/ffprobe are a static build copied in, not `apt-get install ffmpeg`:
+# Debian's package drags in ~470MB of desktop/graphics/codec libraries
+# (libllvm15, Mesa, Flite, libmfx, ...) that a headless audio-extraction job
+# never touches. This app only runs `ffmpeg -ss -t -i ... -ac 1 -ar 16000
+# -vn -sn` and `ffprobe -show_streams`, which any build supports.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        ffmpeg \
         curl \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+COPY --from=mwader/static-ffmpeg:7.1.1 /ffmpeg /ffprobe /usr/local/bin/
 
 # Created here, while /app doesn't exist yet, instead of via a `chown -R
 # /app` after the uv sync/cudnn installs below -- overlayfs has to copy
@@ -33,7 +38,12 @@ COPY --from=ghcr.io/astral-sh/uv:0.10.4 /uv /bin/uv
 
 WORKDIR /app
 COPY pyproject.toml /app/pyproject.toml
-RUN uv sync --no-install-project
+# triton is excluded via pyproject's override-dependencies (only torch.compile
+# uses it; this app never calls it). torch/include is the C++ headers for
+# building extensions. The removal lives in THIS layer: deleting files in a
+# later layer would leave them in the image.
+RUN uv sync --no-install-project && \
+    rm -rf /app/.venv/lib/python3.12/site-packages/torch/include
 
 # ctranslate2 4.4.0 links cuDNN 8, but torch 2.5.1+cu121 hard-pins
 # nvidia-cudnn-cu12 9.1.0.70 which only ships libcudnn_*.so.9. Install
