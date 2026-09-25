@@ -262,5 +262,54 @@ class IdleUnloadTests(unittest.TestCase):
         self.assertEqual(translate_server._state["active_requests"], 0)
 
 
+class IdleUnloadEnvParsingTests(unittest.TestCase):
+    """compose.translate-server.yml forwards
+    TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS as `${...:-}`, so an unset .env
+    entry reaches the container as "" -- a bare float("") at import time
+    would have crashed the server on startup. Same class of defect as
+    gpu.py's SUBTITLE_AI_VRAM_MARGIN_GB (see test_vram_preflight.py)."""
+
+    def _parse(self, value):
+        import os
+        with patch.dict(os.environ, {"TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS": value}):
+            return translate_server._idle_unload_seconds_from_env()
+
+    def test_blank_falls_back_to_default(self):
+        self.assertEqual(self._parse(""), 120.0)
+
+    def test_whitespace_only_falls_back_to_default(self):
+        self.assertEqual(self._parse("  "), 120.0)
+
+    def test_valid_value_is_used(self):
+        self.assertEqual(self._parse("300"), 300.0)
+
+    def test_zero_is_valid_and_means_unload_at_the_next_idle_check(self):
+        self.assertEqual(self._parse("0"), 0.0)
+
+    def test_surrounding_whitespace_is_tolerated(self):
+        self.assertEqual(self._parse(" 45 "), 45.0)
+
+    def test_garbage_falls_back_to_default_instead_of_raising(self):
+        self.assertEqual(self._parse("soon"), 120.0)
+
+    def test_negative_falls_back_to_default(self):
+        self.assertEqual(self._parse("-5"), 120.0)
+
+    def test_unset_falls_back_to_default(self):
+        import os
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS", None)
+            self.assertEqual(translate_server._idle_unload_seconds_from_env(), 120.0)
+
+    def test_module_import_survives_a_blank_value(self):
+        # The actual production failure mode: importing translate_server.
+        import importlib
+        import os
+        with patch.dict(os.environ, {"TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS": ""}):
+            reloaded = importlib.reload(translate_server)
+            self.assertEqual(reloaded.IDLE_UNLOAD_SECONDS, 120.0)
+        importlib.reload(translate_server)  # restore for any tests running after this one
+
+
 if __name__ == "__main__":
     unittest.main()

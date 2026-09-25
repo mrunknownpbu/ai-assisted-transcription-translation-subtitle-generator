@@ -31,6 +31,11 @@ services:
       # NLLB load -- see gpu.preflight_vram_check(); this card is shared
       # with Jellyfin/Plex transcoding). Blank-safe by design.
       SUBTITLE_AI_VRAM_MARGIN_GB: ${SUBTITLE_AI_VRAM_MARGIN_GB:-}
+      # Empty = 120s. Seconds of inactivity before the NLLB model is
+      # unloaded to free the shared GPU (never while a request is active
+      # or queued). Blank-safe; previously documented but never forwarded,
+      # so setting it in .env silently did nothing.
+      TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS: ${TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS:-}
     ports:
       - "8091:8091"
     volumes:

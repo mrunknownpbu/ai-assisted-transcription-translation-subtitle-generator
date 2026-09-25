@@ -24,6 +24,7 @@ running. See _unload_if_idle()'s docstring for the mitigation.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import threading
 import time
@@ -36,13 +37,40 @@ from pydantic import BaseModel
 from gpu import free_gpu
 from translate import NLLB_LANG, TranslationConfig, load_model, load_tokenizer, translate_batch
 
+_logger = logging.getLogger(__name__)
+
+
+def _idle_unload_seconds_from_env(default: float = 120.0) -> float:
+    """TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS, tolerant of a blank or
+    unparseable value. compose.translate-server.yml forwards it as
+    `${TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS:-}` (the repo's "empty =
+    default" convention), so an unset .env entry arrives as "" -- a bare
+    float("") at import time would crash the server on startup. An
+    invalid or negative value falls back to the default with a warning
+    rather than refusing to start: a typo in an optional tuning knob must
+    never take the translate-server down. 0 is valid (unload at the next
+    idle check)."""
+    raw = os.environ.get("TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS", "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        _logger.warning("ignoring invalid TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS=%r; using %ss", raw, default)
+        return default
+    if value < 0:
+        _logger.warning("ignoring negative TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS=%r; using %ss", raw, default)
+        return default
+    return value
+
+
 # 2 minutes: real back-to-back episode retries (this deployment's actual
 # usage pattern, confirmed 2026-09-20) leave only a few seconds' gap
 # between one job finishing and the next starting, comfortably under
 # this -- so a full-season retry batch still never reloads mid-batch --
 # while still returning the GPU to Jellyfin/Plex well within minutes of
 # the last job finishing, not up to 5 minutes later.
-IDLE_UNLOAD_SECONDS = float(os.environ.get("TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS", "120"))
+IDLE_UNLOAD_SECONDS = _idle_unload_seconds_from_env()
 _IDLE_CHECK_INTERVAL_SECONDS = 30.0
 
 # Exactly ONE model is ever GPU-resident. NLLB's weights are language-
