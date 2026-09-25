@@ -186,6 +186,7 @@ describe("TranslateSrtPage batch translate", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let posted: Array<Record<string, unknown>>;
   let failFor: string | null;
+  let uploaded: string[];
 
   const video = (n: number, extra: Record<string, unknown>) => ({
     name: `E0${n}.mkv`,
@@ -199,6 +200,7 @@ describe("TranslateSrtPage batch translate", () => {
 
   beforeEach(() => {
     posted = [];
+    uploaded = [];
     failFor = null;
     fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -215,6 +217,11 @@ describe("TranslateSrtPage batch translate", () => {
         });
       }
       if (url.startsWith("/api/languages")) return jsonResponse({ languages: ["en", "tr"] });
+      if (url === "/api/srt-uploads" && init?.method === "POST") {
+        const file = (init.body as FormData).get("file") as File;
+        uploaded.push(file.name);
+        return jsonResponse({ upload_id: `up-${uploaded.length}`, filename: file.name }, 201);
+      }
       if (url === "/api/srt-translations" && init?.method === "POST") {
         const body = JSON.parse(init.body as string);
         posted.push(body);
@@ -342,6 +349,108 @@ describe("TranslateSrtPage batch translate", () => {
     fireEvent.click(toggle);
     expect(screen.getByText("Translate 0 selected")).toBeDisabled();
     expect(screen.getByLabelText("Select E02.mkv for batch queueing")).toBeDisabled();
+  });
+
+  const srtFile = (name: string) => new File(["1\n00:00:01,000 --> 00:00:02,000\nMerhaba\n"], name, { type: "text/plain" });
+  async function upload(...names: string[]) {
+    fireEvent.change(screen.getByLabelText("Subtitle files to upload"), {
+      target: { files: names.map(srtFile) },
+    });
+    await waitFor(() => expect(uploaded).toHaveLength(names.length));
+  }
+
+  it("upload from PC auto-matches each file to its episode by number and queues with source_upload_id", async () => {
+    await openBatch();
+    // E01.mkv / E05.mkv are the episodes; note E02 already has English.
+    await upload("Show 1. Bölüm.srt", "Show 5. Bölüm.srt");
+    const e1 = (await screen.findByLabelText("Episode for Show 1. Bölüm.srt")) as HTMLSelectElement;
+    const e5 = screen.getByLabelText("Episode for Show 5. Bölüm.srt") as HTMLSelectElement;
+    expect(e1.value).toBe("E01.mkv");
+    expect(e5.value).toBe("E05.mkv");
+
+    fireEvent.click(screen.getByText("Translate 2 selected"));
+    await waitFor(() => expect(screen.getByText("Queued 2 translation jobs.")).toBeInTheDocument());
+    const byVideo = Object.fromEntries(posted.map((b) => [b.video_path, b]));
+    expect(byVideo["E01.mkv"].source_upload_id).toBe("up-1");
+    expect(byVideo["E05.mkv"].source_upload_id).toBe("up-2");
+    expect(byVideo["E01.mkv"].source_srt_path).toBeUndefined();
+    expect(posted.every((b) => b.overwrite_english === false && b.overwrite_original === false)).toBe(true);
+    // Queued uploads leave the list.
+    expect(screen.queryByLabelText("Episode for Show 1. Bölüm.srt")).not.toBeInTheDocument();
+  });
+
+  it("an upload works for an episode with no library source (E03), and beats a library source", async () => {
+    await openBatch();
+    fireEvent.click(screen.getByText("Select all ready")); // E01 + E05 via library
+    await upload("x E01.srt", "x E03.srt");
+    await screen.findByLabelText("Episode for x E03.srt");
+    // E01 (upload wins, so not double-queued) + E05 (library) + E03 (upload) = 3
+    fireEvent.click(screen.getByText("Translate 3 selected"));
+    await waitFor(() => expect(posted).toHaveLength(3));
+    const byVideo = Object.fromEntries(posted.map((b) => [b.video_path, b]));
+    expect(byVideo["E01.mkv"].source_upload_id).toBe("up-1");
+    expect(byVideo["E01.mkv"].source_srt_path).toBeUndefined();
+    expect(byVideo["E05.mkv"].source_srt_path).toBe("E05.tr.srt");
+    expect(byVideo["E03.mkv"].source_upload_id).toBe("up-2");
+  });
+
+  it("an unmatched file must be assigned by hand before it can queue", async () => {
+    await openBatch();
+    await upload("random name.srt");
+    const select = (await screen.findByLabelText("Episode for random name.srt")) as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(screen.getByText("Choose the episode this belongs to")).toBeInTheDocument();
+    expect(screen.getByText("Translate 0 selected")).toBeDisabled();
+
+    fireEvent.change(select, { target: { value: "E04.mkv" } });
+    fireEvent.click(await screen.findByText("Translate 1 selected"));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0].video_path).toBe("E04.mkv");
+    expect(posted[0].source_upload_id).toBe("up-1");
+  });
+
+  it("an upload for an episode that already has English needs Replace ticked", async () => {
+    await openBatch();
+    await upload("x E02.srt");
+    expect(await screen.findByText(/Already has English -- tick Replace/)).toBeInTheDocument();
+    expect(screen.getByText("Translate 0 selected")).toBeDisabled();
+
+    fireEvent.click(screen.getByLabelText("Replace existing English subtitles"));
+    fireEvent.click(await screen.findByText("Translate 1 selected"));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0].video_path).toBe("E02.mkv");
+    expect(posted[0].source_upload_id).toBe("up-1");
+    expect(posted[0].overwrite_english).toBe(true);
+  });
+
+  it("two files for the same episode are flagged and neither queues", async () => {
+    await openBatch();
+    await upload("a E01.srt", "b E01.srt");
+    await screen.findByLabelText("Episode for a E01.srt");
+    // Auto-match never double-assigns: the second one is left for the user.
+    expect((screen.getByLabelText("Episode for b E01.srt") as HTMLSelectElement).value).toBe("");
+    fireEvent.change(screen.getByLabelText("Episode for b E01.srt"), { target: { value: "E01.mkv" } });
+    expect(screen.getAllByText("Another file is assigned to this episode")).toHaveLength(2);
+    expect(screen.getByText("Translate 0 selected")).toBeDisabled();
+  });
+
+  it("a failed upload-job stays listed so it can be retried", async () => {
+    failFor = "E01.mkv";
+    await openBatch();
+    await upload("x E01.srt");
+    fireEvent.click(await screen.findByText("Translate 1 selected"));
+    await waitFor(() =>
+      expect(screen.getByText("Queued 0, 1 failed to queue (already queued).")).toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("Episode for x E01.srt")).toBeInTheDocument();
+  });
+
+  it("removing an uploaded file takes it out of the batch", async () => {
+    await openBatch();
+    await upload("x E01.srt");
+    fireEvent.click(await screen.findByLabelText("Remove x E01.srt"));
+    expect(screen.queryByLabelText("Episode for x E01.srt")).not.toBeInTheDocument();
+    expect(screen.getByText("Translate 0 selected")).toBeDisabled();
   });
 
   it("the translate button is disabled with nothing selected", async () => {

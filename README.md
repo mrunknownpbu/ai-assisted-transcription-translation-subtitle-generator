@@ -55,7 +55,11 @@ API (`8099` in `compose.yml`):
   reason shown on its disabled checkbox. By default existing files are kept;
   tick **Replace existing English subtitles** to re-translate episodes that
   already have one (their `.en.srt` is overwritten; the source subtitle is
-  never touched). A job that fails to queue stays ticked with the reason shown.
+  never touched). **Upload from this computer** adds subtitle files from your
+  PC to the batch: each is matched to an episode by its number (`S01E03`,
+  `E03`, `3. Bölüm`, ...), you can change any match from its dropdown, and an
+  uploaded file wins over a library subtitle for the same episode. A job that
+  fails to queue stays ticked / listed with the reason shown.
 - **Jobs** (`/jobs`, `/jobs/:id`) — the queue and per-job detail: live
   stage, progress bar and ETA, QC findings, log, and cancel / retry /
   delete.

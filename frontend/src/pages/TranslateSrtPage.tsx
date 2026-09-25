@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { useBrowse, useCreateSrtTranslationJob, useLanguages, useMedia, useUploadSrt } from "../api/hooks";
 import type { BrowseEntry } from "../api/types";
+import { episodeKey, sameEpisode } from "../episodeMatch";
 import { MediaBrowser } from "../components/MediaBrowser";
 import { useToast } from "../components/Toast";
 
@@ -46,6 +47,16 @@ function batchIneligibleReason(entry: BrowseEntry, replaceExisting = false): str
   return null;
 }
 
+// A subtitle file uploaded from the user's PC for the batch. videoPath is the
+// episode it is assigned to: auto-matched from the file name, changeable, and
+// null when nothing matched (then the user must choose before it can queue).
+interface BatchUpload {
+  id: string;
+  filename: string;
+  uploadId: string;
+  videoPath: string | null;
+}
+
 export function TranslateSrtPage() {
   const navigate = useNavigate();
   const { notify } = useToast();
@@ -64,6 +75,9 @@ export function TranslateSrtPage() {
   // and the source subtitle for each queued video must come from ITS OWN
   // listing, not whichever folder is currently open.
   const seenEntries = useRef(new Map<string, BrowseEntry>());
+  const [batchUploads, setBatchUploads] = useState<BatchUpload[]>([]);
+  const [batchUploading, setBatchUploading] = useState(false);
+  const batchFileRef = useRef<HTMLInputElement>(null);
   const [videoPath, setVideoPath] = useState<string | null>(null);
   const [source, setSource] = useState<SourceSelection>(null);
   const [sourceTab, setSourceTab] = useState<"library" | "upload">("library");
@@ -102,29 +116,100 @@ export function TranslateSrtPage() {
     });
   };
 
-  const queueBatch = async () => {
-    // Re-derive eligibility from the remembered entry at submit time (the
-    // listing may have refreshed since the box was ticked) and take the
-    // source from that entry -- never from the folder currently on screen.
-    const jobs = Array.from(batchSelected)
-      .map((path) => seenEntries.current.get(path))
-      .filter((e): e is BrowseEntry => e !== undefined && batchIneligibleReason(e, batchReplace) === null);
-    if (jobs.length === 0) return;
-    setBatchQueueing(true);
+  // Why an uploaded file can't be queued yet, or null if it can.
+  const uploadIssue = (u: BatchUpload): string | null => {
+    if (!u.videoPath) return "Choose the episode this belongs to";
+    if (batchUploads.some((o) => o.id !== u.id && o.videoPath === u.videoPath)) {
+      return "Another file is assigned to this episode";
+    }
+    if (seenEntries.current.get(u.videoPath)?.has_english_subtitle && !batchReplace) {
+      return "Already has English -- tick Replace existing English to overwrite";
+    }
+    return null;
+  };
+  const readyUploads = batchUploads.filter((u) => uploadIssue(u) === null);
+  // An uploaded file wins over a library subtitle for the same episode.
+  const uploadedVideos = new Set(readyUploads.map((u) => u.videoPath));
+  // Re-derive eligibility from the remembered entry (the listing may have
+  // refreshed since the box was ticked) and take the source from that entry --
+  // never from the folder currently on screen.
+  const librarySelected = Array.from(batchSelected)
+    .map((path) => seenEntries.current.get(path))
+    .filter(
+      (e): e is BrowseEntry =>
+        e !== undefined && batchIneligibleReason(e, batchReplace) === null && !uploadedVideos.has(e.path),
+    );
+  const batchCount = librarySelected.length + readyUploads.length;
+
+  const handleBatchFiles = async (files: FileList | null) => {
+    const list = Array.from(files ?? []);
+    if (batchFileRef.current) batchFileRef.current.value = "";
+    if (list.length === 0) return;
+    setBatchUploading(true);
     setBatchMessage(null);
-    const results = await Promise.allSettled(
-      jobs.map((e) =>
-        createJob.mutateAsync({
+    const results = await Promise.allSettled(list.map((f) => uploadSrt.mutateAsync(f)));
+    setBatchUploading(false);
+    setBatchUploads((prev) => {
+      const taken = new Set(prev.map((u) => u.videoPath).filter((p): p is string => p !== null));
+      const added: BatchUpload[] = [];
+      results.forEach((r, i) => {
+        if (r.status !== "fulfilled") return;
+        const key = episodeKey(list[i].name);
+        const match = key
+          ? videoEntries.find((v) => !taken.has(v.path) && sameEpisode(key, episodeKey(v.name)))
+          : undefined;
+        if (match) taken.add(match.path);
+        added.push({
+          id: r.value.upload_id,
+          filename: list[i].name,
+          uploadId: r.value.upload_id,
+          videoPath: match?.path ?? null,
+        });
+      });
+      return [...prev, ...added];
+    });
+    const failed = results.filter((r) => r.status === "rejected");
+    if (failed.length > 0) {
+      const reason = (failed[0] as PromiseRejectedResult).reason;
+      setBatchMessage({
+        text: `${failed.length} file${failed.length === 1 ? "" : "s"} failed to upload${
+          reason instanceof ApiError ? ` (${reason.message})` : ""
+        }.`,
+        kind: "error",
+      });
+    }
+  };
+
+  const queueBatch = async () => {
+    const overwriteFor = (path: string) => batchReplace && Boolean(seenEntries.current.get(path)?.has_english_subtitle);
+    const jobs = [
+      ...librarySelected.map((e) => ({
+        key: `lib:${e.path}`,
+        body: {
           video_path: e.path,
           source_srt_path: (e.source_subtitles as string[])[0],
           source_lang: sourceLang,
           overwrite_original: false,
           // Only ever true for a video that really has an English file, and
           // only because the user ticked "Replace existing English".
-          overwrite_english: batchReplace && Boolean(e.has_english_subtitle),
-        }),
-      ),
-    );
+          overwrite_english: overwriteFor(e.path),
+        },
+      })),
+      ...readyUploads.map((u) => ({
+        key: `up:${u.id}`,
+        body: {
+          video_path: u.videoPath as string,
+          source_upload_id: u.uploadId,
+          source_lang: sourceLang,
+          overwrite_original: false,
+          overwrite_english: overwriteFor(u.videoPath as string),
+        },
+      })),
+    ];
+    if (jobs.length === 0) return;
+    setBatchQueueing(true);
+    setBatchMessage(null);
+    const results = await Promise.allSettled(jobs.map((j) => createJob.mutateAsync(j.body)));
     setBatchQueueing(false);
     const succeeded = results.filter((r) => r.status === "fulfilled").length;
     const failed = results.length - succeeded;
@@ -136,15 +221,17 @@ export function TranslateSrtPage() {
         ? { text: `Queued ${succeeded} translation job${succeeded === 1 ? "" : "s"}.`, kind: "ok" }
         : { text: `Queued ${succeeded}, ${failed} failed to queue${why}.`, kind: "error" },
     );
-    // Only clear what actually queued -- a failed one stays ticked so it
-    // is visible and retryable, never silently dropped.
+    // Only clear what actually queued -- a failed one stays (ticked / listed)
+    // so it is visible and retryable, never silently dropped.
+    const done = new Set(jobs.filter((_, i) => results[i].status === "fulfilled").map((j) => j.key));
     setBatchSelected((prev) => {
       const next = new Set(prev);
-      jobs.forEach((e, i) => {
-        if (results[i].status === "fulfilled") next.delete(e.path);
+      librarySelected.forEach((e) => {
+        if (done.has(`lib:${e.path}`)) next.delete(e.path);
       });
       return next;
     });
+    setBatchUploads((prev) => prev.filter((u) => !done.has(`up:${u.id}`)));
   };
 
   const selectVideo = (path: string) => {
@@ -224,7 +311,8 @@ export function TranslateSrtPage() {
               <div className="selection-empty">
                 Translates each episode's existing original-language subtitle (the
                 <code> .srt </code>beside the video) to English. Only episodes with exactly one
-                such subtitle can be queued. Episodes that already have English are skipped
+                such subtitle can be queued. Or upload subtitle files from your computer and
+                match each to its episode. Episodes that already have English are skipped
                 unless you tick "Replace existing English" below.
               </div>
               <label className="existing-row">
@@ -269,6 +357,63 @@ export function TranslateSrtPage() {
                   ))}
                 </select>
               </label>
+              <div className="batch-uploads">
+                <input
+                  ref={batchFileRef}
+                  type="file"
+                  accept=".srt"
+                  multiple
+                  hidden
+                  aria-label="Subtitle files to upload"
+                  onChange={(e) => void handleBatchFiles(e.target.files)}
+                />
+                <button
+                  className="text-button"
+                  onClick={() => batchFileRef.current?.click()}
+                  disabled={batchUploading}
+                >
+                  {batchUploading ? "Uploading…" : "Upload from this computer…"}
+                </button>
+                {batchUploads.map((u) => {
+                  const issue = uploadIssue(u);
+                  const options = new Map(videoEntries.map((v) => [v.path, v.name]));
+                  if (u.videoPath && !options.has(u.videoPath)) {
+                    options.set(u.videoPath, u.videoPath.split("/").pop() ?? u.videoPath);
+                  }
+                  return (
+                    <div className="batch-upload-row" key={u.id}>
+                      <span className="batch-upload-name" title={u.filename}>
+                        {u.filename}
+                      </span>
+                      <select
+                        aria-label={`Episode for ${u.filename}`}
+                        value={u.videoPath ?? ""}
+                        onChange={(e) =>
+                          setBatchUploads((prev) =>
+                            prev.map((o) => (o.id === u.id ? { ...o, videoPath: e.target.value || null } : o)),
+                          )
+                        }
+                      >
+                        <option value="">Choose episode…</option>
+                        {Array.from(options).map(([path, name]) => (
+                          <option key={path} value={path}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="icon-button"
+                        aria-label={`Remove ${u.filename}`}
+                        title="Remove"
+                        onClick={() => setBatchUploads((prev) => prev.filter((o) => o.id !== u.id))}
+                      >
+                        ×
+                      </button>
+                      {issue && <div className="lang-info batch-upload-issue">{issue}</div>}
+                    </div>
+                  );
+                })}
+              </div>
               <div className="batch-actions">
                 <button
                   className="text-button"
@@ -288,9 +433,9 @@ export function TranslateSrtPage() {
               <button
                 className="primary"
                 onClick={queueBatch}
-                disabled={batchSelected.size === 0 || batchQueueing}
+                disabled={batchCount === 0 || batchQueueing}
               >
-                {batchQueueing ? "Queueing…" : `Translate ${batchSelected.size} selected`}
+                {batchQueueing ? "Queueing…" : `Translate ${batchCount} selected`}
               </button>
               {batchMessage && <div className={`message ${batchMessage.kind}`}>{batchMessage.text}</div>}
             </>
