@@ -9,14 +9,43 @@ extraction, a mocked (GPU-free) language sampler.
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import subprocess
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import audio_streams
 from audio_streams import AudioStream, parse_audio_streams, recommend_stream, score_candidate
+
+
+@contextlib.contextmanager
+def _fake_faster_whisper(model_cls):
+    """Stand in for the `faster_whisper` module for the duration of a `with`.
+    default_sampler() does a lazy `from faster_whisper import WhisperModel`,
+    and patch("faster_whisper.WhisperModel") would have to import the real
+    package first -- which CI (CPU-only, no ASR stack) deliberately doesn't
+    install. A stub module works the same with or without it.
+
+    Only the ONE sys.modules key is set and restored. patch.dict(sys.modules)
+    would restore the whole table on exit and so evict `torch` if the code
+    under test imported it inside the block -- and a second import of torch
+    in the same process crashes ("function '_has_torch_function' already has
+    a docstring")."""
+    missing = object()
+    previous = sys.modules.get("faster_whisper", missing)
+    sys.modules["faster_whisper"] = types.SimpleNamespace(WhisperModel=model_cls)
+    try:
+        yield
+    finally:
+        if previous is missing:
+            sys.modules.pop("faster_whisper", None)
+        else:
+            sys.modules["faster_whisper"] = previous
 
 
 def _raw(index, *, codec_type="audio", codec_name="aac", channels=2, channel_layout="stereo",
@@ -249,7 +278,7 @@ class DefaultSamplerModelResolutionTests(unittest.TestCase):
                 info.language_probability = 0.95
                 return iter([]), info
 
-        with patch("faster_whisper.WhisperModel", FakeModel), \
+        with _fake_faster_whisper(FakeModel), \
              patch("asr.AsrConfig") as MockCfg:
             MockCfg.return_value.compute_type = "int8"
             sampler = audio_streams.default_sampler(model_name="base")
@@ -280,7 +309,7 @@ class DefaultSamplerModelResolutionTests(unittest.TestCase):
                 return iter([]), info
 
         with patch.dict(os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "small"}), \
-             patch("faster_whisper.WhisperModel", FakeModel), \
+             _fake_faster_whisper(FakeModel), \
              patch("asr.AsrConfig") as MockCfg:
             MockCfg.return_value.compute_type = "int8"
             sampler = audio_streams.default_sampler()
@@ -311,7 +340,7 @@ class DefaultSamplerModelResolutionTests(unittest.TestCase):
                 return iter([]), info
 
         with patch.dict(os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "large-v3"}), \
-             patch("faster_whisper.WhisperModel", FakeModel), \
+             _fake_faster_whisper(FakeModel), \
              patch("asr.AsrConfig") as MockCfg:
             MockCfg.return_value.compute_type = "int8"
             sampler = audio_streams.default_sampler()
@@ -344,7 +373,7 @@ class PreflightVramWiringTests(unittest.TestCase):
                 return iter([]), info
 
         with patch.dict(os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "small"}), \
-             patch("faster_whisper.WhisperModel", FakeModel), \
+             _fake_faster_whisper(FakeModel), \
              patch("asr.AsrConfig") as MockCfg, \
              patch("gpu.preflight_vram_check") as preflight:
             MockCfg.return_value.compute_type = "int8"
@@ -369,7 +398,7 @@ class PreflightVramWiringTests(unittest.TestCase):
                 return iter([]), info
 
         with patch.dict(os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "small"}), \
-             patch("faster_whisper.WhisperModel", FakeModel), \
+             _fake_faster_whisper(FakeModel), \
              patch("asr.AsrConfig") as MockCfg, \
              patch("gpu.preflight_vram_check") as preflight:
             MockCfg.return_value.compute_type = "int8"
@@ -384,13 +413,14 @@ class PreflightVramWiringTests(unittest.TestCase):
         """A failed lightweight-margin check must propagate immediately --
         never attempt large-v3, which needs MORE headroom, not less."""
         import os
-        from unittest.mock import patch
+        from unittest.mock import MagicMock, patch
 
         import gpu
         fake_wav = Path("/fake/sample.wav")
 
+        MockModel = MagicMock()
         with patch.dict(os.environ, {"SUBTITLE_AI_SAMPLE_MODEL": "small"}), \
-             patch("faster_whisper.WhisperModel") as MockModel, \
+             _fake_faster_whisper(MockModel), \
              patch("asr.AsrConfig"), \
              patch("gpu.preflight_vram_check", side_effect=gpu.InsufficientVramError("no room")):
             with self.assertRaises(gpu.InsufficientVramError):
