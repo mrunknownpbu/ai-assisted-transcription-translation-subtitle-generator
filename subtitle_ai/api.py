@@ -495,8 +495,12 @@ async def upload_srt(file: UploadFile) -> dict:
     if not upload_dir:
         raise HTTPException(status_code=503, detail="SRT upload is not configured")
     original_name = Path(file.filename or "").name  # strip any path components, display-only
-    if not original_name.lower().endswith(".srt"):
-        raise HTTPException(status_code=400, detail="uploaded file must have a .srt extension")
+    # .vtt is accepted alongside .srt: it is stored under the same <uuid>.srt
+    # name and converted when read (srt_translation.parse_and_validate
+    # recognises WebVTT by its header, not by extension -- the same path a
+    # WebVTT file named .srt already takes).
+    if not original_name.lower().endswith((".srt", ".vtt")):
+        raise HTTPException(status_code=400, detail="uploaded file must have a .srt or .vtt extension")
 
     chunks = []
     total = 0

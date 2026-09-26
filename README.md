@@ -58,8 +58,12 @@ API (`8099` in `compose.yml`):
   never touched). **Upload from this computer** adds subtitle files from your
   PC to the batch: each is matched to an episode by its number (`S01E03`,
   `E03`, `3. Bölüm`, ...), you can change any match from its dropdown, and an
-  uploaded file wins over a library subtitle for the same episode. A job that
-  fails to queue stays ticked / listed with the reason shown.
+  uploaded file wins over a library subtitle for the same episode. Uploads
+  (here and in the single-episode form) may be `.srt` or `.vtt`; a WebVTT
+  file is converted on read, including one that is merely *named* `.srt`
+  (common for streaming-service releases), and the saved original-language
+  subtitle is always a real SRT. A job that fails to queue stays ticked /
+  listed with the reason shown.
 - **Jobs** (`/jobs`, `/jobs/:id`) — the queue and per-job detail: live
   stage, progress bar and ETA, QC findings, log, and cancel / retry /
   delete.

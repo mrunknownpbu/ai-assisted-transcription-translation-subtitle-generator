@@ -372,7 +372,7 @@ export function TranslateSrtPage() {
                 <input
                   ref={batchFileRef}
                   type="file"
-                  accept=".srt"
+                  accept=".srt,.vtt"
                   multiple
                   hidden
                   aria-label="Subtitle files to upload"
@@ -532,7 +532,7 @@ export function TranslateSrtPage() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".srt"
+                  accept=".srt,.vtt"
                   onChange={(e) => handleFileChosen(e.target.files?.[0])}
                   disabled={uploadSrt.isPending}
                 />

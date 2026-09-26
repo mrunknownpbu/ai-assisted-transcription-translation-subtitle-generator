@@ -151,6 +151,15 @@ describe("TranslateSrtPage", () => {
     expect(body.overwrite_original).toBe(true);
   });
 
+  it("the single-file upload input accepts .vtt as well as .srt", async () => {
+    renderPage();
+    await waitFor(() => screen.getByText(/S01E01\.mkv/));
+    fireEvent.click(screen.getByText(/S01E01\.mkv/));
+    fireEvent.click(await screen.findByText("Upload from this computer"));
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input.accept.split(",")).toEqual(expect.arrayContaining([".srt", ".vtt"]));
+  });
+
   it("uploading a file and submitting sends source_upload_id instead", async () => {
     renderPage();
     await waitFor(() => screen.getByText(/S01E01\.mkv/));
@@ -477,6 +486,18 @@ describe("TranslateSrtPage batch translate", () => {
     await waitFor(() => expect(posted).toHaveLength(3));
     expect(posted.map((b) => b.video_path)).toEqual(["E01.mkv", "E03.mkv", "E05.mkv"]);
     expect(maxInFlight).toBe(1);
+  });
+
+  it("the batch upload input accepts .vtt as well as .srt, and queues a .vtt like any other", async () => {
+    await openBatch();
+    const input = screen.getByLabelText("Subtitle files to upload") as HTMLInputElement;
+    expect(input.accept.split(",")).toEqual(expect.arrayContaining([".srt", ".vtt"]));
+
+    await upload("x E01.vtt");
+    fireEvent.click(await screen.findByText("Translate 1 selected"));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0].video_path).toBe("E01.mkv");
+    expect(posted[0].source_upload_id).toBe("up-1");
   });
 
   it("the translate button is disabled with nothing selected", async () => {
