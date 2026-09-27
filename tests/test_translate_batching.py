@@ -224,3 +224,82 @@ class DecodeSpacingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeCt2Result:
+    def __init__(self, tokens):
+        self.hypotheses = [tokens]
+
+
+class FakeTokenizer:
+    """Just enough of the NLLB tokenizer for the CTranslate2 path."""
+
+    def __call__(self, batch, truncation=True, max_length=512):
+        return {"input_ids": [[1] + [len(w) for w in s.split()] + [2] for s in batch]}
+
+    def convert_ids_to_tokens(self, ids):
+        return [f"t{i}" for i in ids]
+
+    def convert_tokens_to_ids(self, tokens):
+        return tokens
+
+    def decode(self, ids, skip_special_tokens, clean_up_tokenization_spaces):
+        assert skip_special_tokens and clean_up_tokenization_spaces
+        return " ".join(ids)
+
+
+class Ct2BackendTests(unittest.TestCase):
+    """SUBTITLE_AI_NLLB_BACKEND=ct2 (B3, 2026-09-28): same tokenizer, beams,
+    length cap, no_repeat_ngram_size and decode flags as the HF path, and
+    the same halve-and-retry on OOM."""
+
+    def config(self, **kw):
+        return TranslationConfig(backend="ct2", batch_size=32, num_beams=2, **kw)
+
+    def test_passes_generation_settings_and_strips_the_target_prefix(self):
+        translator = MagicMock()
+        translator.translate_batch.side_effect = lambda src, **kw: [
+            FakeCt2Result(["eng_Latn", "Hello", "there"]) for _ in src]
+        out = translate._generate_one_batch(translator, FakeTokenizer(), "eng_Latn", ["Merhaba"],
+                                            "cuda", self.config())
+        self.assertEqual(out, ["Hello there"])
+        kwargs = translator.translate_batch.call_args.kwargs
+        self.assertEqual(kwargs["target_prefix"], [["eng_Latn"]])
+        self.assertEqual(kwargs["beam_size"], 2)
+        self.assertEqual(kwargs["max_decoding_length"], 256)
+        self.assertEqual(kwargs["no_repeat_ngram_size"], 4)
+        self.assertEqual(translator.translate_batch.call_args.args[0], [["t1", "t7", "t2"]])
+
+    def test_oom_halves_the_batch(self):
+        calls = []
+
+        def fake(src, **kw):
+            calls.append(len(src))
+            if len(src) > 1:
+                raise RuntimeError("CUDA failed with error out of memory")
+            return [FakeCt2Result(["eng_Latn", "x"])]
+
+        translator = MagicMock()
+        translator.translate_batch.side_effect = fake
+        out = translate._generate_one_batch(translator, FakeTokenizer(), "eng_Latn", ["a", "b"],
+                                            "cuda", self.config())
+        self.assertEqual(out, ["x", "x"])
+        self.assertEqual(calls, [2, 1, 1])
+
+    def test_other_runtime_errors_are_not_swallowed(self):
+        translator = MagicMock()
+        translator.translate_batch.side_effect = RuntimeError("unsupported model")
+        with self.assertRaises(RuntimeError):
+            translate._generate_one_batch(translator, FakeTokenizer(), "eng_Latn", ["a", "b"],
+                                          "cuda", self.config())
+
+    def test_backend_env_default_and_validation(self):
+        for raw, expected in (("", "hf"), ("ct2", "ct2"), ("CT2", "ct2"), ("vllm", "hf")):
+            with self.subTest(raw=raw), patch.dict("os.environ", {"SUBTITLE_AI_NLLB_BACKEND": raw}):
+                self.assertEqual(TranslationConfig().backend, expected)
+
+    def test_ct2_path_env_override(self):
+        with patch.dict("os.environ", {"SUBTITLE_AI_NLLB_CT2_PATH": "/models/other"}):
+            self.assertEqual(TranslationConfig().ct2_path, "/models/other")
+        with patch.dict("os.environ", {"SUBTITLE_AI_NLLB_CT2_PATH": ""}):
+            self.assertEqual(TranslationConfig().ct2_path, translate.DEFAULT_CT2_PATH)

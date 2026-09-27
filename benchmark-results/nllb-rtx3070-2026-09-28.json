@@ -46,6 +46,37 @@
       "sent_per_s": 71.83,
       "peak_reserved_gb": 5.06,
       "differs_from_first": 22
+    },
+    {
+      "config": "32x2",
+      "backend": "hf",
+      "seconds": 44.9,
+      "sent_per_s": 59.7,
+      "peak_reserved_gb": 3.95,
+      "note": "reference run for the ct2 comparison"
+    },
+    {
+      "config": "32x2",
+      "backend": "ct2",
+      "seconds": 15.1,
+      "sent_per_s": 177.58,
+      "peak_device_gb_nvidia_smi": 4.06,
+      "differs_from_hf_32x2": 203
+    },
+    {
+      "config": "64x2",
+      "backend": "ct2",
+      "seconds": 10.5,
+      "sent_per_s": 255.02,
+      "differs_from_ct2_32x2": 109
+    },
+    {
+      "config": "32x4",
+      "backend": "ct2",
+      "seconds": 19.2,
+      "sent_per_s": 139.42,
+      "differs_from_ct2_32x2": 804
     }
-  ]
+  ],
+  "ct2_notes": "CTranslate2 4.4.0, float16, converted by scripts/convert_nllb_ct2.py. 3.0x the HF backend at 32x2 with similar device memory, but 203/2678 lines (7.6%) differ from HF -- ~10x the HF batch-composition noise. Spot-checked diffs are paraphrases in both directions, not garbage (so the conversion shim is right), but the net quality direction is unmeasured, so ct2 ships opt-in (SUBTITLE_AI_NLLB_BACKEND=ct2) and hf stays the default."
 }

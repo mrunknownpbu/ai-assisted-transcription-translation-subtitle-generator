@@ -81,6 +81,9 @@ services:
       SUBTITLE_AI_NLLB_NUM_BEAMS: ${SUBTITLE_AI_NLLB_NUM_BEAMS:-}
       # Empty = keep NLLB loaded 600s between jobs (0 when GPU_SHARED).
       SUBTITLE_AI_MODEL_IDLE_SECONDS: ${SUBTITLE_AI_MODEL_IDLE_SECONDS:-}
+      # Empty = hf. ct2 needs scripts/convert_nllb_ct2.py run once first.
+      SUBTITLE_AI_NLLB_BACKEND: ${SUBTITLE_AI_NLLB_BACKEND:-}
+      SUBTITLE_AI_NLLB_CT2_PATH: ${SUBTITLE_AI_NLLB_CT2_PATH:-}
     volumes:
       - ${DATA_PATH}:/data
       # Read-only: confirmed safe by real GPU inference runs this session

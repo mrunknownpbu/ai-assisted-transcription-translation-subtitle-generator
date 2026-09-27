@@ -195,6 +195,21 @@ SHARED_BATCH_SIZE, SHARED_NUM_BEAMS = 8, 2
 DEDICATED_BATCH_SIZE, DEDICATED_NUM_BEAMS = 32, 2
 
 
+# Written by scripts/convert_nllb_ct2.py into the read-only /models mount.
+DEFAULT_CT2_PATH = "/models/ct2/nllb-200-distilled-1.3B-float16"
+NLLB_BACKENDS = ("hf", "ct2")
+
+
+def _default_backend() -> str:
+    raw = os.environ.get("SUBTITLE_AI_NLLB_BACKEND", "").strip().lower()
+    if not raw:
+        return "hf"
+    if raw not in NLLB_BACKENDS:
+        _logger.warning("ignoring unknown SUBTITLE_AI_NLLB_BACKEND=%r; using 'hf'", raw)
+        return "hf"
+    return raw
+
+
 def _positive_int_env(name: str, default: int) -> int:
     """Blank-tolerant (compose forwards `${VAR:-}`), and an invalid value
     warns and falls back instead of crashing a job on a tuning typo."""
@@ -275,6 +290,13 @@ class TranslationConfig:
     # source repetition (Turkish "Tamam tamam", "Eda! Eda!") byte-identical
     # to the pre-fix output, since those only repeat a 1-2 word span once.
     no_repeat_ngram_size: int = 4
+    # "hf" (transformers generate(), the long-validated path) or "ct2"
+    # (CTranslate2 running a converted copy of the same weights -- see
+    # _default_backend() and benchmark-results/). Env:
+    # SUBTITLE_AI_NLLB_BACKEND / SUBTITLE_AI_NLLB_CT2_PATH.
+    backend: str = field(default_factory=lambda: _default_backend())
+    ct2_path: str = field(default_factory=lambda: os.environ.get(
+        "SUBTITLE_AI_NLLB_CT2_PATH", "").strip() or DEFAULT_CT2_PATH)
 
 
 def build_context_spans(cues: list[Segment], real_boundaries: frozenset = frozenset(
@@ -337,6 +359,13 @@ def load_model(config: TranslationConfig, src_lang_code: str):
         # (and there is nothing of ours loaded to evict at that point).
         preflight_vram_check(keep_resident="nllb")
     tok = load_tokenizer(config, src_lang_code)
+    if config.backend == "ct2":
+        import ctranslate2
+        translator = ctranslate2.Translator(
+            config.ct2_path, device=config.device,
+            compute_type="float16" if config.device == "cuda" else "int8")
+        # For CTranslate2 the "bos" is the target-prefix token itself.
+        return translator, tok, "eng_Latn"
     dtype = torch.float16 if config.device == "cuda" else torch.float32
     model = AutoModelForSeq2SeqLM.from_pretrained(config.repo, torch_dtype=dtype,
                                                   cache_dir="/models/hf", local_files_only=True
@@ -386,7 +415,7 @@ class _ResidentNllb:
             if self._timer is not None:
                 self._timer.cancel()
                 self._timer = None
-            key = (config.repo, config.device)
+            key = (config.repo, config.device, config.backend, config.ct2_path)
             if self._model is not None and self._key != key:
                 self._drop_locked()
             if self._model is None:
@@ -471,6 +500,8 @@ def _generate_one_batch(model, tok, bos: int, batch: list[str], device: str,
     spans, a confirmed CUDA OutOfMemoryError on a real 48-span clip. A
     batch size that fits comfortably can still blow an 8GB card's budget
     when a few unusually long sentences land in the same call."""
+    if config.backend == "ct2":
+        return _generate_one_batch_ct2(model, tok, bos, batch, device, config)
     import torch
     enc = tok(batch, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
     try:
@@ -497,6 +528,36 @@ def _generate_one_batch(model, tok, bos: int, batch: list[str], device: str,
         mid = len(batch) // 2
         return (_generate_one_batch(model, tok, bos, batch[:mid], device, config)
                + _generate_one_batch(model, tok, bos, batch[mid:], device, config))
+
+
+def _generate_one_batch_ct2(translator, tok, target_prefix: str, batch: list[str], device: str,
+                            config: TranslationConfig) -> list[str]:
+    """CTranslate2 twin of _generate_one_batch(): same tokenizer (so the
+    same source-language code and 512-token truncation), same beam count,
+    max length and no_repeat_ngram_size, same decode flags -- including the
+    explicit clean_up_tokenization_spaces=True documented there -- and the
+    same halve-and-retry on CUDA OOM (CTranslate2 raises RuntimeError)."""
+    source = [tok.convert_ids_to_tokens(ids)
+              for ids in tok(batch, truncation=True, max_length=512)["input_ids"]]
+    try:
+        results = translator.translate_batch(
+            source, target_prefix=[[target_prefix]] * len(batch), beam_size=config.num_beams,
+            max_decoding_length=config.max_new_tokens,
+            no_repeat_ngram_size=config.no_repeat_ngram_size, return_scores=False)
+    except RuntimeError as exc:
+        if "out of memory" not in str(exc).lower() or len(batch) == 1:
+            raise
+        mid = len(batch) // 2
+        return (_generate_one_batch_ct2(translator, tok, target_prefix, batch[:mid], device, config)
+                + _generate_one_batch_ct2(translator, tok, target_prefix, batch[mid:], device, config))
+    out = []
+    for result in results:
+        tokens = result.hypotheses[0]
+        if tokens and tokens[0] == target_prefix:
+            tokens = tokens[1:]
+        out.append(tok.decode(tok.convert_tokens_to_ids(tokens), skip_special_tokens=True,
+                              clean_up_tokenization_spaces=True))
+    return out
 
 
 def translate_batch(model, tok, bos: int, sentences: list[str], device: str,

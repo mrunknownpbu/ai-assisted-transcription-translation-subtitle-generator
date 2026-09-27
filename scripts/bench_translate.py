@@ -45,8 +45,12 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="only the first N sentences")
     ap.add_argument("--json")
     ap.add_argument("--show-diffs", type=int, default=0, help="print N outputs that differ from the first config")
+    ap.add_argument("--backend", choices=["hf", "ct2"], default="hf")
+    ap.add_argument("--save-outputs", help="write the first config's translations here (JSON list)")
+    ap.add_argument("--compare-to", help="count/print differences against a --save-outputs file")
     args = ap.parse_args()
 
+    os.environ["SUBTITLE_AI_NLLB_BACKEND"] = args.backend
     import torch
     from gpu import free_gpu, gpu_lock
     from translate import NLLB_LANG, TranslationConfig, load_model, translate_batch
@@ -69,19 +73,33 @@ def main() -> int:
                 os.environ["SUBTITLE_AI_GPU_SHARED"] = "1" if flag == "shared" else ""
                 config = TranslationConfig(batch_size=batch, num_beams=beams)
                 torch.cuda.reset_peak_memory_stats()
+                free_before = torch.cuda.mem_get_info()[0]
                 torch.cuda.synchronize()
                 t0 = time.monotonic()
                 out = translate_batch(model, tok, bos, sentences, "cuda", config, batch_size=batch)
                 torch.cuda.synchronize()
                 secs = time.monotonic() - t0
-                peak = torch.cuda.max_memory_reserved() / 2**30
+                # CTranslate2 allocates outside torch, so for ct2 report how
+                # much free device memory dropped instead (lower bound).
+                peak = (torch.cuda.max_memory_reserved() / 2**30 if args.backend == "hf"
+                        else (free_before - torch.cuda.mem_get_info()[0]) / 2**30)
                 if baseline is None:
                     baseline = out
+                    if args.save_outputs:
+                        with open(args.save_outputs, "w") as fh:
+                            json.dump(out, fh, ensure_ascii=False)
+                    if args.compare_to:
+                        ref = json.load(open(args.compare_to))
+                        other = [(sentences[i], ref[i], out[i]) for i in range(len(out)) if out[i] != ref[i]]
+                        print(f"  vs {os.path.basename(args.compare_to)}: {len(other)}/{len(out)} differ",
+                              flush=True)
+                        for src, a, b in other[:args.show_diffs]:
+                            print(f"  SRC {src}\n    ref:  {a}\n    this: {b}", flush=True)
                 diffs = [(sentences[i], baseline[i], out[i]) for i in range(len(out)) if out[i] != baseline[i]]
                 diff = len(diffs)
                 for src, a, b in diffs[:args.show_diffs]:
                     print(f"  SRC {src}\n    first: {a}\n    this:  {b}", flush=True)
-                row = {"config": spec, "batch": batch, "beams": beams, "shared": flag == "shared",
+                row = {"config": spec, "backend": args.backend, "batch": batch, "beams": beams, "shared": flag == "shared",
                        "seconds": round(secs, 1), "sent_per_s": round(len(sentences) / secs, 2),
                        "peak_reserved_gb": round(peak, 2), "differs_from_first": diff}
                 results.append(row)
