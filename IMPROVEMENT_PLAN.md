@@ -85,9 +85,13 @@ The following recommendations are organized into actionable categories for ongoi
 * **Issue:** `scripts/backup_jobs_db.sh` exists and uses `sqlite3 ".backup"` (safe with WAL mode), but requires manual invocation.
 * **Action:** Installed a daily host cron entry (`crontab -l`):
   ```
-  0 3 * * * /opt/projects/subtitle-ai/scripts/backup_jobs_db.sh >> /opt/docker/appdata/subtitle-ai-v2/backups/backup.log 2>&1
+  0 3 * * * /opt/projects/subtitle-ai/scripts/backup_jobs_db.sh >> /opt/docker/appdata/subtitle-ai/backups/backup.log 2>&1
   ```
   Logs to `backups/backup.log` alongside the `.db.gz` files themselves rather than `/var/log` (not writable by the deploy user). Verified with a manual run: wrote `jobs-20260922-192444.db.gz` successfully; a prior manual backup from 2026-09-21 was already present, confirming the script's real-world path is correct. 14-day retention (script default) applies automatically.
+  Path updated 2026-09-27: the appdata directory was consolidated from the
+  pre-rename `subtitle-ai-v2` name onto plain `subtitle-ai` (see compose.yml's
+  cache-mount comment); this line and the installed crontab entry were both
+  updated to match.
 
 ---
 

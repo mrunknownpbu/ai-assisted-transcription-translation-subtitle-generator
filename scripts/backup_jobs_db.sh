@@ -16,8 +16,8 @@
 
 set -eu
 
-SRC_DB="${1:-/opt/docker/appdata/subtitle-ai-v2/cache/jobs.db}"
-BACKUP_DIR="${2:-/opt/docker/appdata/subtitle-ai-v2/backups}"
+SRC_DB="${1:-/opt/docker/appdata/subtitle-ai/cache/jobs.db}"
+BACKUP_DIR="${2:-/opt/docker/appdata/subtitle-ai/backups}"
 RETAIN_DAYS=14
 
 if [ ! -f "$SRC_DB" ]; then

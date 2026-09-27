@@ -143,7 +143,7 @@ this project's config.
   place directly on the host -- NOT part of this repository. If you edit
   a glossary file as part of a fix, `cd` into that directory on the host
   and commit there too; this repo's git history won't show it.
-- **Job database** (`${CONFIG_PATH}/subtitle-ai-v2/cache/jobs.db`,
+- **Job database** (`${CONFIG_PATH}/subtitle-ai/cache/jobs.db`,
   SQLite/WAL): back up with `scripts/backup_jobs_db.sh` (safe to run
   against the live DB). No cron job is installed automatically -- see
   that script's header for the recommended line if you want scheduled
