@@ -9,6 +9,57 @@ deployment on myphy-ai: the job database (300 jobs: 290 SRT translation,
 Where a number is quoted, it was measured, not estimated. Where something
 is a hypothesis still to be checked, it says so.
 
+## Status: implemented 2026-09-28
+
+Every item was done in the order C1 → A1 → A3/A4 → B1 → A2 → B2 → B4 → D1 →
+B3 → C2 → E1, verified on myphy-ai with real jobs, and deployed. Library
+files touched by verification jobs were backed up first and restored
+byte-for-byte afterwards.
+
+| # | Outcome | Measured result |
+|---|---------|-----------------|
+| C1 | Duration findings emit at 0.5; stored rows recounted | `needs_review` 20,058 → 22 across 300 jobs; new jobs show 0-1 |
+| A1 | Cron reinstalled; backup script no longer needs the `sqlite3` CLI (absent on this host) | Backup verified: `integrity_check` ok, 300 rows |
+| A3 | Deploy fails (exit 1, with logs) when health never goes green | -- |
+| A4 | `uv.lock` committed; image built with `uv sync --frozen` | Rebuilt image identical package-for-package |
+| B1 | Dedicated-GPU profile (batch 32), length-sorted batches, no per-batch `empty_cache()` | S01E03 SRT job **354s → 54s**; 99.2% of cues identical |
+| A2 | ruamel round-trip writes (comments kept), auto-commit per UI edit; data repo repaired | All 3 live glossary files round-trip byte-identically |
+| B2 | NLLB stays resident between jobs; evicted by any other model load, **in any process** | Next job's first batch 10.1s → 1.3s |
+| B4 | First full video benchmark on the 3070; progress bands recalibrated | 418s per episode (ASR 82%); was 2,067s median on the P4 |
+| D1 | UI prompts for the API key on a 401 and remembers it | 6 new frontend tests |
+| B3 | CTranslate2 backend, **now the default** after E1's evaluation found no quality difference; falls back to hf if not converted | SRT job 54s → **25s** (354s before this round) |
+| C2 | List endpoints return summary rows; progress logging throttled | Jobs page ~12MB → 0.19MB; Series page 37MB → 0.58MB; log 326 → 34 entries |
+| E1 | Reference-based quality evaluation built and run; LLM scoping updated | 9,491 human-referenced lines; see E1 |
+
+**Corrections to the draft below, found while implementing:**
+
+- **B1's throughput table mixed hosts.** The fast 2026-09-26 jobs used the
+  old media-server's warm remote translate-server. Only the 2026-09-27
+  20:20 job ran locally on myphy-ai (7.2 sent/s), and that is the real
+  baseline the B1 numbers improve on.
+- **C2 understated the problem.** Storage size wasn't the cost. Every list
+  response carried full QC findings and logs, and every progress tick
+  triggered a refetch, so an open Jobs page pulled ~12MB about twice a
+  second during translation. The fix is summary rows rather than dropping
+  low-confidence findings: the SRT editor needs their cue indices, so
+  per-cue storage stays as it is.
+- **B2 as first shipped broke a cross-process guarantee.** A resident model
+  outlives the job's `gpu_lock()`, so a second process holding the lock
+  could still OOM against it. The E1 evaluation run hit exactly that.
+  Fixed with a shared-flock residency claim plus an eviction request file
+  (see gpu.py), and verified in production: the app evicted within ~0.2s
+  when a 5.3GB benchmark asked.
+- **A2 found more than an uncommitted file.** The 2026-09-22 UI edit that
+  sat uncommitted also deleted every evidence comment in
+  `love-is-in-the-air.yaml`, and it added `Deniz` as protected, which those
+  comments said not to do. The comments are restored and Deniz is left as
+  the UI set it, **flagged for your decision** (the restored comment next
+  to it says so).
+- **Side finding, not changed:** the Analyze button labels S01E03's only
+  audio track "en, 37%" (its 20s sample lands on the English theme song).
+  With a single track there is nothing to choose, and real jobs use
+  multi-window voting (E01 detected tr at 99%), so this is cosmetic.
+
 ## 0. Why a second round
 
 The first plan was written for a **shared Tesla P4** (Tdarr transcodes
@@ -295,23 +346,62 @@ C1 and A1 are both about an hour each and fix things that are wrong today.
 
 ### E1. Revisit 5.1 (local LLM translation) with the new constraints
 
-`IMPROVEMENT_PLAN.md` 5.1 deferred a local 7-8B LLM partly because *"the
-target host … is the SAME card … shared with Jellyfin/Plex"*. That reason
-is gone. The card is dedicated now, so a ~5-7GB Q4 model is a
-**time-slicing** problem (load under `gpu_lock()` after ASR frees
-large-v3) rather than a contention problem. The other reasons stand:
-unmeasured throughput, new serving surface, and the DLX lesson about
-building before a real smoke test.
+**Done this round: the measurement that any engine decision needs.**
+`scripts/eval_translation.py` scores translation systems against the human
+English subtitles already in the library (`.en.hi.srt`, timed to the same
+release as the Turkish source, nearly cue-for-cue). It runs the real
+Workflow B path (glossary protection, phrase map, entity recovery), then
+reports corpus chrF with paired-bootstrap 95% intervals. It can also
+write a blind A/B review sheet. First results, over E06-E10 (9,491 lines,
+`benchmark-results/translation-quality-2026-09-28.json`):
 
-**Recommended next step is still scoping, not code:** decide the engine's
-role (selectable per job vs. replacement), then run a **blind A/B on ~50
-real sentences** from the 290 translated episodes (NLLB vs. candidate
-LLM), including known-hard cases: the entity collisions in the
-`CLAUDE.md` evidence-bar section, the run-on cues, and the orphan
-lyrics. Do this after B1/B2, so the comparison is against NLLB at its
-real speed on this card, not its handicapped P4 settings.
+| System | chrF | Δ vs hf 32x2 (95% CI) | Time |
+|---|---|---|---|
+| hf 32x2 | 57.32 | -- | 202s |
+| hf 8x2 (old P4 sizing) | 57.31 | -0.01 (-0.04, +0.01) | 435s |
+| ct2 32x2 (**now default**) | 57.27 | -0.05 (-0.14, +0.05) | 69s |
+| hf 32x4 | 57.23 | -0.09 (-0.28, +0.08) | 320s |
+| ct2 32x4 | 57.30 | -0.02 (-0.20, +0.18) | 88s |
 
----
+This settled three questions: B1's batch change is quality-neutral, 4
+beams buys nothing, and CTranslate2 matches hf, so it became the default.
+The metric's resolution is about ±0.1 chrF at this size. A candidate LLM
+would need to beat 57.3 by well over that to be worth its cost.
+`benchmark-results/ab/hf-vs-ct2-2026-09-28.html` holds 50 blind
+hf-vs-ct2 pairs if you want a human confirmation of the ct2 switch.
+
+**Updated LLM scoping.** The constraints have changed since 5.1:
+
+- *VRAM:* the card is dedicated now. The measured peaks are ASR 5.9GB (a
+  whole video job), NLLB 4.0GB, and CT2 NLLB 4.1GB while resident. A Q4
+  7-8B model (~5-7GB with KV cache) fits on its own but cannot share the
+  card with ASR or NLLB. The residency protocol built for B2 (evict on any
+  other load, across processes) is exactly the mechanism needed to
+  time-slice it, so that part no longer needs designing.
+- *Throughput budget:* translation is now ~25s per SRT job and ~16s per
+  video job. An LLM at even 5-10 lines/s would make translation 4-8
+  minutes per episode, turning a ~7-minute video job into ~12-15 minutes.
+  That's acceptable only if quality moves clearly.
+- *Evidence bar:* the eval above is the gate. Run the LLM through it on the
+  same E06-E10 lines, and adopt it only if chrF rises well outside the
+  ±0.1 noise *and* the blind A/B sheet agrees. The known-hard cases (the
+  entity collisions in `CLAUDE.md`, run-on cues, orphan lyrics) should be
+  checked by hand as well, because chrF can't see a name mistranslated as
+  a common word.
+
+**Decisions needed from you before any LLM code** (unchanged from 5.1 and
+still yours to make):
+
+1. Role: a per-job selectable engine, a second-pass "polish" over NLLB
+   output, or a replacement.
+2. Runtime: llama.cpp server or Ollama (simplest, GGUF, runs in its own
+   container) vs vLLM (faster, but needs more VRAM headroom than this card
+   leaves).
+3. Model: e.g. a Qwen 7-8B instruct at Q4. The eval makes comparing two
+   or three candidates cheap once a runtime exists.
+
+Nothing is installed for this yet: a new serving container and multi-GB
+model downloads are a deliberate step, not a side effect of this round.
 
 ## Explicitly not proposed
 
