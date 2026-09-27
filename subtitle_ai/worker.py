@@ -48,36 +48,37 @@ _WORK_SWEEP_INTERVAL_SECONDS = 3600.0
 # carry it live.
 #
 # Milestone percentages are a disclosed, directional heuristic, not a
-# measured promise of linear real-time correspondence -- ASR is the
-# dominant real cost on a shared GPU (this project's own measured real
-# episode: translation was ~3 of ~49 minutes total even on the OLD
-# all-local-CPU translation path this codebase no longer uses by
-# default; today's remote-GPU translation is faster still, per
-# translate_server.py's ~8x benchmark, so the 15% band below is already
-# a generous upper bound, not a tight measurement). Values only ever
+# measured promise of linear real-time correspondence. They were
+# recalibrated 2026-09-28 from a real full-episode job on the current
+# host (RTX 3070, float16, S01E01, transcript cache bypassed): 418s total
+# = audio extraction 4% (from the NFS media share), ASR 82%, segmentation
+# 2%, translation 11%, the rest <1%. ASR's share went UP from the older
+# ~70% band because translation got ~3x faster (B1 in
+# ENHANCEMENT_DRAFT.md), so the old table sat at 73% for the whole ASR
+# phase and then raced through the end. Values only ever
 # increase across a job's real event sequence, since each milestone here
 # is strictly ordered by when pipeline.py/srt_translation.py actually
 # emit it.
 _VIDEO_STAGE_MILESTONES: dict[str, tuple[str, float]] = {
     "MEDIA_INSPECTION_STARTED": ("Inspecting media", 0),
-    "AUDIO_SELECTED": ("Inspecting media", 2),
-    "AUDIO_EXTRACTION_STARTED": ("Extracting audio", 2),
-    "AUDIO_EXTRACTION_COMPLETED": ("Extracting audio", 3),
-    "ASR_CACHE_HIT": ("Transcribing (cached)", 73),
-    "ASR_STARTED": ("Transcribing", 3),
-    "ASR_COMPLETED": ("Transcribing", 73),
-    "LANGUAGE_DETECTED": ("Detecting language", 74),
-    "HALLUCINATION_CHECK_STARTED": ("Checking for hallucinations", 75),
-    "HALLUCINATION_CHECK_COMPLETED": ("Checking for hallucinations", 76),
-    "SOURCE_SEGMENTATION_COMPLETED": ("Segmenting transcript", 78),
-    "TRANSLATION_STARTED": ("Translating", 78),
-    "TRANSLATION_SKIPPED": ("Translating", 93),
-    "TRANSLATION_COMPLETED": ("Translating", 93),
-    "ENTITY_RECOVERY_APPLIED": ("Finalizing translation", 94),
-    "TARGET_SEGMENTATION_COMPLETED": ("Formatting subtitles", 96),
-    "PROJECTION_VALIDATED": ("Validating output", 97),
-    "READABILITY_TIMING_EXTENDED": ("Validating output", 97),
-    "QC_COMPLETED": ("Running quality checks", 98),
+    "AUDIO_SELECTED": ("Inspecting media", 1),
+    "AUDIO_EXTRACTION_STARTED": ("Extracting audio", 1),
+    "AUDIO_EXTRACTION_COMPLETED": ("Extracting audio", 4),
+    "ASR_CACHE_HIT": ("Transcribing (cached)", 85),
+    "ASR_STARTED": ("Transcribing", 4),
+    "ASR_COMPLETED": ("Transcribing", 85),
+    "LANGUAGE_DETECTED": ("Detecting language", 86),
+    "HALLUCINATION_CHECK_STARTED": ("Checking for hallucinations", 86),
+    "HALLUCINATION_CHECK_COMPLETED": ("Checking for hallucinations", 87),
+    "SOURCE_SEGMENTATION_COMPLETED": ("Segmenting transcript", 88),
+    "TRANSLATION_STARTED": ("Translating", 88),
+    "TRANSLATION_SKIPPED": ("Translating", 98),
+    "TRANSLATION_COMPLETED": ("Translating", 98),
+    "ENTITY_RECOVERY_APPLIED": ("Finalizing translation", 98),
+    "TARGET_SEGMENTATION_COMPLETED": ("Formatting subtitles", 99),
+    "PROJECTION_VALIDATED": ("Validating output", 99),
+    "READABILITY_TIMING_EXTENDED": ("Validating output", 99),
+    "QC_COMPLETED": ("Running quality checks", 99),
     "OUTPUT_COMMITTED": ("Writing output", 99),
     "JOB_COMPLETED": ("Completed", 100),
 }
@@ -87,10 +88,9 @@ _VIDEO_STAGE_MILESTONES: dict[str, tuple[str, float]] = {
 # two name the event's own data fields (pipeline.py's on_progress
 # callbacks use different key names per stage).
 _VIDEO_FINE_PROGRESS: dict[str, tuple[str, float, float, str, str]] = {
-    "ASR_PROGRESS": ("Transcribing", 3, 73, "position", "total"),
-    "TRANSLATION_PROGRESS": ("Translating", 78, 93, "done", "total"),
+    "ASR_PROGRESS": ("Transcribing", 4, 85, "position", "total"),
+    "TRANSLATION_PROGRESS": ("Translating", 88, 98, "done", "total"),
 }
-
 _SRT_STAGE_MILESTONES: dict[str, tuple[str, float]] = {
     "SRT_PARSE_STARTED": ("Parsing SRT", 0),
     "SRT_PARSE_COMPLETED": ("Parsing SRT", 3),

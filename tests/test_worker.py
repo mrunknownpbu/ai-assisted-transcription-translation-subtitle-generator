@@ -916,7 +916,7 @@ class StageProgressForEventTests(unittest.TestCase):
     def test_video_milestone_returns_its_mapped_stage_and_percent(self):
         self.assertEqual(
             worker_mod._stage_progress_for_event("video", "ASR_STARTED", {}),
-            ("Transcribing", 3))
+            ("Transcribing", 4))
 
     def test_srt_milestone_uses_the_srt_table_not_the_video_one(self):
         # TRANSLATION_STARTED exists in both tables at different percents
@@ -927,7 +927,7 @@ class StageProgressForEventTests(unittest.TestCase):
             ("Translating", 5))
         self.assertEqual(
             worker_mod._stage_progress_for_event("video", "TRANSLATION_STARTED", {}),
-            ("Translating", 78))
+            ("Translating", 88))
 
     def test_unmapped_event_returns_none(self):
         self.assertIsNone(worker_mod._stage_progress_for_event("video", "ASR_CACHE_STORED", {}))
@@ -936,13 +936,13 @@ class StageProgressForEventTests(unittest.TestCase):
         label, pct = worker_mod._stage_progress_for_event(
             "video", "ASR_PROGRESS", {"position": 50, "total": 100})
         self.assertEqual(label, "Transcribing")
-        self.assertAlmostEqual(pct, 3 + 0.5 * (73 - 3))
+        self.assertAlmostEqual(pct, 4 + 0.5 * (85 - 4))
 
     def test_translation_progress_interpolates_within_its_band(self):
         label, pct = worker_mod._stage_progress_for_event(
             "video", "TRANSLATION_PROGRESS", {"done": 3, "total": 4})
         self.assertEqual(label, "Translating")
-        self.assertAlmostEqual(pct, 78 + 0.75 * (93 - 78))
+        self.assertAlmostEqual(pct, 88 + 0.75 * (98 - 88))
 
     def test_zero_total_never_divides_by_zero(self):
         # A degenerate 0-span/0-sentence job must not crash progress
@@ -950,12 +950,12 @@ class StageProgressForEventTests(unittest.TestCase):
         label, pct = worker_mod._stage_progress_for_event(
             "video", "ASR_PROGRESS", {"position": 0, "total": 0})
         self.assertEqual(label, "Transcribing")
-        self.assertEqual(pct, 3)
+        self.assertEqual(pct, 4)
 
     def test_progress_never_exceeds_the_bands_end_even_if_position_overshoots(self):
         label, pct = worker_mod._stage_progress_for_event(
             "video", "TRANSLATION_PROGRESS", {"done": 999, "total": 4})
-        self.assertEqual(pct, 93)
+        self.assertEqual(pct, 98)
 
     def test_milestones_are_monotonically_non_decreasing_in_real_event_order(self):
         # The real order pipeline.py actually emits these in (see its own
@@ -983,7 +983,7 @@ class BuildOnEventStageProgressTests(WorkerTestCase):
         on_event("ASR_PROGRESS", {"position": 10, "total": 20, "segments": 5})
         row = self.store.get(claimed["id"])
         self.assertEqual(row["stage"], "Transcribing")
-        self.assertAlmostEqual(row["progress"], 3 + 0.5 * (73 - 3))
+        self.assertAlmostEqual(row["progress"], 4 + 0.5 * (85 - 4))
 
     def test_srt_job_type_uses_the_srt_milestone_table(self):
         job = self.store.create_srt_translation(
