@@ -1,0 +1,51 @@
+{
+  "date": "2026-09-28",
+  "host": "myphy-ai",
+  "gpu": "NVIDIA GeForce RTX 3070",
+  "model": "facebook/nllb-200-distilled-1.3B fp16",
+  "srt": "/data/media/drama/turkish/Love Is In The Air (2020) {tvdb-383383}/Season 01/Love Is In The Air (2020) S01E03.tr.srt",
+  "sentences": 2678,
+  "notes": "scripts/bench_translate.py, one model load per run, gpu_lock held. 'differs_from_first' counts outputs that differ from the first row of the same run (fp16 batch-composition near-ties; 32x2 vs 8x2 differed on 20/2678, spot-checked as paraphrases). 4 beams was also measured on 600 sentences: 39.4 sent/s at 5.0GB, 169/600 outputs changed -- a quality decision, left at 2.",
+  "results": [
+    {
+      "config": "8x2 (code before 2026-09-28: document order, empty_cache every chunk)",
+      "batch": 8,
+      "beams": 2,
+      "shared": false,
+      "seconds": 147.2,
+      "sent_per_s": 18.19,
+      "peak_reserved_gb": 3.01,
+      "differs_from_first": 0
+    },
+    {
+      "config": "8x2:shared",
+      "batch": 8,
+      "beams": 2,
+      "shared": true,
+      "seconds": 128.6,
+      "sent_per_s": 20.83,
+      "peak_reserved_gb": 3.01,
+      "differs_from_first": 0
+    },
+    {
+      "config": "32x2",
+      "batch": 32,
+      "beams": 2,
+      "shared": false,
+      "seconds": 44.6,
+      "sent_per_s": 60.1,
+      "peak_reserved_gb": 3.95,
+      "differs_from_first": 20
+    },
+    {
+      "config": "64x2",
+      "batch": 64,
+      "beams": 2,
+      "shared": false,
+      "seconds": 37.3,
+      "sent_per_s": 71.83,
+      "peak_reserved_gb": 5.06,
+      "differs_from_first": 22
+    }
+  ]
+}

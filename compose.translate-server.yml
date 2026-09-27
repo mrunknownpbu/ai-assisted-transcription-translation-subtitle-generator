@@ -31,6 +31,11 @@ services:
       # NLLB load -- see gpu.preflight_vram_check(); this card is shared
       # with Jellyfin/Plex transcoding). Blank-safe by design.
       SUBTITLE_AI_VRAM_MARGIN_GB: ${SUBTITLE_AI_VRAM_MARGIN_GB:-}
+      # Default 1 here, unlike compose.yml: a remote translate-server has
+      # so far always run on a card shared with a media server's
+      # transcoding, so keep NLLB's contention-safe sizing (see gpu.py's
+      # gpu_shared()). Set to 0 on a dedicated translation GPU.
+      SUBTITLE_AI_GPU_SHARED: ${SUBTITLE_AI_GPU_SHARED:-1}
       # Empty = 120s. Seconds of inactivity before the NLLB model is
       # unloaded to free the shared GPU (never while a request is active
       # or queued). Blank-safe; previously documented but never forwarded,

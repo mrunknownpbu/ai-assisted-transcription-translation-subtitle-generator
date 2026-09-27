@@ -71,6 +71,21 @@ def free_gpu(device: str = "cuda") -> None:
 _logger = logging.getLogger(__name__)
 
 
+def gpu_shared() -> bool:
+    """SUBTITLE_AI_GPU_SHARED=1|true|yes|on declares that something outside
+    this project (Tdarr, Jellyfin/Plex transcodes) also uses this GPU.
+
+    Default OFF, matching the current host: myphy-ai's RTX 3070 is
+    dedicated to subtitle-ai (2026-09-27 migration). Several earlier
+    defaults were deliberate defences for the previous host's Tesla P4,
+    shared with Tdarr -- smaller NLLB batches/beams, empty_cache() after
+    every translation chunk, freeing NLLB after every job. On a dedicated
+    card they cost throughput and protect against nothing, so they now
+    apply only when this is set. Read per call (not cached at import) so a
+    test or a one-off benchmark can flip it."""
+    return os.environ.get("SUBTITLE_AI_GPU_SHARED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _vram_margin_from_env(default: float = 3.2) -> float:
     """SUBTITLE_AI_VRAM_MARGIN_GB, tolerant of a blank or unparseable
     value. Blank matters because compose.yml forwards this as

@@ -9,8 +9,10 @@ text derived from the canonical transcript).
 from __future__ import annotations
 
 import gc
+import logging
+import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from glossary import (_phrase_key, bare_entity_translation,
                       entity_occurrence_report, is_unpunctuated_run_on,
@@ -181,6 +183,45 @@ def _apply_chunk_retry(translations: list[str], run_on_positions: dict[int, str]
     return translations
 
 
+_logger = logging.getLogger(__name__)
+
+# NLLB generation sizing, per GPU profile (gpu.gpu_shared()). SHARED keeps
+# the 2026-09-19 Tdarr-contention values explained in TranslationConfig's
+# comment below; DEDICATED is the current host (myphy-ai, RTX 3070 used by
+# nothing else) and is set from scripts/bench_translate.py measurements --
+# see benchmark-results/ for the run behind these numbers.
+SHARED_BATCH_SIZE, SHARED_NUM_BEAMS = 8, 2
+DEDICATED_BATCH_SIZE, DEDICATED_NUM_BEAMS = 32, 2
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    """Blank-tolerant (compose forwards `${VAR:-}`), and an invalid value
+    warns and falls back instead of crashing a job on a tuning typo."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 1:
+        _logger.warning("ignoring invalid %s=%r; using %d", name, raw, default)
+        return default
+    return value
+
+
+def _default_batch_size() -> int:
+    from gpu import gpu_shared
+    return _positive_int_env("SUBTITLE_AI_NLLB_BATCH_SIZE",
+                             SHARED_BATCH_SIZE if gpu_shared() else DEDICATED_BATCH_SIZE)
+
+
+def _default_num_beams() -> int:
+    from gpu import gpu_shared
+    return _positive_int_env("SUBTITLE_AI_NLLB_NUM_BEAMS",
+                             SHARED_NUM_BEAMS if gpu_shared() else DEDICATED_NUM_BEAMS)
+
+
 @dataclass
 class TranslationConfig:
     repo: str = NLLB_REPO
@@ -217,11 +258,14 @@ class TranslationConfig:
     # scales the number of concurrently-tracked sequences linearly
     # (batch_size * num_beams), so this alone roughly halves peak
     # generation-time activation memory versus the original default.
-    num_beams: int = 2
+    # That reasoning is specific to a SHARED card: the values now come
+    # from the GPU profile (SHARED_*/DEDICATED_* above), overridable via
+    # SUBTITLE_AI_NLLB_NUM_BEAMS / SUBTITLE_AI_NLLB_BATCH_SIZE.
+    num_beams: int = field(default_factory=_default_num_beams)
     # Lowered from 12 (2026-09-19, see IMPORTANT note above) -- combined
     # with num_beams=2, peak concurrent sequences drop from 48 (12*4) to
     # 16 (8*2), around a third of the original footprint.
-    batch_size: int = 8
+    batch_size: int = field(default_factory=_default_batch_size)
     # Guards against degenerate repetition loops (confirmed real: a Japanese
     # span mentioning "zombie" 3 times produced ~13x "if you're a zombie,
     # you're all zombies" instead of one sentence). 4 was chosen empirically
@@ -351,17 +395,37 @@ def translate_batch(model, tok, bos: int, sentences: list[str], device: str,
     despite every individual chunk being the same shape/size). One
     empty_cache() per chunk keeps peak usage near the early-run
     steady-state instead of climbing toward the card's ceiling by the
-    end of a long episode."""
+    end of a long episode.
+
+    That per-chunk free now runs only when gpu.gpu_shared() is set: the
+    measurement above was on the P4 with Tdarr on the same card, where
+    memory held in PyTorch's cache was memory Tdarr couldn't have. On a
+    dedicated card the cache is reused by the next chunk, and emptying it
+    ~300 times per episode is a forced sync plus re-allocation for nothing.
+    An actual OOM still frees and halves (_generate_one_batch), and the
+    job's own free_gpu() still runs once when the model is released."""
     if not sentences:
         return []
-    out = []
-    for i in range(0, len(sentences), batch_size):
-        out.extend(_generate_one_batch(model, tok, bos, sentences[i:i + batch_size], device, config))
-        if device == "cuda":
-            from gpu import free_gpu
+    from gpu import free_gpu, gpu_shared
+    per_chunk_free = device == "cuda" and gpu_shared()
+    # Longest-first, so each batch holds similar lengths instead of padding
+    # every short line up to whatever long sentence landed next to it in
+    # document order, and so an OOM (if any) shows up on the first batch
+    # rather than deep into a job. Results are scattered back to input
+    # order below; each sentence is still translated independently.
+    order = sorted(range(len(sentences)), key=lambda i: len(sentences[i]), reverse=True)
+    out: list[str | None] = [None] * len(sentences)
+    done = 0
+    for start in range(0, len(order), batch_size):
+        idx = order[start:start + batch_size]
+        for i, text in zip(idx, _generate_one_batch(model, tok, bos, [sentences[i] for i in idx],
+                                                    device, config)):
+            out[i] = text
+        done += len(idx)
+        if per_chunk_free:
             free_gpu(device)
         if on_progress:
-            on_progress(len(out), len(sentences))
+            on_progress(done, len(sentences))
     return out
 
 

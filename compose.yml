@@ -73,6 +73,12 @@ services:
       # GPUs need which value). Set to float16 on a GPU with efficient
       # float16 tensor throughput (Ampere+, e.g. an RTX 3070) for faster ASR.
       SUBTITLE_AI_COMPUTE_TYPE: ${SUBTITLE_AI_COMPUTE_TYPE:-}
+      # Empty = dedicated-GPU profile (this host). See .env.example: set
+      # SUBTITLE_AI_GPU_SHARED on a card shared with transcoders; the two
+      # NLLB knobs override the profile's batch/beam sizing.
+      SUBTITLE_AI_GPU_SHARED: ${SUBTITLE_AI_GPU_SHARED:-}
+      SUBTITLE_AI_NLLB_BATCH_SIZE: ${SUBTITLE_AI_NLLB_BATCH_SIZE:-}
+      SUBTITLE_AI_NLLB_NUM_BEAMS: ${SUBTITLE_AI_NLLB_NUM_BEAMS:-}
     volumes:
       - ${DATA_PATH}:/data
       # Read-only: confirmed safe by real GPU inference runs this session

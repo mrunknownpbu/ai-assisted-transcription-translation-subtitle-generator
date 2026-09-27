@@ -8,6 +8,7 @@ logic by mocking _generate_one_batch, not the actual OOM-catch path
 """
 
 import contextlib
+import os
 import sys
 import types
 import unittest
@@ -51,34 +52,96 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(result, [])
         mock_gen.assert_not_called()
 
-    def test_default_batch_size_is_8(self):
-        # Lowered from 12 (2026-09-19, real S01E04 OOM -- see
-        # TranslationConfig's docstring) for GPU-translation safety margin.
-        self.assertEqual(TranslationConfig().batch_size, 8)
+    def test_batches_are_length_sorted_and_results_restored(self):
+        # Longest-first batching cuts padding waste (bench: 147s -> 45s on a
+        # real 2,678-sentence episode, together with the dedicated
+        # profile); the caller must still get results in input order.
+        sentences = ["a", "cccccc", "bb", "dddddddd", "e"]
+        seen = []
 
-    def test_default_num_beams_is_2(self):
-        # Halved from 4 (2026-09-19, same real OOM) for the same reason.
-        self.assertEqual(TranslationConfig().num_beams, 2)
+        def fake_generate(model, tok, bos, batch, device, config):
+            seen.append(list(batch))
+            return [f"T:{s}" for s in batch]
+
+        with patch.object(translate, "_generate_one_batch", side_effect=fake_generate):
+            result = translate_batch(None, None, 0, sentences, "cpu", TranslationConfig(), batch_size=2)
+
+        self.assertEqual(seen, [["dddddddd", "cccccc"], ["bb", "a"], ["e"]])
+        self.assertEqual(result, [f"T:{s}" for s in sentences])
+
+    def test_progress_reports_cumulative_done(self):
+        progress = []
+        with patch.object(translate, "_generate_one_batch", side_effect=lambda *a: ["t"] * len(a[3])):
+            translate_batch(None, None, 0, ["x"] * 5, "cpu", TranslationConfig(), batch_size=2,
+                            on_progress=lambda d, t: progress.append((d, t)))
+        self.assertEqual(progress, [(2, 5), (4, 5), (5, 5)])
+
+
+class GpuProfileDefaultsTests(unittest.TestCase):
+    """SHARED keeps the 2026-09-19 Tdarr-contention values (real S01E04
+    OOM on the P4 -- see TranslationConfig's comment); DEDICATED is the
+    current host's measured sweet spot (scripts/bench_translate.py)."""
+
+    def _config(self, **env):
+        with patch.dict("os.environ", env, clear=False):
+            for key in ("SUBTITLE_AI_GPU_SHARED", "SUBTITLE_AI_NLLB_BATCH_SIZE",
+                        "SUBTITLE_AI_NLLB_NUM_BEAMS"):
+                if key not in env:
+                    os.environ.pop(key, None)
+            return TranslationConfig()
+
+    def test_dedicated_is_the_default(self):
+        config = self._config()
+        self.assertEqual((config.batch_size, config.num_beams),
+                         (translate.DEDICATED_BATCH_SIZE, translate.DEDICATED_NUM_BEAMS))
+        self.assertEqual((config.batch_size, config.num_beams), (32, 2))
+
+    def test_shared_profile_keeps_contention_safe_values(self):
+        config = self._config(SUBTITLE_AI_GPU_SHARED="1")
+        self.assertEqual((config.batch_size, config.num_beams), (8, 2))
+
+    def test_env_overrides_win_over_profile(self):
+        config = self._config(SUBTITLE_AI_GPU_SHARED="1", SUBTITLE_AI_NLLB_BATCH_SIZE="64",
+                              SUBTITLE_AI_NLLB_NUM_BEAMS="4")
+        self.assertEqual((config.batch_size, config.num_beams), (64, 4))
+
+    def test_blank_or_invalid_override_falls_back(self):
+        for raw in ("", "zero", "0", "-3"):
+            with self.subTest(raw=raw):
+                self.assertEqual(self._config(SUBTITLE_AI_NLLB_BATCH_SIZE=raw).batch_size, 32)
+
+    def test_explicit_constructor_values_still_win(self):
+        self.assertEqual(TranslationConfig(batch_size=5).batch_size, 5)
 
 
 class GpuMemoryReleaseTests(unittest.TestCase):
-    """Real production evidence (2026-09-19, a full episode on GPU
-    translation): without a release after every chunk, PyTorch's caching
-    allocator visibly grew across ~51 chunks of one translation stage
-    (5442MiB -> 7530MiB on a 7680MiB card, 71MiB free at the low point)
-    even though every chunk was the same shape. One free_gpu() per chunk
-    keeps peak usage from climbing toward the card's ceiling."""
+    """Real production evidence (2026-09-19, a full episode on the SHARED
+    Tesla P4): without a release after every chunk, PyTorch's caching
+    allocator grew across ~51 chunks of one translation stage (5442MiB ->
+    7530MiB on a 7680MiB card, 71MiB free at the low point) while Tdarr
+    competed for the same card. So the per-chunk free_gpu() runs only on
+    a shared GPU; on a dedicated one it measured ~20% slower for nothing."""
 
-    def test_free_gpu_called_after_each_cuda_batch(self):
+    def test_free_gpu_called_after_each_cuda_batch_when_shared(self):
         sentences = [f"s{i}" for i in range(25)]
-        with patch.object(translate, "_generate_one_batch", return_value=["t"]), \
+        with patch.dict("os.environ", {"SUBTITLE_AI_GPU_SHARED": "1"}), \
+             patch.object(translate, "_generate_one_batch", return_value=["t"]), \
              patch("gpu.free_gpu") as mock_free:
-            translate_batch(None, None, 0, sentences, "cuda", TranslationConfig(batch_size=10))
+            translate_batch(None, None, 0, sentences, "cuda", TranslationConfig(), batch_size=10)
         self.assertEqual(mock_free.call_count, 3)  # 10 + 10 + 5
+
+    def test_free_gpu_not_called_per_batch_on_dedicated_gpu(self):
+        sentences = [f"s{i}" for i in range(25)]
+        with patch.dict("os.environ", {"SUBTITLE_AI_GPU_SHARED": ""}), \
+             patch.object(translate, "_generate_one_batch", return_value=["t"]), \
+             patch("gpu.free_gpu") as mock_free:
+            translate_batch(None, None, 0, sentences, "cuda", TranslationConfig(), batch_size=10)
+        mock_free.assert_not_called()
 
     def test_free_gpu_not_called_for_cpu_translation(self):
         sentences = ["a", "b"]
-        with patch.object(translate, "_generate_one_batch", return_value=["t"]), \
+        with patch.dict("os.environ", {"SUBTITLE_AI_GPU_SHARED": "1"}), \
+             patch.object(translate, "_generate_one_batch", return_value=["t"]), \
              patch("gpu.free_gpu") as mock_free:
             translate_batch(None, None, 0, sentences, "cpu", TranslationConfig(batch_size=10))
         mock_free.assert_not_called()
