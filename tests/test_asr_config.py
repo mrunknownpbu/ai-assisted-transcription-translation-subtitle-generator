@@ -34,6 +34,58 @@ class HotwordsFlagTests(unittest.TestCase):
             self.assertTrue(self._flag(v), v)
 
 
+class ComputeTypeFromEnvTests(unittest.TestCase):
+    """New-GPU-host migration (2026-09-27): compute_type was hard-coded
+    "int8" (correct for this deployment's pre-Volta GPU, wrong for an
+    Ampere+ card with efficient float16 throughput). compose.yml forwards
+    SUBTITLE_AI_COMPUTE_TYPE as `${SUBTITLE_AI_COMPUTE_TYPE:-}`, so an
+    unset .env entry reaches the container as "" -- must not crash or
+    silently misbehave, same blank-safety contract as every other
+    SUBTITLE_AI_* knob this project forwards this way."""
+
+    def _parse(self, value):
+        with patch.dict(os.environ, {}, clear=False):
+            if value is None:
+                os.environ.pop("SUBTITLE_AI_COMPUTE_TYPE", None)
+            else:
+                os.environ["SUBTITLE_AI_COMPUTE_TYPE"] = value
+            return asr._compute_type_from_env()
+
+    def test_blank_falls_back_to_default(self):
+        self.assertEqual(self._parse(""), "int8")
+
+    def test_whitespace_only_falls_back_to_default(self):
+        self.assertEqual(self._parse("   "), "int8")
+
+    def test_unset_falls_back_to_default(self):
+        self.assertEqual(self._parse(None), "int8")
+
+    def test_valid_value_is_used(self):
+        self.assertEqual(self._parse("float16"), "float16")
+
+    def test_surrounding_whitespace_is_stripped(self):
+        self.assertEqual(self._parse(" float16 "), "float16")
+
+    def test_not_validated_against_a_fixed_set(self):
+        # Deliberately not restricted to a known-good list here -- an
+        # invalid value surfaces as ctranslate2's own clear error at model
+        # load time (see the function's docstring), so this just passes
+        # whatever non-blank string it's given straight through.
+        self.assertEqual(self._parse("nonsense"), "nonsense")
+
+    def test_module_import_survives_a_blank_value(self):
+        # The actual production failure mode: importing asr.py itself.
+        import importlib
+        with patch.dict(os.environ, {"SUBTITLE_AI_COMPUTE_TYPE": ""}):
+            importlib.reload(asr)
+        importlib.reload(asr)  # restore normal state for every other test
+
+    def test_asr_config_default_is_sourced_from_the_env_helper(self):
+        # Not a second hardcoded literal duplicating _compute_type_from_env's
+        # default -- AsrConfig.compute_type must actually be wired to it.
+        self.assertEqual(AsrConfig().compute_type, asr.DEFAULT_COMPUTE_TYPE)
+
+
 class VadParametersTests(unittest.TestCase):
     def test_defaults_are_the_measured_permissive_settings(self):
         self.assertEqual(vad_parameters(AsrConfig()),

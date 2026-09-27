@@ -35,10 +35,10 @@ def remote_translate_batch(url: str, sentences: list[str], src_lang: str,
     """Same chunking/progress-callback shape as translate_batch(), but
     dispatches each chunk to a remote translate-server over HTTP instead
     of a local model call. Real motivation (2026-09-20 benchmark, same
-    model/config/sentences): a media server's RTX 3070 measured ~8x the
-    throughput of this host's Tesla P4 (16.53 vs 2.05 sentences/sec) --
-    NLLB-200-distilled-1.3B has real tensor-core acceleration there this
-    card doesn't have."""
+    model/config/sentences): a media server's RTX 3070 measured ~8x a
+    Tesla P4 host's throughput (16.53 vs 2.05 sentences/sec) --
+    NLLB-200-distilled-1.3B has real tensor-core acceleration on Ampere+
+    that Pascal-class cards don't have."""
     import httpx
     if not sentences:
         return []
@@ -279,9 +279,10 @@ def load_tokenizer(config: TranslationConfig, src_lang_code: str):
 def load_model(config: TranslationConfig, src_lang_code: str):
     """Shared by both the local worker path (translate_spans() below) and
     translate_server.py's remote server -- so a VRAM headroom check here
-    covers both this project's own shared Tesla P4 host (Tdarr transcode)
-    and the remote translate-server's shared RTX 3070 host (Jellyfin/Plex
-    hardware transcode; see translate_server.py's own module docstring)."""
+    covers every deployment this project has run on where the GPU is
+    shared with another workload (a Tdarr transcode host, a Jellyfin/Plex
+    hardware-transcode host; see translate_server.py's own module
+    docstring)."""
     import torch
     from transformers import AutoModelForSeq2SeqLM
     if config.device == "cuda":

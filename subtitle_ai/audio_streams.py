@@ -185,7 +185,7 @@ def _sample_model_name() -> str:
     SUBTITLE_AI_SAMPLE_MODEL (default \"small\"). When a small model is
     pre-cached in /models and this env var is set (or left at the default),
     VRAM consumed per Analyze click drops from ~3 GB (large-v3) to ~200 MB,
-    eliminating the near-OOM condition on the Tesla P4. See scripts/
+    eliminating a near-OOM condition on a VRAM-constrained GPU. See scripts/
     download_sample_model.py for the one-time pre-cache step."""
     import os
     return os.environ.get("SUBTITLE_AI_SAMPLE_MODEL", "small").strip() or "small"
@@ -198,7 +198,7 @@ def default_sampler(model_name: str | None = None):
     model_name defaults to the value of SUBTITLE_AI_SAMPLE_MODEL (default
     \"small\"). A lightweight model (~200 MB VRAM for \"small\" vs ~3 GB for
     \"large-v3\") slashes the transient VRAM spike from every \"Analyze\" click,
-    eliminating the near-OOM condition on the Tesla P4 8GB.
+    eliminating the near-OOM condition on an 8 GB GPU.
 
     If the requested model cannot load -- typically because it has not yet
     been pre-cached into the read-only /models mount (see scripts/
@@ -215,7 +215,7 @@ def default_sampler(model_name: str | None = None):
     compute_type is sourced from asr.AsrConfig's own default (not a second
     hardcoded value). Real defect this closes (2026-09-17): when this
     function previously hardcoded \"float16\" independently of asr.py, fixing
-    the ASR stage's float16/Tesla-P4 mismatch still left THIS sampler broken,
+    the ASR stage's float16-on-Pascal mismatch still left THIS sampler broken,
     confirmed by a real job's AUDIO_STREAM_RECOMMENDED falling back to
     \"language sampling failed\" instead of real per-stream language detection.
     """

@@ -30,12 +30,14 @@ services:
       # always bypasses this (see worker.py) so it can never make Retry a
       # no-op after a bad transcription.
       SUBTITLE_AI_TRANSCRIPT_CACHE: /cache/transcripts
-      # Unset by default = local Tesla P4 translation only. Set to route
-      # translation through the media server's RTX 3070 instead (~8x
-      # throughput, real benchmark 2026-09-20) via translate_server.py,
-      # with automatic local fallback if it's unreachable -- see
-      # translate.remote_translate_batch()'s docstring.
-      TRANSLATE_SERVER_URL: http://10.1.1.100:8091
+      # Unset by default = local translation only. Set to route translation
+      # through a remote GPU host instead via translate_server.py, with
+      # automatic local fallback if it's unreachable -- see
+      # translate.remote_translate_batch()'s docstring. This host's own
+      # value (if any) lives in its .env, not here, so a fresh checkout on
+      # a new host defaults to local-only rather than silently trying an
+      # old deployment's remote server.
+      TRANSLATE_SERVER_URL: ${TRANSLATE_SERVER_URL:-}
       # Optional TheTVDB API v4 credentials (see tvdb_client.py) -- metadata
       # enrichment only (series title, cast lookup), never a runtime
       # dependency for translation itself. Left unset by default: every
@@ -67,6 +69,10 @@ services:
       SUBTITLE_AI_SAMPLE_MODEL: ${SUBTITLE_AI_SAMPLE_MODEL:-}
       SUBTITLE_AI_VRAM_MARGIN_GB: ${SUBTITLE_AI_VRAM_MARGIN_GB:-}
       SUBTITLE_AI_ORPHAN_CONTEXT_PADDING: ${SUBTITLE_AI_ORPHAN_CONTEXT_PADDING:-}
+      # Empty = int8 (see asr.py's AsrConfig.compute_type comment for which
+      # GPUs need which value). Set to float16 on a GPU with efficient
+      # float16 tensor throughput (Ampere+, e.g. an RTX 3070) for faster ASR.
+      SUBTITLE_AI_COMPUTE_TYPE: ${SUBTITLE_AI_COMPUTE_TYPE:-}
     volumes:
       - ${DATA_PATH}:/data
       # Read-only: confirmed safe by real GPU inference runs this session

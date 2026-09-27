@@ -43,8 +43,8 @@ GLOSSARY_SUGGESTIONS_DIR = os.environ.get(
 # uploaded file is transient input, not something that belongs in the
 # user's actual library.
 SRT_UPLOAD_DIR = os.environ.get("SUBTITLE_AI_SRT_UPLOAD_DIR", "/cache/srt_uploads")
-# Unset by default = today's exact behavior (local Tesla P4 translation
-# only). See translate.remote_translate_batch()'s docstring for the real
+# Unset by default = today's exact behavior (local translation only).
+# See translate.remote_translate_batch()'s docstring for the real
 # benchmark (~8x throughput) motivating this, and Worker's docstring for
 # the automatic local fallback if the remote server is unreachable.
 TRANSLATE_SERVER_URL = os.environ.get("TRANSLATE_SERVER_URL")

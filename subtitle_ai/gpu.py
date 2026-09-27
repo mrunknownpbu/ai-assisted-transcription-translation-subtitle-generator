@@ -123,12 +123,13 @@ def preflight_vram_check(required_gb: float = DEFAULT_VRAM_MARGIN_GB, *,
     Call this from INSIDE gpu_lock(), immediately before constructing a
     model. gpu_lock() only serializes THIS project's own processes against
     each other -- it says nothing about an external GPU consumer sharing
-    the same physical card. Both real deployments this project runs on have
-    exactly that: Tdarr hardware transcoding on the Tesla P4 host (ASR,
-    local-NLLB-fallback, and the Analyze stream sampler all run there), and
-    Jellyfin/Plex hardware transcoding on the RTX 3070 host (translate_
-    server.py's own docstring documents this explicitly). A transcode burst
-    can eat headroom in the exact window between this project's own idle-
+    the same physical card. Real deployments this project has run on
+    include exactly that: Tdarr hardware transcoding sharing one host's
+    card (ASR, local-NLLB-fallback, and the Analyze stream sampler all run
+    there), and Jellyfin/Plex hardware transcoding sharing another's
+    (translate_server.py's own docstring documents this explicitly). A
+    transcode burst can eat headroom in the exact window between this
+    project's own idle-
     eviction freeing memory and the next request needing it -- gpu_lock()
     alone cannot see or wait out that kind of external contention, which is
     the real, previously-unrecoverable CUDA OOM condition this closes by

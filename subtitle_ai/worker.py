@@ -150,8 +150,8 @@ class Worker(threading.Thread):
         self.transcript_cache_dir = transcript_cache_dir
         self.glossary_suggestions_dir = glossary_suggestions_dir
         self.srt_upload_dir = srt_upload_dir
-        # None (default) = today's exact behavior: local Tesla P4
-        # translation only. Set via TRANSLATE_SERVER_URL (main.py) to
+        # None (default) = today's exact behavior: local translation
+        # only. Set via TRANSLATE_SERVER_URL (main.py) to
         # route translation to a remote translate-server (see
         # translate.remote_translate_batch()'s docstring for the real
         # benchmark motivating this) with automatic local fallback.

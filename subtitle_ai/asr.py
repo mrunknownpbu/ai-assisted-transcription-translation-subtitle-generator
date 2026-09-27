@@ -80,6 +80,23 @@ def hotwords_enabled() -> bool:
     import os
     return os.environ.get("SUBTITLE_AI_ASR_HOTWORDS", "").strip().lower() in {"on", "1", "true", "yes"}
 
+
+def _compute_type_from_env(default: str = "int8") -> str:
+    """SUBTITLE_AI_COMPUTE_TYPE, tolerant of a blank value -- compose.yml
+    forwards it as `${SUBTITLE_AI_COMPUTE_TYPE:-}` (this project's usual
+    "empty = default" convention), so an unset .env entry arrives as "".
+    Not validated against ctranslate2's actual supported set here: an
+    invalid value surfaces as ctranslate2's own clear error at model load
+    time, which is more informative than guessing at validation here.
+    Default int8 keeps every host that doesn't set this unchanged; see
+    AsrConfig.compute_type's own comment for which GPUs need which value."""
+    import os
+    raw = os.environ.get("SUBTITLE_AI_COMPUTE_TYPE", "").strip()
+    return raw or default
+
+
+DEFAULT_COMPUTE_TYPE = _compute_type_from_env()
+
 # Real defect (multi-language validation, 2026-09-14): a file's language
 # auto-detection previously trusted a SINGLE short window (faster-whisper's
 # own internal peek at the start of the given audio) as representative of
@@ -98,14 +115,17 @@ LANGUAGE_PROBE_FRACTIONS = (0.10, 0.30, 0.50, 0.70, 0.90)
 class AsrConfig:
     model_name: str = "large-v3"
     device: str = "cuda"
-    # int8 rather than float16: this deployment's GPU (Tesla P4, Pascal,
-    # compute capability 6.1) lacks efficient float16 tensor throughput,
-    # and ctranslate2 refuses to run float16 on it outright ("Requested
+    # int8 by default: a pre-Volta GPU (e.g. a Tesla P4, Pascal, compute
+    # capability 6.1) lacks efficient float16 tensor throughput, and
+    # ctranslate2 refuses to run float16 on it outright ("Requested
     # float16 compute type, but the target device or backend do not
     # support efficient float16 computation") -- confirmed by a real job
     # failure on this hardware. int8 is ctranslate2's standard fallback
     # for pre-Volta GPUs and works everywhere newer GPUs do too.
-    compute_type: str = "int8"
+    # Overridable via SUBTITLE_AI_COMPUTE_TYPE (see _compute_type_from_env
+    # above) -- e.g. float16 on an Ampere+ card (RTX 3070 and newer), which
+    # has full float16 tensor throughput and no such restriction.
+    compute_type: str = DEFAULT_COMPUTE_TYPE
     beam_size: int = 5
     temperature: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
     compression_ratio_threshold: float = 2.4
@@ -323,7 +343,7 @@ def transcribe(wav_path: str, media_path: str, media_hash: str, audio_stream_ind
                 # failed job, with no other job running).
                 if config.device == "cuda":
                     # Wait out a transient VRAM shortage (e.g. a Tdarr
-                    # transcode burst on this shared Tesla P4) instead of
+                    # transcode burst on a shared GPU host) instead of
                     # attempting a load that would very likely OOM -- see
                     # gpu.preflight_vram_check()'s docstring.
                     from gpu import preflight_vram_check

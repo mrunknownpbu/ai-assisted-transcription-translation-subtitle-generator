@@ -16,7 +16,7 @@ default as the app: "small"). Override with:
 
     SUBTITLE_AI_SAMPLE_MODEL=base python3 scripts/download_sample_model.py
 
-VRAM budget at runtime (Tesla P4 8 GB, int8 compute):
+VRAM budget at runtime (illustrative, 8 GB card, int8 compute):
   faster-whisper-small  : ~200 MB VRAM  (this script's default)
   faster-whisper-base   : ~150 MB VRAM
   faster-whisper-large-v3: ~3 GB VRAM   (what the app falls back to without this)

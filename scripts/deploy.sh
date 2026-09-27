@@ -9,15 +9,16 @@
 # new; it's the same sequence, now repeatable and not tribal knowledge.
 #
 # Usage: ./scripts/deploy.sh [remote-host]
-# remote-host defaults to "media-server" (this deployment's real remote
-# translate-server host, reachable via SSH config alias). Pass "" (or
-# any falsy value via SKIP_REMOTE=1) to skip the remote leg entirely --
-# useful if you only changed something that doesn't touch translate.py/
-# translate_server.py.
+# Local-only by default (no remote-host argument, SKIP_REMOTE unset): a
+# fresh checkout on a new host must never try to ship an image to, and
+# redeploy, an old deployment's remote translate-server just because
+# nobody passed an argument. Pass a remote host (an SSH config alias,
+# e.g. "media-server") to opt in to that leg; SKIP_REMOTE=1 still forces
+# it off even if one is given.
 
 set -eu
 
-REMOTE_HOST="${1:-media-server}"
+REMOTE_HOST="${1:-}"
 REMOTE_COMPOSE_DIR="/opt/docker/compose/subtitle-ai-translate-server"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 

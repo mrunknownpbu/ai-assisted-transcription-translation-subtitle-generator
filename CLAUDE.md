@@ -72,11 +72,12 @@ Remote translate-server health: `curl http://<remote-host>:8091/health`.
   stream sampler). Polls `torch.cuda.mem_get_info()`, waiting up to 20s
   (2s poll interval) for `SUBTITLE_AI_VRAM_MARGIN_GB` (default 3.2) free
   before raising `gpu.InsufficientVramError` instead of attempting a load
-  that would very likely CUDA-OOM. Exists specifically for a Tdarr
-  transcode burst on the Tesla P4 host or a Jellyfin/Plex transcode burst
-  on the translate-server's RTX 3070 host landing in the gap between this
-  project's own idle-eviction freeing memory and the next request needing
-  it -- `gpu.gpu_lock()` alone only serializes this project's OWN
+  that would very likely CUDA-OOM. Exists specifically for a burst from
+  another process sharing the same physical card (this project's real
+  experience: a Tdarr transcode burst on one host, a Jellyfin/Plex
+  transcode burst on another) landing in the gap between this project's
+  own idle-eviction freeing memory and the next request needing it --
+  `gpu.gpu_lock()` alone only serializes this project's OWN
   processes against each other and can't see or wait out that kind of
   external contention. A raised `InsufficientVramError` surfaces as a
   normal job failure (nothing silently retries past it at the pipeline
