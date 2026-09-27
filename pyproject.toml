@@ -9,6 +9,10 @@ dependencies = [
     "transformers==4.48.3",
     "sentencepiece==0.2.0",
     "pyyaml==6.0.3",
+    # Round-trip YAML for the glossary writers in api.py: pyyaml's safe_dump
+    # drops every comment, and the series glossaries carry their evidence
+    # (why each name is protected) as comments.
+    "ruamel.yaml==0.18.16",
     "fastapi==0.115.12",
     "uvicorn[standard]==0.34.2",
     "httpx==0.28.1",

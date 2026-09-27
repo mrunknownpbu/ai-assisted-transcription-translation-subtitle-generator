@@ -18,10 +18,13 @@ ENV PYTHONUNBUFFERED=1 \
 # (libllvm15, Mesa, Flite, libmfx, ...) that a headless audio-extraction job
 # never touches. This app only runs `ffmpeg -ss -t -i ... -ac 1 -ar 16000
 # -vn -sn` and `ffprobe -show_streams`, which any build supports.
+# git: glossary_files.commit() versions each web-UI glossary edit in the
+# /glossary mount's own git repo (best-effort; the app works without it).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
-        ca-certificates && \
+        ca-certificates \
+        git && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=mwader/static-ffmpeg:7.1.1 /ffmpeg /ffprobe /usr/local/bin/
 

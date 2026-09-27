@@ -200,7 +200,14 @@ this project's config.
   mounted read-write at `/glossary`) is its OWN git repo, initialized in
   place directly on the host -- NOT part of this repository. If you edit
   a glossary file as part of a fix, `cd` into that directory on the host
-  and commit there too; this repo's git history won't show it.
+  and commit there too; this repo's git history won't show it. Web-UI
+  edits (promote/update/delete) commit themselves since 2026-09-28
+  (`glossary_files.py`, author "subtitle-ai web UI"), and are written
+  with ruamel.yaml round-trip so comments survive. Before that, a UI
+  promotion's `yaml.safe_dump()` silently deleted every evidence comment
+  in `love-is-in-the-air.yaml` (restored in that repo's history). The
+  comments ARE the evidence record for the "evidence bar" section below
+  -- never write these files with plain pyyaml.
 - **Job database** (`${CONFIG_PATH}/subtitle-ai/cache/jobs.db`,
   SQLite/WAL): backed up daily at 03:00 by a host crontab entry running
   `scripts/backup_jobs_db.sh` (safe against the live DB; 14-day

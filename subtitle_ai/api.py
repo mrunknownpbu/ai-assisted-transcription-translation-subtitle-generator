@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import alerting
 import audio_streams
+import glossary_files
 import glossary_profile
 import media
 import srt
@@ -668,7 +669,7 @@ def promote_glossary_entity(tvdb_id: int, request: PromoteGlossaryEntityRequest)
 
     path = glossary_profile.find_series_glossary_path(directory, tvdb_id)
     if path is not None:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = glossary_files.load(path)
     else:
         path = directory / f"{tvdb_id}.yaml"
         data = {"tvdb_id": tvdb_id, "title": _series_title(tvdb_id), "entities": []}
@@ -682,11 +683,7 @@ def promote_glossary_entity(tvdb_id: int, request: PromoteGlossaryEntityRequest)
     else:
         entities.append({"canonical": request.canonical, "aliases": request.aliases, "protected": True})
 
-    # Atomic tmp-then-replace -- identical pattern to
-    # auto_glossary.write_suggestions()'s own write.
-    tmp = path.with_suffix(".yaml.tmp")
-    tmp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    tmp.replace(path)
+    _write_series_glossary(path, data, f"Protect {request.canonical!r} (series {tvdb_id})")
 
     profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id)
     return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms}
@@ -704,16 +701,15 @@ def _load_series_glossary_or_404(directory: Path, tvdb_id: int) -> tuple[Path, d
     if path is None:
         raise HTTPException(status_code=404,
                             detail="no series-specific glossary file for this series")
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return path, data
+    return path, glossary_files.load(path)
 
 
-def _write_series_glossary(path: Path, data: dict) -> None:
-    # Atomic tmp-then-replace -- identical pattern to
-    # promote_glossary_entity's own write.
-    tmp = path.with_suffix(".yaml.tmp")
-    tmp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    tmp.replace(path)
+def _write_series_glossary(path: Path, data, message: str) -> None:
+    """Comment-preserving atomic write, then a best-effort commit in the
+    glossary's own git repo -- see glossary_files.py for the real data
+    loss (every evidence comment) that plain yaml.safe_dump() caused."""
+    glossary_files.write(path, data)
+    glossary_files.commit(path, f"{message} via web UI")
 
 
 @app.post("/api/series/{tvdb_id}/glossary/update", dependencies=[Depends(require_api_key)])
@@ -736,7 +732,7 @@ def update_glossary_entity(tvdb_id: int, request: UpdateGlossaryEntityRequest) -
     entry["canonical"] = request.canonical
     entry["aliases"] = request.aliases
 
-    _write_series_glossary(path, data)
+    _write_series_glossary(path, data, f"Edit {request.original_canonical!r} (series {tvdb_id})")
     profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id)
     return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms}
                                 for e in profile.entities]}
@@ -763,7 +759,7 @@ def delete_glossary_entity(tvdb_id: int, request: DeleteGlossaryEntityRequest) -
                             detail=f"{request.canonical!r} not found in this series' glossary")
     entities.remove(entry)
 
-    _write_series_glossary(path, data)
+    _write_series_glossary(path, data, f"Unprotect {request.canonical!r} (series {tvdb_id})")
     profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id)
     return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms}
                                 for e in profile.entities]}
