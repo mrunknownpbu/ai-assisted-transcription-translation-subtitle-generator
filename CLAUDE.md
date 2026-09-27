@@ -159,6 +159,16 @@ rediscover most of them one failure at a time:
   `preflight_vram_check()`, which runs it. A script that loads a model
   some other way while the app has NLLB resident WILL OOM -- that exact
   failure (an eval script vs the app's idle 2.8GB) is why this exists.
+- **NLLB runs on CTranslate2 by default** (`SUBTITLE_AI_NLLB_BACKEND`,
+  2026-09-28), a float16 conversion at
+  `${CONFIG_PATH}/subtitle-ai/models/ct2/` made by
+  `scripts/convert_nllb_ct2.py`. Same measured quality as the hf path,
+  2.9x faster. Without the conversion it falls back to hf with a warning.
+  `_generate_one_batch()` picks the path from what `load_model()` actually
+  returned (a str target token = CTranslate2, an int = hf), never from the
+  config, so a fallback can't be misrouted. Any generation fix (like the
+  `clean_up_tokenization_spaces` one below) must go into BOTH
+  `_generate_one_batch` and `_generate_one_batch_ct2`.
 - **Measure before changing translation behaviour**:
   `scripts/bench_translate.py` (speed, which lines change) and
   `scripts/eval_translation.py` (chrF vs the library's human
