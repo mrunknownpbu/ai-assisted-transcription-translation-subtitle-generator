@@ -37,12 +37,17 @@ RUN groupadd -g 1000 subtitle && \
 COPY --from=ghcr.io/astral-sh/uv:0.10.4 /uv /bin/uv
 
 WORKDIR /app
-COPY pyproject.toml /app/pyproject.toml
+COPY pyproject.toml uv.lock /app/
+# --frozen: install exactly what uv.lock pins, never re-resolve. Without it
+# every uncached build resolved transitive dependencies afresh, so two
+# builds of the same commit could differ (verified 2026-09-28: the lock
+# matches the then-running image package-for-package). If pyproject.toml
+# changes, run `uv lock` on the host and commit uv.lock alongside it.
 # triton is excluded via pyproject's override-dependencies (only torch.compile
 # uses it; this app never calls it). torch/include is the C++ headers for
 # building extensions. The removal lives in THIS layer: deleting files in a
 # later layer would leave them in the image.
-RUN uv sync --no-install-project && \
+RUN uv sync --frozen --no-install-project && \
     rm -rf /app/.venv/lib/python3.12/site-packages/torch/include
 
 # ctranslate2 4.4.0 links cuDNN 8, but torch 2.5.1+cu121 hard-pins
