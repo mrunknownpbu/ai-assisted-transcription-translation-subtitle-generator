@@ -11,6 +11,13 @@ MAX_LINES = 2
 MIN_DURATION = 1.0
 MAX_DURATION = 7.0
 MAX_CPS = 21.0   # a little headroom over the 17 CPS target used to size cues
+# Duration findings sit BELOW qc.types.REVIEW_CONFIDENCE (0.7) on purpose:
+# they're about timing, which the review editor can't change (text only),
+# and in Workflow B the timing is inherited from the uploaded source SRT
+# anyway. At 0.7 the min-duration rule alone was 62,490 of the 62,512
+# needs_review hits across all 300 production jobs (2026-09-28), burying
+# the 21 real entity/hallucination findings the count exists to surface.
+DURATION_CONFIDENCE = 0.5
 
 
 def run(cues: list) -> QcResult:
@@ -27,10 +34,12 @@ def run(cues: list) -> QcResult:
                                       "a line exceeds max character length", 0.6, index=i))
         elif duration < MIN_DURATION - 1e-6:
             findings.append(QcFinding(QcCategory.READABILITY_ERROR,
-                                      f"duration {duration:.2f}s below minimum {MIN_DURATION}s", 0.7, index=i))
+                                      f"duration {duration:.2f}s below minimum {MIN_DURATION}s",
+                                      DURATION_CONFIDENCE, index=i))
         elif duration > MAX_DURATION + 1e-6:
             findings.append(QcFinding(QcCategory.READABILITY_ERROR,
-                                      f"duration {duration:.2f}s exceeds maximum {MAX_DURATION}s", 0.7, index=i))
+                                      f"duration {duration:.2f}s exceeds maximum {MAX_DURATION}s",
+                                      DURATION_CONFIDENCE, index=i))
         elif duration > 0 and len(text) / duration > MAX_CPS:
             findings.append(QcFinding(QcCategory.READABILITY_ERROR,
                                       f"reading speed {len(text)/duration:.1f} CPS exceeds {MAX_CPS}",

@@ -142,6 +142,22 @@ class ReadabilityQcTests(unittest.TestCase):
         cue = TargetCue(start=0.0, end=0.2, lines=["Hi"])
         self.assertEqual(readability_qc.run([cue]).flagged, 1)
 
+    def test_duration_findings_stay_out_of_needs_review(self):
+        # Real noise (2026-09-28): the min-duration rule at 0.7 was 99.97%
+        # of every needs_review hit in production. Timing isn't editable in
+        # the review editor, so it must stay visible but never count.
+        cues = [TargetCue(start=0.0, end=0.95, lines=["Hi"]),
+                TargetCue(start=1.0, end=9.0, lines=["Long"])]
+        result = readability_qc.run(cues)
+        self.assertEqual(result.flagged, 2)
+        self.assertEqual(JobQc(readability=result).needs_review_count(), 0)
+
+    def test_three_line_cue_still_counts_for_review(self):
+        # Line count IS fixable in the text-only editor, so it keeps its
+        # review-worthy confidence.
+        cue = TargetCue(start=0.0, end=2.0, lines=["one", "two", "three"])
+        self.assertEqual(JobQc(readability=readability_qc.run([cue])).needs_review_count(), 1)
+
 
 class TimingQcTests(unittest.TestCase):
     def test_monotonic_clean(self):

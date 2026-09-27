@@ -11,8 +11,14 @@
 # Defaults match this project's real deployment path (see compose.yml's
 # CONFIG_PATH/cache mount).
 #
-# Recommended cron line (not installed automatically -- add yourself):
-#   0 3 * * * /opt/projects/subtitle-ai/scripts/backup_jobs_db.sh >> /var/log/subtitle-ai-backup.log 2>&1
+# Installed as a daily host cron line (see CLAUDE.md "Host setup
+# checklist" -- a crontab is per-host and does NOT survive a migration):
+#   0 3 * * * /opt/projects/subtitle-ai/scripts/backup_jobs_db.sh >> /opt/docker/appdata/subtitle-ai/backups/backup.log 2>&1
+#
+# Uses the sqlite3 CLI when present, otherwise python3's built-in
+# sqlite3.Connection.backup() -- the same online-backup API, so equally
+# safe against a live WAL database. Real gap (2026-09-28): a fresh Ubuntu
+# host has python3 but not the sqlite3 CLI, so this script failed there.
 
 set -eu
 
@@ -29,7 +35,19 @@ mkdir -p "$BACKUP_DIR"
 timestamp=$(date +%Y%m%d-%H%M%S)
 dest="$BACKUP_DIR/jobs-$timestamp.db"
 
-sqlite3 "$SRC_DB" ".backup '$dest'"
+if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$SRC_DB" ".backup '$dest'"
+else
+    python3 - "$SRC_DB" "$dest" <<'PY'
+import sqlite3, sys
+src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+dst = sqlite3.connect(sys.argv[2])
+with dst:
+    src.backup(dst)
+dst.close()
+src.close()
+PY
+fi
 gzip "$dest"
 
 echo "backup_jobs_db.sh: wrote $dest.gz"

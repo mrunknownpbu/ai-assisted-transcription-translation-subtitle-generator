@@ -87,6 +87,23 @@ Docker image having a dependency says nothing about the bare host having
 it, and `uv run --with pytest`/`npm test` above need the bare host's own
 copies.
 
+### Host setup checklist
+
+Everything here lives on the host, not in the image or the repo, so a
+new host needs each one redone by hand. The 2026-09-27 migration had to
+rediscover most of them one failure at a time:
+
+1. `uv`, `ffmpeg`, `node`/`npm` on the bare host (tests; see above).
+2. `gh auth login` + `gh auth setup-git` (push over HTTPS).
+3. `.env` from `.env.example` (`DATA_PATH`, `CONFIG_PATH`, and
+   `SUBTITLE_AI_COMPUTE_TYPE` to match the GPU).
+4. Daily backup cron (`crontab -e`):
+   `0 3 * * * /opt/projects/subtitle-ai/scripts/backup_jobs_db.sh >> /opt/docker/appdata/subtitle-ai/backups/backup.log 2>&1`
+   -- then run the script once by hand and check a `.db.gz` appears.
+   (It needs no `sqlite3` CLI: it falls back to python3's backup API.)
+5. Copy `${CONFIG_PATH}/subtitle-ai/{models,glossary,cache}` across;
+   the glossary directory is its own git repo -- copy `.git` too.
+
 ## Scratch dirs and the remote translate-server (ops behavior)
 
 - **`WORK_ROOT/<job_id>` is auto-managed** (`workdir.py`): removed when a
@@ -185,10 +202,11 @@ this project's config.
   a glossary file as part of a fix, `cd` into that directory on the host
   and commit there too; this repo's git history won't show it.
 - **Job database** (`${CONFIG_PATH}/subtitle-ai/cache/jobs.db`,
-  SQLite/WAL): back up with `scripts/backup_jobs_db.sh` (safe to run
-  against the live DB). No cron job is installed automatically -- see
-  that script's header for the recommended line if you want scheduled
-  backups.
+  SQLite/WAL): backed up daily at 03:00 by a host crontab entry running
+  `scripts/backup_jobs_db.sh` (safe against the live DB; 14-day
+  retention in `${CONFIG_PATH}/subtitle-ai/backups/`). The crontab is
+  per-host state -- it silently did NOT survive the 2026-09-27 migration
+  and was reinstalled 2026-09-28; see "Host setup checklist" above.
 
 ## QC is advisory, not a gate -- on purpose
 
@@ -205,6 +223,17 @@ shown ahead of the generic QC summary in the job list GUI. If you're
 tempted to make QC block completion, check the false-positive rate on
 real data first -- it's higher than it looks from reading the heuristics
 alone.
+
+The same discipline applies in the other direction: any rule emitted at
+>=0.7 feeds `needs_review` on every job. Until 2026-09-28 readability's
+min-duration rule sat at exactly 0.7 and was 99.97% of all
+`needs_review` hits in production (62,490 of 62,512), burying the ~21
+real entity/hallucination findings; it and max-duration now emit at
+`readability_qc.DURATION_CONFIDENCE` (0.5) -- timing isn't fixable in the
+text-only editor, and Workflow B inherits it from the source SRT anyway.
+Stored rows were recounted with `scripts/recompute_needs_review.py`
+(20,058 -> 22). Before raising any rule to >=0.7, count how often it
+fires across the real job database first.
 
 ## Entity-protection precedent: the evidence bar
 
