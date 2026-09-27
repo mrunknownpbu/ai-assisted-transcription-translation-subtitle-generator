@@ -15,39 +15,77 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-25: 830 passing, 0 failures (plus 49 frontend
-tests -- `cd frontend && npm test -- --run`). (History: 708 after fixing
-`test_glossary_profile.py`'s stale `"Eda Yıldız"` canonical assertion
-2026-09-22 -- see `IMPROVEMENT_PLAN.md` section 1.1 -- then 727 after the
-lightweight-sampler-model tests (2.1), 737 after VRAM pre-flight (2.2),
-757 after orphan-context-padding (3.2), 756 after removing
-`tvdb_client.characters()`'s dead-code test (3.3), 768 after the worker
-stage/progress tests (4.3), then 795 after the batch-queueing and SRT-
-editor tests (4.1/4.2). Update this line rather than leaving it to
-drift the next time the count moves.)
+Baseline as of 2026-09-27: 876 passing, 0 failures (plus 83 frontend
+tests -- `cd frontend && npm test -- --run`). Verified directly on the
+current host (myphy-ai), not just in CI or inside Docker: 0 skips once
+`ffmpeg`, `uv`, and `node`/`npm` are on the bare host too, not just inside
+the image -- CI's own setup installs `ffmpeg` as a separate step for the
+same reason (see `.github/workflows/test.yml`). (History: 708 after
+fixing `test_glossary_profile.py`'s stale `"Eda Yıldız"` canonical
+assertion 2026-09-22 -- see `IMPROVEMENT_PLAN.md` section 1.1 -- then 727
+after the lightweight-sampler-model tests (2.1), 737 after VRAM
+pre-flight (2.2), 757 after orphan-context-padding (3.2), 756 after
+removing `tvdb_client.characters()`'s dead-code test (3.3), 768 after the
+worker stage/progress tests (4.3), 795 after the batch-queueing and
+SRT-editor tests (4.1/4.2), then 830 (2026-09-25) before the run that took
+it to 876: WebVTT-as-`.srt` source support, the Series page's folder-name
+title fallback and episodes-vs-jobs count fix, `.vtt` uploads, the Jobs
+page Refresh-button fix, and `SUBTITLE_AI_COMPUTE_TYPE`. Update this line
+rather than leaving it to drift the next time the count moves.)
 
 Frontend: `cd frontend && npx tsc --noEmit && npm test -- --run`.
 
 ## Deploying
 
 ```bash
-./scripts/deploy.sh [remote-host]     # default remote-host: media-server
+./scripts/deploy.sh                   # local only (the default since 2026-09-27)
+./scripts/deploy.sh <remote-host>     # also redeploy a remote translate-server, if one exists
 ```
 
-Builds `subtitle-ai:dev`, redeploys the local `subtitle-ai` (master)
-container, ships the same image to the remote GPU host, redeploys
-`translate-server` there from `compose.translate-server.yml`, and polls
-both health endpoints. Set `SKIP_REMOTE=1` to skip the remote leg (e.g.
-a change that only touches frontend/API code, not `translate.py`/
-`translate_server.py`).
+Builds `subtitle-ai:dev` and redeploys the local `subtitle-ai` container.
+The remote leg (ship the same image to `<remote-host>`, redeploy
+`translate-server` there from `compose.translate-server.yml`, poll its
+health) only runs if you pass a host. It used to default to
+`media-server` -- exactly backwards for a fresh checkout on a new host
+(see "Host" below): it would have silently shipped an image to, and
+redeployed, an old deployment's remote server that this checkout has
+nothing to do with. `SKIP_REMOTE=1` still forces the remote leg off even
+if you do pass a host.
 
-Master health: `curl http://localhost:8099/api/health` -- reports
+App health: `curl http://localhost:8099/api/health` -- reports
 `worker_last_heartbeat_seconds_ago` when the worker thread is alive; a
 large/growing value means the thread is wedged, not just busy (the
 heartbeat updates on every pipeline-stage event, not just once per poll,
 so a long-running job doesn't itself look like a stall).
 
-Remote translate-server health: `curl http://<remote-host>:8091/health`.
+Remote translate-server health (only relevant if one is actually
+deployed -- see "Host" below): `curl http://<remote-host>:8091/health`.
+
+## Host
+
+subtitle-ai runs on **myphy-ai** (`10.1.1.110`, LAN; `10.1.20.110`,
+storage/NFS subnet; SSH alias `myphy-ai`) since a 2026-09-27 migration to
+dedicated hardware -- a Ryzen 5 5500 + RTX 3070, nothing else sharing the
+GPU. No remote translate-server is currently deployed anywhere
+(media-server's was decommissioned the same day as part of the
+migration); the code path still exists and works (`TRANSLATE_SERVER_URL`,
+`translate_server.py`), it's just unset today. The prior host (a Tesla
+P4 shared with Tdarr transcode workloads) was fully purged that day --
+container, image, appdata (models/glossary/cache/backups), Docker build
+cache, and the repo checkout itself -- so don't expect to find anything
+subtitle-ai-related there again without redoing the migration.
+
+`git`/`gh` are set up on myphy-ai so a session can commit/push and use
+`gh` directly from there: origin is the HTTPS remote, and
+`gh auth setup-git` supplies push credentials from the existing `gh`
+login -- no separate SSH deploy key was needed. Running the test suite
+directly on the bare host (not just inside Docker, where they're already
+present) needs `uv`, `ffmpeg`, and `node`/`npm` -- all three were missing
+on the fresh Ubuntu install and were installed as part of this migration.
+If a host is ever set up from scratch again, don't forget them: the
+Docker image having a dependency says nothing about the bare host having
+it, and `uv run --with pytest`/`npm test` above need the bare host's own
+copies.
 
 ## Scratch dirs and the remote translate-server (ops behavior)
 
@@ -125,9 +163,11 @@ Remote translate-server health: `curl http://<remote-host>:8091/health`.
   costs nothing on an ordinary job (zero orphans found -> zero extra
   model calls) and the exact-match requirement means it only ever
   improves a translation, never silently guesses one.
-- `SKIP_REMOTE=1 ./scripts/deploy.sh` is right for changes that don't
-  touch `translate.py`/`translate_server.py` (API, worker, scratch
-  cleanup); anything in those two files needs the full deploy.
+- Only pass `<remote-host>` to `./scripts/deploy.sh` when a remote
+  translate-server actually exists (none does today -- see "Host" above)
+  and the change touches `translate.py`/`translate_server.py`; everything
+  else (API, worker, scratch cleanup, frontend) only needs the plain
+  local deploy, which is the default.
 
 ## Environment / secrets
 
