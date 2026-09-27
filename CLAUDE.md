@@ -15,8 +15,13 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-27: 876 passing, 0 failures (plus 83 frontend
-tests -- `cd frontend && npm test -- --run`). Verified directly on the
+Baseline as of 2026-09-28: 939 passing, 0 failures (plus 89 frontend
+tests -- `cd frontend && npm test -- --run`). Every backend test is
+`unittest`-style, so with no pytest available this also works:
+`cd subtitle_ai && PYTHONPATH=.:../tests ../.venv/bin/python -m unittest discover -s ../tests -t ../tests`.
+CI installs an explicit package list (`.github/workflows/test.yml`), not
+uv.lock -- a new runtime dependency must be added there too (ruamel.yaml
+was, 2026-09-28). Verified directly on the
 current host (myphy-ai), not just in CI or inside Docker: 0 skips once
 `ffmpeg`, `uv`, and `node`/`npm` are on the bare host too, not just inside
 the image -- CI's own setup installs `ffmpeg` as a separate step for the
@@ -30,8 +35,9 @@ worker stage/progress tests (4.3), 795 after the batch-queueing and
 SRT-editor tests (4.1/4.2), then 830 (2026-09-25) before the run that took
 it to 876: WebVTT-as-`.srt` source support, the Series page's folder-name
 title fallback and episodes-vs-jobs count fix, `.vtt` uploads, the Jobs
-page Refresh-button fix, and `SUBTITLE_AI_COMPUTE_TYPE`. Update this line
-rather than leaving it to drift the next time the count moves.)
+page Refresh-button fix, and `SUBTITLE_AI_COMPUTE_TYPE`; then 939 after
+ENHANCEMENT_DRAFT.md's round (2026-09-28). Update this line rather than
+leaving it to drift the next time the count moves.)
 
 Frontend: `cd frontend && npx tsc --noEmit && npm test -- --run`.
 
@@ -138,6 +144,26 @@ rediscover most of them one failure at a time:
   normal job failure (nothing silently retries past it at the pipeline
   level) -- if you see these in logs, it means the card was genuinely
   starved by something outside this project's control, not a bug here.
+- **GPU profile: dedicated by default** (`gpu.gpu_shared()`,
+  `SUBTITLE_AI_GPU_SHARED`, 2026-09-28). The earlier defaults were P4 +
+  Tdarr defences; on the dedicated 3070 NLLB runs batch 32 (not 8), skips
+  the per-batch `empty_cache()`, and stays loaded between jobs
+  (`translate._ResidentNllb`, `SUBTITLE_AI_MODEL_IDLE_SECONDS`, default
+  600). Measured: an SRT job 354s -> 54s; a full video job ~7 min (ASR
+  ~82%). Set `SUBTITLE_AI_GPU_SHARED=1` on any card shared with
+  transcoders to get the old behaviour back.
+- **A resident model outlives the job's `gpu_lock()`** -- so residency has
+  its own cross-process protocol in gpu.py (`claim_residency()`,
+  `evict_other_processes()`, `<lock>.resident` / `<lock>.evict-request`).
+  Anything that loads a GPU model must go through
+  `preflight_vram_check()`, which runs it. A script that loads a model
+  some other way while the app has NLLB resident WILL OOM -- that exact
+  failure (an eval script vs the app's idle 2.8GB) is why this exists.
+- **Measure before changing translation behaviour**:
+  `scripts/bench_translate.py` (speed, which lines change) and
+  `scripts/eval_translation.py` (chrF vs the library's human
+  `.en.hi.srt` subtitles through the real Workflow B path, with bootstrap
+  CIs and blind A/B sheets). Results live in `benchmark-results/`.
 - **NLLB decode passes `clean_up_tokenization_spaces=True` explicitly**
   (`translate.py::_generate_one_batch`). This tokenizer's own default
   (transformers 4.48) is False unless overridden, which leaked raw
