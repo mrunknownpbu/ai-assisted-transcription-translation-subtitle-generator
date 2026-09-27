@@ -172,6 +172,127 @@ one at a time.
 
 ## Architecture highlights
 
+### System diagram
+
+Component-level view of both workflows sharing one job queue, one
+translation engine, and one quality-control stage before anything is
+written to disk.
+
+```mermaid
+flowchart TD
+    user("Subtitle user")
+    tvdb("TheTVDB")
+    remote("Translation server<br/>(remote, optional)")
+
+    subgraph WEB["Web UI"]
+        app["App.tsx<br/>shell + live updates (SSE)"]
+        library["LibraryPage.tsx<br/>browse · queue video jobs · batch translate"]
+        translatesrt["TranslateSrtPage.tsx<br/>queue SRT jobs · upload .srt / .vtt"]
+        seriesui["SeriesListPage / SeriesDetailPage.tsx<br/>glossary"]
+        jobsui["JobsPage.tsx<br/>job queue"]
+        jobdetailui["JobDetailPage.tsx<br/>progress · QC · inline SRT editor"]
+    end
+
+    subgraph SVC["Job service"]
+        api["api.py<br/>REST + SSE"]
+        worker["worker.py"]
+        store[("jobstore.py<br/>job database")]
+        bus["events.py<br/>event bus"]
+        gprofile["glossary_profile.py<br/>series title / tvdb_id"]
+        tvdbclient["tvdb_client.py"]
+    end
+
+    subgraph VIDEO["Workflow A: video"]
+        pipeline["pipeline.py<br/>orchestrator"]
+        media["media.py<br/>probe & extract audio"]
+        streams["audio_streams.py<br/>stream selection"]
+        asr["asr.py<br/>ASR (faster-whisper)"]
+        transcriptnode[("transcript.py<br/>canonical transcript model")]
+        halluc["hallucination.py"]
+    end
+
+    subgraph SHARED["Shared translation engine"]
+        srttrans["srt_translation.py<br/>Workflow B: existing SRT"]
+        translate["translate.py<br/>NLLB engine"]
+        seg["segmentation_target.py"]
+        glossary["glossary.py<br/>entity protection"]
+        proj["projection.py<br/>timestamp projection"]
+        srt["srt.py<br/>parse / render SRT · WebVTT"]
+        gpu["gpu.py<br/>GPU lock + VRAM pre-flight"]
+    end
+
+    subgraph QUALITY["Quality & output"]
+        qc["qc/*<br/>transcription · translation · entity ·<br/>timing · readability · output checks"]
+        output["output.py<br/>atomic SRT write"]
+        autoglossary["auto_glossary.py<br/>mines name suggestions"]
+        suggestionsfile[("glossary_suggestions/*.yaml")]
+        workdir["workdir.py<br/>scratch dirs"]
+    end
+
+    user --> app
+    app --> library
+    app --> translatesrt
+    app --> seriesui
+    app --> jobsui
+    jobsui --> jobdetailui
+
+    library -->|"queues video"| api
+    translatesrt -->|"queues SRT / uploads"| api
+    seriesui -->|"edits glossary"| api
+    jobsui -->|"lists / refreshes"| api
+    jobdetailui -->|"reviews · edits srt"| api
+    api -.->|"streams changes (SSE)"| app
+
+    api --> worker
+    api --> store
+    worker --> store
+    worker --> bus
+    bus --> api
+
+    store --> gprofile
+    api --> gprofile
+    worker --> gprofile
+    gprofile -.-> tvdbclient
+    tvdbclient -.->|"enriches metadata"| tvdb
+
+    worker -->|"runs video jobs"| pipeline
+    worker -->|"runs SRT jobs"| srttrans
+    worker -->|"mines suggestions"| autoglossary
+    autoglossary -->|"writes"| suggestionsfile
+    api -->|"reads"| suggestionsfile
+
+    pipeline --> media
+    pipeline --> streams
+    pipeline --> asr
+    pipeline --> halluc
+    pipeline --> proj
+    pipeline --> translate
+    pipeline --> srt
+    pipeline --> qc
+    pipeline --> output
+
+    asr --> transcriptnode
+    halluc --> transcriptnode
+    proj --> transcriptnode
+    translate --> transcriptnode
+    streams --> gpu
+    asr --> gpu
+    translate --> gpu
+
+    srttrans --> translate
+    srttrans --> srt
+    srttrans --> qc
+    srttrans --> output
+
+    translate --> seg
+    translate --> glossary
+    translate -.->|"may translate remotely"| remote
+
+    output --> workdir
+```
+
+### Highlights
+
 - **ASR**: [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
   running `large-v3`.
 - **Translation**: NLLB-200 (1.3B). Any supported source language is
