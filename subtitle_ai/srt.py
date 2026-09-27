@@ -53,6 +53,19 @@ _VTT_TAG = re.compile(r"<[^>]*>")
 _VTT_NON_CUE_BLOCKS = ("NOTE", "STYLE", "REGION")
 
 
+def _is_vtt_metadata_block(first_line: str) -> bool:
+    """True only when `first_line` (a block's cue-identifier/keyword line) IS
+    one of NOTE/STYLE/REGION or that keyword followed by whitespace -- never
+    merely PREFIXED by one. `str.startswith(_VTT_NON_CUE_BLOCKS)` used to do
+    the prefix check directly, which silently dropped a real cue whose
+    identifier happens to start with one of these words (e.g. "NOTEBOOK-1",
+    "STYLE_A", "Region3"): the cue was misclassified as metadata and its
+    dialogue vanished with no error -- exactly the silent-data-loss failure
+    this project's QC stages exist to catch, here bypassing all of them."""
+    return any(first_line == kw or first_line.startswith(kw + " ") or first_line.startswith(kw + "\t")
+               for kw in _VTT_NON_CUE_BLOCKS)
+
+
 def is_webvtt(text: str) -> bool:
     """True if `text` (BOM already stripped) starts with the WEBVTT signature."""
     return text.startswith("WEBVTT") and (len(text) == 6 or text[6] in " \t\n\r")
@@ -88,7 +101,7 @@ def webvtt_to_srt(text: str) -> str:
             continue  # the header block
         if not any(line.strip() for line in lines):
             continue
-        if lines[0].startswith(_VTT_NON_CUE_BLOCKS) and "-->" not in lines[0]:
+        if _is_vtt_metadata_block(lines[0]) and "-->" not in lines[0]:
             continue
         # An optional cue identifier line may precede the timing line.
         timing_at = next((k for k, line in enumerate(lines[:2]) if "-->" in line), None)

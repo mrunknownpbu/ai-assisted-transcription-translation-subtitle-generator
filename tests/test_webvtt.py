@@ -71,6 +71,20 @@ class WebvttToSrtTests(unittest.TestCase):
             "REGION\nid:r1\n\n00:00:01.000 --> 00:00:02.000\nreal\n")
         self.assertEqual(out, "1\n00:00:01,000 --> 00:00:02,000\nreal\n")
 
+    def test_cue_identifier_merely_prefixed_by_a_keyword_is_not_dropped(self):
+        """Real bug: a cue identifier like 'NOTEBOOK-1' starts with 'NOTE' as a
+        bare substring, so str.startswith(_VTT_NON_CUE_BLOCKS) misclassified
+        the whole cue as a NOTE block and silently dropped its dialogue. Only
+        the keyword itself, or the keyword followed by whitespace, is metadata."""
+        out = srt.webvtt_to_srt(
+            "WEBVTT\n\nNOTEBOOK-1\n00:00:01.000 --> 00:00:02.000\nreal dialogue\n\n"
+            "STYLE_A\n00:00:03.000 --> 00:00:04.000\nmore dialogue\n\n"
+            "REGION3\n00:00:05.000 --> 00:00:06.000\neven more\n")
+        self.assertIn("real dialogue", out)
+        self.assertIn("more dialogue", out)
+        self.assertIn("even more", out)
+        self.assertEqual(out.count("-->"), 3)
+
     def test_markup_is_stripped_and_entities_decoded(self):
         out = srt.webvtt_to_srt(
             "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<v Kanako><c.yellow>Tom &amp; Jerry</c>&nbsp;<i>now</i>\n")
