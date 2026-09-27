@@ -79,6 +79,8 @@ services:
       SUBTITLE_AI_GPU_SHARED: ${SUBTITLE_AI_GPU_SHARED:-}
       SUBTITLE_AI_NLLB_BATCH_SIZE: ${SUBTITLE_AI_NLLB_BATCH_SIZE:-}
       SUBTITLE_AI_NLLB_NUM_BEAMS: ${SUBTITLE_AI_NLLB_NUM_BEAMS:-}
+      # Empty = keep NLLB loaded 600s between jobs (0 when GPU_SHARED).
+      SUBTITLE_AI_MODEL_IDLE_SECONDS: ${SUBTITLE_AI_MODEL_IDLE_SECONDS:-}
     volumes:
       - ${DATA_PATH}:/data
       # Read-only: confirmed safe by real GPU inference runs this session

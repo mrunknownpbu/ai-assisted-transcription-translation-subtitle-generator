@@ -127,9 +127,29 @@ class InsufficientVramError(RuntimeError):
     mid-load."""
 
 
+# Models deliberately kept loaded between jobs (translate._ResidentNllb),
+# name -> evict callback. preflight_vram_check() evicts them before any
+# OTHER model loads, so residency never costs a later load its headroom.
+_residents: dict = {}
+
+
+def register_resident(name: str, evict) -> None:
+    _residents[name] = evict
+
+
+def evict_residents(keep: str | None = None) -> None:
+    for name, evict in list(_residents.items()):
+        if name == keep:
+            continue
+        try:
+            evict()
+        except Exception:  # noqa: BLE001 -- eviction must never block a load
+            _logger.exception("evicting resident model %r failed", name)
+
+
 def preflight_vram_check(required_gb: float = DEFAULT_VRAM_MARGIN_GB, *,
                          max_wait_seconds: float = 20.0, poll_interval_seconds: float = 2.0,
-                         device: int = 0) -> None:
+                         device: int = 0, keep_resident: str | None = None) -> None:
     """Poll `torch.cuda.mem_get_info()` until at least `required_gb` is free,
     up to `max_wait_seconds`; raise InsufficientVramError if it's still not
     enough by then. A no-op when CUDA isn't available (CPU-only CI/tests) --
@@ -148,8 +168,12 @@ def preflight_vram_check(required_gb: float = DEFAULT_VRAM_MARGIN_GB, *,
     eviction freeing memory and the next request needing it -- gpu_lock()
     alone cannot see or wait out that kind of external contention, which is
     the real, previously-unrecoverable CUDA OOM condition this closes by
-    waiting it out (bounded) instead of failing on the very first check."""
+    waiting it out (bounded) instead of failing on the very first check.
+
+    First evicts any model registered via register_resident() other than
+    `keep_resident` (the caller's own, if it is the one loading)."""
     import time
+    evict_residents(keep=keep_resident)
     import torch
     if not torch.cuda.is_available():
         return

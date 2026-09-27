@@ -253,6 +253,7 @@ def health() -> dict:
     # stale heartbeat.
     if _worker is not None:
         result["worker_last_heartbeat_seconds_ago"] = time.time() - _worker.last_heartbeat
+    result["nllb_resident"] = translate.resident_model_loaded()
     return result
 
 

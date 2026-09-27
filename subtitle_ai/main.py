@@ -8,6 +8,7 @@ import logging
 import os
 
 import api
+import translate
 import workdir
 from worker import Worker
 
@@ -53,6 +54,10 @@ TRANSLATE_SERVER_URL = os.environ.get("TRANSLATE_SERVER_URL")
 # cancelled jobs' directories are removed immediately. See workdir.py.
 FAILED_WORK_RETENTION_HOURS = workdir.parse_retention_hours(
     os.environ.get("SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS"))
+
+# Keep NLLB loaded between consecutive jobs on a dedicated GPU (default
+# 600s idle; 0 on a shared one) -- see translate._ResidentNllb.
+translate.enable_model_residency(translate.model_idle_seconds_from_env())
 
 app = api.create_app(DB_PATH, MEDIA_ROOT, glossary_dir=GLOSSARY_DIR,
                      glossary_suggestions_dir=GLOSSARY_SUGGESTIONS_DIR,

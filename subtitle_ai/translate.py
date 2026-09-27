@@ -12,6 +12,7 @@ import gc
 import logging
 import os
 import re
+import threading
 from dataclasses import dataclass, field
 
 from glossary import (_phrase_key, bare_entity_translation,
@@ -331,7 +332,10 @@ def load_model(config: TranslationConfig, src_lang_code: str):
     from transformers import AutoModelForSeq2SeqLM
     if config.device == "cuda":
         from gpu import preflight_vram_check
-        preflight_vram_check()
+        # keep_resident: _ResidentNllb.acquire() calls this while holding
+        # its own lock, so evicting "nllb" from here would self-deadlock
+        # (and there is nothing of ours loaded to evict at that point).
+        preflight_vram_check(keep_resident="nllb")
     tok = load_tokenizer(config, src_lang_code)
     dtype = torch.float16 if config.device == "cuda" else torch.float32
     model = AutoModelForSeq2SeqLM.from_pretrained(config.repo, torch_dtype=dtype,
@@ -340,6 +344,122 @@ def load_model(config: TranslationConfig, src_lang_code: str):
     model.generation_config.max_length = None
     bos = tok.convert_tokens_to_ids("eng_Latn")
     return model, tok, bos
+
+
+class _ResidentNllb:
+    """Keeps one loaded NLLB model between jobs (B2, 2026-09-28).
+
+    Before this, every job loaded NLLB (~6-10s, 2.6GB read from /models)
+    and freed it at the end -- right for the old shared P4, where held VRAM
+    was VRAM Tdarr couldn't use, but a batch-queued season paid that load
+    once per episode (183 jobs were queued on 2026-09-20 alone). Now the
+    model stays loaded for `idle_seconds` after its last use, and is
+    evicted sooner whenever another GPU model is about to load:
+    gpu.preflight_vram_check() calls gpu.evict_residents() first, so ASR
+    and the Analyze sampler never have to share the card with it.
+
+    Off unless enable_model_residency() is called -- main.py does that for
+    the real app. A bare import (tests, translate_server.py, scripts) keeps
+    the old load-per-call-and-free behaviour, so no loaded (or mocked)
+    model outlives the call that made it there."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.idle_seconds = 0.0
+        self._model = None
+        self._bos = None
+        self._key = None
+        self._tokenizers: dict[str, object] = {}
+        self._in_use = False
+        self._timer: threading.Timer | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.idle_seconds > 0
+
+    @property
+    def loaded(self) -> bool:
+        return self._model is not None
+
+    def acquire(self, config: "TranslationConfig", src_lang_code: str):
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+            key = (config.repo, config.device)
+            if self._model is not None and self._key != key:
+                self._drop_locked()
+            if self._model is None:
+                model, tok, bos = load_model(config, src_lang_code)
+                self._model, self._bos, self._key = model, bos, key
+                self._tokenizers = {src_lang_code: tok}
+            elif src_lang_code not in self._tokenizers:
+                self._tokenizers[src_lang_code] = load_tokenizer(config, src_lang_code)
+            self._in_use = True
+            return self._model, self._tokenizers[src_lang_code], self._bos
+
+    def release(self) -> None:
+        with self._lock:
+            self._in_use = False
+            if self._model is None:
+                return
+            timer = threading.Timer(self.idle_seconds, self.evict)
+            timer.daemon = True
+            self._timer = timer
+        timer.start()
+
+    def evict(self) -> bool:
+        """Free the resident model unless a translation is using it right
+        now. Safe from any thread (idle timer, another model's load)."""
+        with self._lock:
+            if self._model is None or self._in_use:
+                return False
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+            device = self._key[1] if self._key else "cuda"
+            self._drop_locked()
+        from gpu import free_gpu
+        free_gpu(device)
+        _logger.info("evicted resident NLLB model")
+        return True
+
+    def _drop_locked(self) -> None:
+        self._model = self._bos = self._key = None
+        self._tokenizers = {}
+
+
+_resident = _ResidentNllb()
+
+
+def model_idle_seconds_from_env() -> float:
+    """SUBTITLE_AI_MODEL_IDLE_SECONDS: how long NLLB stays loaded after a
+    job. Default 600 on a dedicated GPU, 0 (free after every job, the old
+    behaviour) when gpu.gpu_shared() says something else needs the card."""
+    from gpu import gpu_shared
+    default = 0.0 if gpu_shared() else 600.0
+    raw = os.environ.get("SUBTITLE_AI_MODEL_IDLE_SECONDS", "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = -1.0
+    if value < 0:
+        _logger.warning("ignoring invalid SUBTITLE_AI_MODEL_IDLE_SECONDS=%r; using %s", raw, default)
+        return default
+    return value
+
+
+def enable_model_residency(idle_seconds: float) -> None:
+    """Called once by main.py. 0 disables (see _ResidentNllb)."""
+    from gpu import register_resident
+    _resident.idle_seconds = max(0.0, idle_seconds)
+    register_resident("nllb", _resident.evict)
+
+
+def resident_model_loaded() -> bool:
+    return _resident.loaded
 
 
 def _generate_one_batch(model, tok, bos: int, batch: list[str], device: str,
@@ -760,13 +880,15 @@ def _translate_sentences(sentences: list[str], src_lang: str,
     # stream-sampler (a real GPU consumer) for no protective reason.
     needs_local_work = payload and not remote_succeeded
     needs_gpu_lock = owns_model and config.device == "cuda" and needs_local_work
+    resident = owns_model and _resident.enabled and config.device == "cuda"
     with gpu_lock() if needs_gpu_lock else nullcontext():
         if needs_local_work:
             try:
                 if owns_model:
                     # Construction inside the try for the same reason as
                     # asr.py: a failed load_model() must still reach `finally`.
-                    model, tok, bos = load_model(config, NLLB_LANG[src_lang])
+                    model, tok, bos = (_resident.acquire(config, NLLB_LANG[src_lang]) if resident
+                                       else load_model(config, NLLB_LANG[src_lang]))
                 translations = translate_batch(model, tok, bos, payload, config.device, config,
                                                batch_size=config.batch_size, on_progress=on_progress)
                 if run_on_positions:
@@ -777,8 +899,11 @@ def _translate_sentences(sentences: list[str], src_lang: str,
             finally:
                 if owns_model:
                     del model
-                    from gpu import free_gpu
-                    free_gpu(config.device)
+                    if resident:
+                        _resident.release()
+                    else:
+                        from gpu import free_gpu
+                        free_gpu(config.device)
     if glossary_map:
         translations = [repair_corrupted_placeholders(t, p) for t, p in zip(translations, payload)]
         translations = [restore(t, glossary_map) for t in translations]

@@ -644,7 +644,7 @@ class StaticFileTests(unittest.TestCase):
     def test_fallback_never_shadows_api_routes(self):
         r = self.client.get("/api/health")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json(), {"ok": True, "queue": "sqlite"})
+        self.assertEqual(r.json(), {"ok": True, "queue": "sqlite", "nllb_resident": False})
 
     def test_unknown_api_path_still_404s_not_html(self):
         r = self.client.get("/api/does-not-exist")
