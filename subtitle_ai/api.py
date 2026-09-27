@@ -592,11 +592,25 @@ def create_srt_translation_job(request: SrtTranslationRequest) -> dict:
     return {"job": job}
 
 
+def _job_summary(job: dict) -> dict:
+    """The list shape of a job: QC reduced to each stage's population/
+    flagged counts and no log -- everything the job and series tables
+    render. Measured 2026-09-28: the full rows made one /api/jobs page 6MB
+    and one Series page 37MB (~100KB of QC findings + ~25KB of log per
+    job), refetched on every job_changed event -- i.e. every progress tick
+    of a running job. Findings and log stay on GET /api/jobs/{id}."""
+    summary = dict(job)
+    summary["qc"] = {stage: {k: v for k, v in (result or {}).items() if k != "findings"} | {"findings": []}
+                     for stage, result in (job.get("qc") or {}).items()}
+    summary["log"] = []
+    return summary
+
+
 @app.get("/api/jobs")
 def list_jobs(status: str | None = Query(None), limit: int = Query(50, ge=1, le=500),
              offset: int = Query(0, ge=0)) -> dict:
     jobs, total = get_store().list(status=status, limit=limit, offset=offset)
-    return {"jobs": jobs, "total": total}
+    return {"jobs": [_job_summary(j) for j in jobs], "total": total}
 
 
 @app.get("/api/queue")
@@ -642,7 +656,7 @@ def series_detail(tvdb_id: int) -> dict:
         if path.is_file():
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             suggestions = data.get("entities", [])
-    return {"tvdb_id": tvdb_id, "title": _series_title(tvdb_id), "jobs": jobs,
+    return {"tvdb_id": tvdb_id, "title": _series_title(tvdb_id), "jobs": [_job_summary(j) for j in jobs],
             "manual_glossary": manual_entities, "auto_suggestions": suggestions}
 
 

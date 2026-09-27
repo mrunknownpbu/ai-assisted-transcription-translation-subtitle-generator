@@ -1174,3 +1174,41 @@ class EventStreamTests(ApiTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ListSummaryTests(ApiTestCase):
+    """C2 (2026-09-28): list endpoints carry per-stage counts only -- one
+    /api/jobs page was 6MB and a Series page 37MB of findings and logs,
+    refetched on every progress tick of a running job."""
+
+    QC = {"readability": {"stage": "readability", "population": 10, "flagged": 2,
+                          "findings": [{"category": "readability_error", "reason": "cps",
+                                        "confidence": 0.5, "index": 3, "evidence": {}}] * 2}}
+
+    def _finished_job(self):
+        job = self.client.post("/api/jobs", json={"video_path": "Show {tvdb-111}/S01E01.mkv"}).json()["job"]
+        api.get_store().claim()
+        api.get_store().append_log(job["id"], "hello")
+        api.get_store().finish(job["id"], "completed", qc=self.QC)
+        return job["id"]
+
+    def test_job_list_keeps_counts_but_drops_findings_and_log(self):
+        self._finished_job()
+        listed = self.client.get("/api/jobs").json()["jobs"][0]
+        self.assertEqual(listed["qc"]["readability"]["flagged"], 2)
+        self.assertEqual(listed["qc"]["readability"]["population"], 10)
+        self.assertEqual(listed["qc"]["readability"]["findings"], [])
+        self.assertEqual(listed["log"], [])
+
+    def test_series_page_jobs_are_summaries_too(self):
+        self._finished_job()
+        listed = self.client.get("/api/series/111").json()["jobs"][0]
+        self.assertEqual(listed["qc"]["readability"]["findings"], [])
+        self.assertEqual(listed["log"], [])
+
+    def test_job_detail_still_has_everything(self):
+        job_id = self._finished_job()
+        detail = self.client.get(f"/api/jobs/{job_id}").json()
+        detail = detail.get("job", detail)
+        self.assertEqual(len(detail["qc"]["readability"]["findings"]), 2)
+        self.assertEqual(detail["log"][0]["message"], "hello")

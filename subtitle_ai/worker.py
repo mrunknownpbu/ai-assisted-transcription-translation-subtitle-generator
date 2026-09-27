@@ -109,6 +109,10 @@ _SRT_FINE_PROGRESS: dict[str, tuple[str, float, float, str, str]] = {
 }
 
 
+LOG_PROGRESS_STEP = 5       # percent of a stage between logged progress events
+MIN_PROGRESS_DELTA = 0.5    # progress points before a progress-only row write
+
+
 def _stage_progress_for_event(job_type: str, name: str, data: dict) -> tuple[str, float] | None:
     """Maps one pipeline event to (stage label, 0-100 progress) for the
     job row's `stage`/`progress` columns. Returns None for an event with
@@ -300,12 +304,37 @@ class Worker(threading.Thread):
         tables applies -- defaulted so existing direct callers (and the
         one pre-existing test that predates this parameter) keep working
         unchanged."""
+        # Progress events fire once per ASR segment / translation batch
+        # (~80-300+ per job). Logging each one made the job log ~95%
+        # progress ticks (and append_log() rewrites the whole log per
+        # call); writing each one fired a job_changed that made every open
+        # Jobs/Series page refetch its list. So a progress event is logged
+        # once per LOG_PROGRESS_STEP percent of its own stage, and written
+        # to the row only when the bar moves >= MIN_PROGRESS_DELTA points
+        # (2026-09-28, ENHANCEMENT_DRAFT.md C2). Milestones are untouched.
+        last_logged_bucket: dict[str, int] = {}
+        last_written = {"stage": None, "progress": -1.0}
+
+        def should_log(name, data) -> bool:
+            if not name.endswith("_PROGRESS"):
+                return True
+            done = data.get("done", data.get("position")) or 0
+            total = data.get("total") or 0
+            if not total or done >= total:
+                return True
+            bucket = int(100 * done / total) // LOG_PROGRESS_STEP
+            if bucket <= last_logged_bucket.get(name, -1):
+                return False
+            last_logged_bucket[name] = bucket
+            return True
+
         def on_event(name, data):
             # Updated on every pipeline-stage event, not just once per
             # poll loop, so a long-running job's heartbeat stays fresh
             # instead of looking stale for its whole duration.
             self.last_heartbeat = time.time()
-            self.store.append_log(job_id, f"{name} {data}")
+            if should_log(name, data):
+                self.store.append_log(job_id, f"{name} {data}")
             fields: dict = {}
             if name == "LANGUAGE_DETECTED":
                 fields.update(detected_language=data["language"],
@@ -319,7 +348,11 @@ class Worker(threading.Thread):
             stage_progress = _stage_progress_for_event(job_type, name, data)
             if stage_progress is not None:
                 stage, progress = stage_progress
-                fields.update(stage=stage, progress=progress)
+                if (stage != last_written["stage"]
+                        or abs(progress - last_written["progress"]) >= MIN_PROGRESS_DELTA
+                        or not name.endswith("_PROGRESS")):
+                    fields.update(stage=stage, progress=progress)
+                    last_written.update(stage=stage, progress=progress)
             if fields:
                 self.store.update(job_id, **fields)
             if self.store.is_cancel_requested(job_id):

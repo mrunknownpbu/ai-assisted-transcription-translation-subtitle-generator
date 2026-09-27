@@ -1022,3 +1022,48 @@ class BuildOnEventStageProgressTests(WorkerTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProgressThrottlingTests(WorkerTestCase):
+    """C2 (2026-09-28): progress ticks are logged once per 5% of their
+    stage and written to the row only when the bar moves >= 0.5 points --
+    each row write fires a job_changed that makes open pages refetch."""
+
+    def _run(self, events, job_type="srt_translation"):
+        if job_type == "srt_translation":
+            self.store.create_srt_translation(video_path="", source_srt_path="in.srt",
+                                              destination_srt_path="in.en.srt",
+                                              source_lang="tr", target_lang="en")
+        else:
+            self.store.create("Show/S01E01.mkv", "tr")
+        claimed = self.store.claim()
+        on_event = self.worker._build_on_event(claimed["id"], job_type)
+        with patch.object(self.store, "update", wraps=self.store.update) as update:
+            for name, data in events:
+                on_event(name, data)
+        return self.store.get(claimed["id"]), update
+
+    def test_logs_one_progress_line_per_five_percent_plus_the_last(self):
+        events = [("SRT_TRANSLATION_PROGRESS", {"done": d, "total": 1000}) for d in range(8, 1001, 8)]
+        row, _ = self._run(events)
+        logged = [e for e in row["log"] if e["message"].startswith("SRT_TRANSLATION_PROGRESS")]
+        self.assertLessEqual(len(logged), 21)
+        self.assertIn("'done': 1000", logged[-1]["message"])
+
+    def test_milestones_are_always_logged(self):
+        row, _ = self._run([("SRT_PARSE_STARTED", {}), ("SRT_PARSE_COMPLETED", {"cues": 3})])
+        self.assertEqual([e["message"].split()[0] for e in row["log"]],
+                         ["SRT_PARSE_STARTED", "SRT_PARSE_COMPLETED"])
+
+    def test_tiny_progress_moves_do_not_write_the_row(self):
+        events = [("SRT_TRANSLATION_PROGRESS", {"done": d, "total": 10000}) for d in range(1, 101)]
+        row, update = self._run(events)
+        progress_writes = [c for c in update.call_args_list if "progress" in c.kwargs]
+        self.assertLess(len(progress_writes), 5)
+        self.assertEqual(row["stage"], "Translating")
+
+    def test_final_progress_value_is_written(self):
+        events = [("SRT_TRANSLATION_PROGRESS", {"done": d, "total": 7}) for d in range(1, 8)]
+        row, _ = self._run(events)
+        self.assertAlmostEqual(row["progress"], 90)
+
