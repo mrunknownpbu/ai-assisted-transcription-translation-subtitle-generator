@@ -1,0 +1,63 @@
+{
+  "season": "/data/media/drama/turkish/Love Is In The Air (2020) {tvdb-383383}/Season 01",
+  "episodes": [
+    "E06",
+    "E07",
+    "E08",
+    "E09",
+    "E10"
+  ],
+  "pairs": 9491,
+  "metric": "corpus chrF (char 1-6, beta 2) vs cleaned .en.hi.srt references",
+  "results": [
+    {
+      "system": "hf:32x2",
+      "chrf": 57.32,
+      "seconds": 201.9
+    },
+    {
+      "system": "ct2:32x2",
+      "chrf": 57.27,
+      "seconds": 69.2,
+      "delta_vs_first": -0.05,
+      "delta_95ci": [
+        -0.14,
+        0.05
+      ],
+      "lines_differing_from_first": 994
+    },
+    {
+      "system": "hf:32x4",
+      "chrf": 57.23,
+      "seconds": 320.2,
+      "delta_vs_first": -0.09,
+      "delta_95ci": [
+        -0.28,
+        0.08
+      ],
+      "lines_differing_from_first": 2671
+    },
+    {
+      "system": "ct2:32x4",
+      "chrf": 57.3,
+      "seconds": 87.9,
+      "delta_vs_first": -0.02,
+      "delta_95ci": [
+        -0.2,
+        0.18
+      ],
+      "lines_differing_from_first": 2948
+    },
+    {
+      "system": "hf:8x2",
+      "chrf": 57.31,
+      "seconds": 434.7,
+      "delta_vs_first": -0.01,
+      "delta_95ci": [
+        -0.04,
+        0.01
+      ],
+      "lines_differing_from_first": 65
+    }
+  ]
+}

@@ -200,13 +200,21 @@ DEFAULT_CT2_PATH = "/models/ct2/nllb-200-distilled-1.3B-float16"
 NLLB_BACKENDS = ("hf", "ct2")
 
 
+# ct2 is the default since 2026-09-28: 2.9x faster than hf and
+# statistically indistinguishable in quality against the library's human
+# subtitles (chrF 57.27 vs 57.32, 95% CI of the difference [-0.14, +0.05],
+# 9,491 cues -- benchmark-results/translation-quality-2026-09-28.json).
+# load_model() falls back to hf when the converted model isn't present.
+DEFAULT_BACKEND = "ct2"
+
+
 def _default_backend() -> str:
     raw = os.environ.get("SUBTITLE_AI_NLLB_BACKEND", "").strip().lower()
     if not raw:
-        return "hf"
+        return DEFAULT_BACKEND
     if raw not in NLLB_BACKENDS:
-        _logger.warning("ignoring unknown SUBTITLE_AI_NLLB_BACKEND=%r; using 'hf'", raw)
-        return "hf"
+        _logger.warning("ignoring unknown SUBTITLE_AI_NLLB_BACKEND=%r; using %r", raw, DEFAULT_BACKEND)
+        return DEFAULT_BACKEND
     return raw
 
 
@@ -290,9 +298,8 @@ class TranslationConfig:
     # source repetition (Turkish "Tamam tamam", "Eda! Eda!") byte-identical
     # to the pre-fix output, since those only repeat a 1-2 word span once.
     no_repeat_ngram_size: int = 4
-    # "hf" (transformers generate(), the long-validated path) or "ct2"
-    # (CTranslate2 running a converted copy of the same weights -- see
-    # _default_backend() and benchmark-results/). Env:
+    # "ct2" (CTranslate2 running a converted copy of the same weights; the
+    # default, see DEFAULT_BACKEND) or "hf" (transformers generate()). Env:
     # SUBTITLE_AI_NLLB_BACKEND / SUBTITLE_AI_NLLB_CT2_PATH.
     backend: str = field(default_factory=lambda: _default_backend())
     ct2_path: str = field(default_factory=lambda: os.environ.get(
@@ -359,12 +366,20 @@ def load_model(config: TranslationConfig, src_lang_code: str):
         # (and there is nothing of ours loaded to evict at that point).
         preflight_vram_check(keep_resident="nllb")
     tok = load_tokenizer(config, src_lang_code)
-    if config.backend == "ct2":
+    use_ct2 = config.backend == "ct2"
+    if use_ct2 and not os.path.isfile(os.path.join(config.ct2_path, "model.bin")):
+        _logger.warning("NLLB backend ct2 requested but %s has no converted model "
+                        "(run scripts/convert_nllb_ct2.py); using hf", config.ct2_path)
+        use_ct2 = False
+    if use_ct2:
         import ctranslate2
         translator = ctranslate2.Translator(
             config.ct2_path, device=config.device,
             compute_type="float16" if config.device == "cuda" else "int8")
-        # For CTranslate2 the "bos" is the target-prefix token itself.
+        # For CTranslate2 the "bos" is the target-prefix token itself -- a
+        # str, where hf's is an int token id. _generate_one_batch()
+        # dispatches on that, i.e. on what was actually loaded, so an hf
+        # fallback above can never be fed to the ct2 path or vice versa.
         return translator, tok, "eng_Latn"
     dtype = torch.float16 if config.device == "cuda" else torch.float32
     model = AutoModelForSeq2SeqLM.from_pretrained(config.repo, torch_dtype=dtype,
@@ -505,7 +520,7 @@ def _generate_one_batch(model, tok, bos: int, batch: list[str], device: str,
     spans, a confirmed CUDA OutOfMemoryError on a real 48-span clip. A
     batch size that fits comfortably can still blow an 8GB card's budget
     when a few unusually long sentences land in the same call."""
-    if config.backend == "ct2":
+    if isinstance(bos, str):  # a CTranslate2 translator (see load_model)
         return _generate_one_batch_ct2(model, tok, bos, batch, device, config)
     import torch
     enc = tok(batch, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)

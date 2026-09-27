@@ -419,7 +419,7 @@ Cleanup problems are logged and never change a job's result.
 | `SUBTITLE_AI_GPU_SHARED` | off | Declares the GPU shared with something else (Tdarr, Jellyfin/Plex transcodes). Restores the contention-safe NLLB sizing (batch 8), per-batch cache release, and freeing NLLB after every job. Leave off on a dedicated card. |
 | `SUBTITLE_AI_NLLB_BATCH_SIZE`, `SUBTITLE_AI_NLLB_NUM_BEAMS` | `32`, `2` (`8`, `2` when shared) | NLLB generation sizing. Batch changes speed and VRAM only; beams change the translations themselves. |
 | `SUBTITLE_AI_MODEL_IDLE_SECONDS` | `600` (`0` when shared) | How long NLLB stays loaded after a job so the next one skips the model load. It is evicted early whenever ASR or the Analyze sampler needs the GPU. `/api/health` reports `nllb_resident`. |
-| `SUBTITLE_AI_NLLB_BACKEND` | `hf` | `ct2` runs a CTranslate2 conversion of the same model, about 3x faster, but it words some lines differently. Convert once with `scripts/convert_nllb_ct2.py` first. |
+| `SUBTITLE_AI_NLLB_BACKEND` | `ct2` | `ct2` runs a CTranslate2 conversion of the same model: about 3x faster than `hf` (transformers), with the same measured quality against human subtitles. Convert once with `scripts/convert_nllb_ct2.py`; without the converted model the app logs a warning and uses `hf`. |
 | `TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS` | `120` | Remote translate-server only: idle seconds before its NLLB model is unloaded (see "Remote translate-server"). |
 | `TRANSLATE_SERVER_DEFAULT_LANG` | `tr` | Remote translate-server only: source language warmed at boot so the first request doesn't pay model-load latency. |
 

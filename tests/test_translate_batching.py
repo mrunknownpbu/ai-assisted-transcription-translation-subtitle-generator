@@ -294,7 +294,7 @@ class Ct2BackendTests(unittest.TestCase):
                                           "cuda", self.config())
 
     def test_backend_env_default_and_validation(self):
-        for raw, expected in (("", "hf"), ("ct2", "ct2"), ("CT2", "ct2"), ("vllm", "hf")):
+        for raw, expected in (("", "ct2"), ("hf", "hf"), ("CT2", "ct2"), ("vllm", "ct2")):
             with self.subTest(raw=raw), patch.dict("os.environ", {"SUBTITLE_AI_NLLB_BACKEND": raw}):
                 self.assertEqual(TranslationConfig().backend, expected)
 
@@ -303,3 +303,29 @@ class Ct2BackendTests(unittest.TestCase):
             self.assertEqual(TranslationConfig().ct2_path, "/models/other")
         with patch.dict("os.environ", {"SUBTITLE_AI_NLLB_CT2_PATH": ""}):
             self.assertEqual(TranslationConfig().ct2_path, translate.DEFAULT_CT2_PATH)
+
+    def test_missing_converted_model_falls_back_to_hf(self):
+        import sys
+        import tempfile
+        fake_model = MagicMock()
+        fake_transformers = types.SimpleNamespace(
+            AutoModelForSeq2SeqLM=MagicMock(from_pretrained=MagicMock(return_value=fake_model)))
+        tok = MagicMock()
+        tok.convert_tokens_to_ids.return_value = 256047
+        with tempfile.TemporaryDirectory() as empty, \
+             patch.dict(sys.modules, {"transformers": fake_transformers}), \
+             patch.object(translate, "load_tokenizer", return_value=tok):
+            fake_model.to.return_value.eval.return_value = fake_model
+            model, _, bos = translate.load_model(
+                TranslationConfig(backend="ct2", ct2_path=empty, device="cpu"), "tur_Latn")
+        self.assertIs(model, fake_model)
+        self.assertIsInstance(bos, int)  # so _generate_one_batch takes the hf path
+
+    def test_dispatch_follows_the_loaded_model_not_the_config(self):
+        # config says ct2, but an int bos means an hf model was loaded.
+        model = MagicMock()
+        with patch.object(translate, "_generate_one_batch_ct2") as ct2:
+            translate._generate_one_batch(model, MagicMock(), 256047, ["a"], "cpu", self.config())
+        ct2.assert_not_called()
+        model.generate.assert_called_once()
+
