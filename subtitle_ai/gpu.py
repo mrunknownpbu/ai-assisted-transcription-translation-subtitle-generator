@@ -147,6 +147,112 @@ def evict_residents(keep: str | None = None) -> None:
             _logger.exception("evicting resident model %r failed", name)
 
 
+# --- Cross-process residency -------------------------------------------
+# A resident model outlives the gpu_lock() of the job that loaded it, so
+# gpu_lock() alone no longer guarantees "nothing else is on the card" to a
+# DIFFERENT process -- found 2026-09-28 when a benchmark script, holding
+# gpu_lock(), OOMed against the app's idle resident NLLB (2.8GB it could
+# not see, let alone evict). The protocol that restores the guarantee:
+#
+#   * a process with any resident model holds a SHARED flock on
+#     <lock>.resident (claim_residency / release_residency);
+#   * before loading a model, preflight_vram_check() probes that file for
+#     an EXCLUSIVE flock; if another process holds it shared, it touches
+#     <lock>.evict-request and waits (bounded) for the claim to go away;
+#   * each claiming process runs a poller thread that sees the request,
+#     evicts its idle resident models, and so drops its claim.
+#
+# A model that is mid-use is never evicted -- but it is only ever in use
+# under gpu_lock(), which the requesting process already holds, so that
+# case can't actually arise between processes.
+_RESIDENT_PATH = _LOCK_PATH + ".resident"
+_REQUEST_PATH = _LOCK_PATH + ".evict-request"
+_POLL_SECONDS = 0.5
+_claims: set[str] = set()
+_claim_fh = None
+_claim_lock = threading.Lock()
+_poller: threading.Thread | None = None
+_last_request_seen = 0
+
+
+def _request_mtime() -> int:
+    try:
+        return os.stat(_REQUEST_PATH).st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _poll_eviction_requests() -> None:
+    import time
+    global _last_request_seen
+    while True:
+        time.sleep(_POLL_SECONDS)
+        with _claim_lock:
+            active = bool(_claims)
+        mtime = _request_mtime()
+        if active and mtime > _last_request_seen:
+            _last_request_seen = mtime
+            _logger.info("another process asked for the GPU; evicting resident models")
+            evict_residents()
+
+
+def claim_residency(name: str) -> None:
+    """Called once a model has been loaded to stay resident."""
+    global _claim_fh, _poller, _last_request_seen
+    with _claim_lock:
+        _claims.add(name)
+        if _claim_fh is None:
+            Path(_RESIDENT_PATH).parent.mkdir(parents=True, exist_ok=True)
+            fh = open(_RESIDENT_PATH, "a")
+            fcntl.flock(fh, fcntl.LOCK_SH)
+            _claim_fh = fh
+            _last_request_seen = _request_mtime()
+        if _poller is None:
+            _poller = threading.Thread(target=_poll_eviction_requests, name="gpu-evict-poller",
+                                       daemon=True)
+            _poller.start()
+
+
+def release_residency(name: str) -> None:
+    """Called when a resident model is freed."""
+    global _claim_fh
+    with _claim_lock:
+        _claims.discard(name)
+        if not _claims and _claim_fh is not None:
+            fcntl.flock(_claim_fh, fcntl.LOCK_UN)
+            _claim_fh.close()
+            _claim_fh = None
+
+
+def evict_other_processes(max_wait_seconds: float = 30.0) -> bool:
+    """Ask every other process holding a residency claim to free its
+    resident models, and wait until none does. True if the card is clear
+    of other processes' residents (or never had any)."""
+    import time
+    with _claim_lock:
+        if _claims:
+            return True  # our own claim would block the probe; callers evict locally first
+    Path(_RESIDENT_PATH).parent.mkdir(parents=True, exist_ok=True)
+    with open(_RESIDENT_PATH, "a") as fh:
+        deadline = None  # the common no-residents case never reads the clock
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fh, fcntl.LOCK_UN)
+                return True
+            except BlockingIOError:
+                pass
+            if deadline is None:
+                _logger.info("waiting for another process to release its resident GPU model")
+                Path(_REQUEST_PATH).touch()
+                deadline = time.monotonic() + max_wait_seconds
+            elif time.monotonic() >= deadline:
+                _logger.warning("another process kept its resident GPU model for %.0fs; "
+                                "continuing (the VRAM check below still applies)", max_wait_seconds)
+                return False
+            time.sleep(0.1)
+
+
 def preflight_vram_check(required_gb: float = DEFAULT_VRAM_MARGIN_GB, *,
                          max_wait_seconds: float = 20.0, poll_interval_seconds: float = 2.0,
                          device: int = 0, keep_resident: str | None = None) -> None:
@@ -171,9 +277,11 @@ def preflight_vram_check(required_gb: float = DEFAULT_VRAM_MARGIN_GB, *,
     waiting it out (bounded) instead of failing on the very first check.
 
     First evicts any model registered via register_resident() other than
-    `keep_resident` (the caller's own, if it is the one loading)."""
+    `keep_resident` (the caller's own, if it is the one loading), then asks
+    other processes to free theirs (see evict_other_processes())."""
     import time
     evict_residents(keep=keep_resident)
+    evict_other_processes()
     import torch
     if not torch.cuda.is_available():
         return

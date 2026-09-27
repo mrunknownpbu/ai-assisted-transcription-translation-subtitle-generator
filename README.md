@@ -333,12 +333,14 @@ which GPUs need `int8` instead, e.g. a Tesla P4, this project's prior
 host until a 2026-09-27 migration to dedicated hardware). Translation
 (NLLB) runs on the same GPU, serialized against ASR via the same per-job
 GPU lock (see `translate.TranslationConfig.device`'s docstring for the
-real VRAM-headroom analysis behind this and the safety margin tuned into
-`num_beams`/`batch_size`). The card is dedicated to this app -- nothing
-else shares it, so the external contention the VRAM pre-flight check
-exists to bound (a hardware-transcode tool, etc.) isn't a factor on this
-deployment today, though the check stays on regardless, since it's cheap
-insurance for any deployment where a GPU is shared. Translation can
+real VRAM-headroom analysis behind this). The card is dedicated to this
+app, so the defaults use the dedicated-GPU profile (see
+`SUBTITLE_AI_GPU_SHARED`): larger NLLB batches, and the model kept loaded
+between jobs. Measured on this card (`benchmark-results/`), a full episode
+takes about 7 minutes end to end, of which ASR is about 82%, and a
+subtitle-only translation job takes under a minute. The VRAM pre-flight
+check stays on regardless, since it's cheap insurance for any deployment
+where a GPU is shared. Translation can
 optionally be offloaded to a second GPU host instead of running locally
 (see "Remote translate-server"); this deployment currently runs both
 stages on the one local GPU. Run the tests (see "Development" below)
@@ -414,6 +416,10 @@ Cleanup problems are logged and never change a job's result.
 | `SUBTITLE_AI_SAMPLE_MODEL` | `small` | Whisper model the library's "Analyze" button uses. |
 | `SUBTITLE_AI_VRAM_MARGIN_GB` | `3.2` | Free VRAM the pre-flight check waits for before loading a large model. Must be a number. |
 | `SUBTITLE_AI_ORPHAN_CONTEXT_PADDING` | on | `off`, `0`, `false` or `no` disables the isolated-word grounding pass. |
+| `SUBTITLE_AI_GPU_SHARED` | off | Declares the GPU shared with something else (Tdarr, Jellyfin/Plex transcodes). Restores the contention-safe NLLB sizing (batch 8), per-batch cache release, and freeing NLLB after every job. Leave off on a dedicated card. |
+| `SUBTITLE_AI_NLLB_BATCH_SIZE`, `SUBTITLE_AI_NLLB_NUM_BEAMS` | `32`, `2` (`8`, `2` when shared) | NLLB generation sizing. Batch changes speed and VRAM only; beams change the translations themselves. |
+| `SUBTITLE_AI_MODEL_IDLE_SECONDS` | `600` (`0` when shared) | How long NLLB stays loaded after a job so the next one skips the model load. It is evicted early whenever ASR or the Analyze sampler needs the GPU. `/api/health` reports `nllb_resident`. |
+| `SUBTITLE_AI_NLLB_BACKEND` | `hf` | `ct2` runs a CTranslate2 conversion of the same model, about 3x faster, but it words some lines differently. Convert once with `scripts/convert_nllb_ct2.py` first. |
 | `TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS` | `120` | Remote translate-server only: idle seconds before its NLLB model is unloaded (see "Remote translate-server"). |
 | `TRANSLATE_SERVER_DEFAULT_LANG` | `tr` | Remote translate-server only: source language warmed at boot so the first request doesn't pay model-load latency. |
 
@@ -441,8 +447,21 @@ CONFIG_PATH=/path/to/appdata python scripts/download_sample_model.py
 backup of the SQLite job store (sqlite3's `.backup`, fine against the live
 WAL database; no need to stop the container), gzips it, and prunes backups
 older than 14 days. Its default paths match one specific deployment, so
-pass both arguments for yours. No schedule is installed automatically; the
-script's header has a suggested cron line.
+pass both arguments for yours. It uses the `sqlite3` CLI when present and
+Python's built-in backup API otherwise. The schedule is a host crontab
+entry (see the script's header); crontabs don't move with the app, so add
+it again on a new host.
+
+### Measuring throughput and quality
+
+- `scripts/bench_translate.py` times NLLB configurations on a real
+  subtitle file and shows which lines change between them.
+- `scripts/eval_translation.py` scores translation systems against the
+  human English subtitles (`.en.hi.srt`) kept beside many episodes, using
+  the real Workflow B path and corpus chrF with bootstrap intervals. It can
+  also write a blind A/B review sheet.
+
+Results are kept in `benchmark-results/`.
 
 ### Remote translate-server (optional)
 

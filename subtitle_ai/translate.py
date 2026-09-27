@@ -422,6 +422,8 @@ class _ResidentNllb:
                 model, tok, bos = load_model(config, src_lang_code)
                 self._model, self._bos, self._key = model, bos, key
                 self._tokenizers = {src_lang_code: tok}
+                from gpu import claim_residency
+                claim_residency("nllb")
             elif src_lang_code not in self._tokenizers:
                 self._tokenizers[src_lang_code] = load_tokenizer(config, src_lang_code)
             self._in_use = True
@@ -448,8 +450,11 @@ class _ResidentNllb:
                 self._timer = None
             device = self._key[1] if self._key else "cuda"
             self._drop_locked()
-        from gpu import free_gpu
-        free_gpu(device)
+            from gpu import free_gpu, release_residency
+            free_gpu(device)
+            # Only now, with the memory actually back on the device, may
+            # another process waiting in gpu.evict_other_processes() load.
+            release_residency("nllb")
         _logger.info("evicted resident NLLB model")
         return True
 

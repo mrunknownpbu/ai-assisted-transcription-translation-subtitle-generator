@@ -261,6 +261,17 @@ class DefaultSamplerModelResolutionTests(unittest.TestCase):
     """default_sampler() uses the env-var model and falls back to large-v3
     gracefully when the configured lightweight model fails to load."""
 
+    def setUp(self):
+        # These tests are about model-name resolution, not VRAM. Without
+        # this, on a host with a real CUDA GPU the real pre-flight check
+        # runs and waits (then fails) whenever something else is using the
+        # card -- seen 2026-09-28 while a benchmark held 7.4GB. CI has no
+        # CUDA, so it never noticed. test_vram_preflight.py covers the check.
+        from unittest.mock import patch
+        patcher = patch("gpu.preflight_vram_check")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_explicit_model_name_is_used(self):
         """Passing model_name="base" overrides the env var."""
         from unittest.mock import MagicMock, patch

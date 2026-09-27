@@ -23,6 +23,8 @@ class ResidencyTestCase(unittest.TestCase):
         self.resident = _ResidentNllb()
         patches = [patch.object(translate, "_resident", self.resident),
                    patch.dict(gpu._residents, clear=True),
+                   patch("gpu.claim_residency"), patch("gpu.release_residency"),
+                   patch("gpu.evict_other_processes", return_value=True),
                    patch("translate.translate_batch", side_effect=lambda m, t, b, s, *a, **k: [x.upper() for x in s]),
                    patch("gpu.free_gpu")]
         for p in patches:
@@ -146,3 +148,75 @@ class EvictResidentsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CrossProcessEvictionTests(unittest.TestCase):
+    """A resident model in ANOTHER process (the app, while a benchmark or a
+    second worker takes gpu_lock) must be released on request. Real
+    failure this closes (2026-09-28): an evaluation script OOMed against
+    the app's idle 2.8GB resident NLLB it had no way to evict."""
+
+    def setUp(self):
+        import multiprocessing
+        import tempfile
+        from pathlib import Path
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        for name, value in (("_RESIDENT_PATH", str(self.dir / "gpu.lock.resident")),
+                            ("_REQUEST_PATH", str(self.dir / "gpu.lock.evict-request")),
+                            ("_POLL_SECONDS", 0.05)):
+            p = patch.object(gpu, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        self.ctx = multiprocessing.get_context("fork")
+
+    def _resident_child(self, marker, ready, willing=True):
+        def evict():
+            if willing:
+                marker.write_text("evicted")
+                gpu.release_residency("nllb")
+        gpu._residents.clear()
+        gpu._claims.clear()
+        gpu._claim_fh = None
+        gpu._poller = None
+        gpu.register_resident("nllb", evict)
+        gpu.claim_residency("nllb")
+        ready.set()
+        time.sleep(10)
+
+    def _start(self, willing=True):
+        marker = self.dir / "marker"
+        ready = self.ctx.Event()
+        child = self.ctx.Process(target=self._resident_child, args=(marker, ready, willing))
+        child.start()
+        self.addCleanup(child.kill)
+        self.assertTrue(ready.wait(5))
+        return marker
+
+    def test_other_process_releases_on_request(self):
+        marker = self._start()
+        t0 = time.monotonic()
+        self.assertTrue(gpu.evict_other_processes(max_wait_seconds=5))
+        self.assertLess(time.monotonic() - t0, 3)
+        self.assertEqual(marker.read_text(), "evicted")
+
+    def test_gives_up_after_the_bound_if_never_released(self):
+        self._start(willing=False)
+        t0 = time.monotonic()
+        self.assertFalse(gpu.evict_other_processes(max_wait_seconds=0.5))
+        self.assertLess(time.monotonic() - t0, 3)
+
+    def test_no_other_resident_returns_immediately_without_a_request(self):
+        self.assertTrue(gpu.evict_other_processes(max_wait_seconds=5))
+        self.assertFalse((self.dir / "gpu.lock.evict-request").exists())
+
+    def test_claim_is_released_only_when_the_last_resident_goes(self):
+        with patch.object(gpu, "_claims", set()), patch.object(gpu, "_claim_fh", None), \
+             patch.object(gpu, "_poller", object()):
+            gpu.claim_residency("a")
+            gpu.claim_residency("b")
+            gpu.release_residency("a")
+            self.assertIsNotNone(gpu._claim_fh)
+            gpu.release_residency("b")
+            self.assertIsNone(gpu._claim_fh)
