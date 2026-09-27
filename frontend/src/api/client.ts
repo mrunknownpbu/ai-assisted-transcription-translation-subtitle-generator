@@ -25,11 +25,50 @@ import type {
 
 export class ApiError extends Error {}
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
+// SUBTITLE_AI_API_KEY (api.py's require_api_key) guards cancel/retry/
+// delete, glossary edits and the SRT editor. Until 2026-09-28 the UI never
+// sent it, so enabling the key disabled the UI's own buttons with a 401.
+// Now a 401 asks for the key once, keeps it in this browser, and retries.
+// With no key configured server-side nothing changes: no header, no prompt.
+export const API_KEY_STORAGE = "subtitle-ai.api-key";
+
+export function storedApiKey(): string | null {
+  try {
+    return localStorage.getItem(API_KEY_STORAGE);
+  } catch {
+    return null;
+  }
+}
+
+function storeApiKey(key: string | null) {
+  try {
+    if (key) localStorage.setItem(API_KEY_STORAGE, key);
+    else localStorage.removeItem(API_KEY_STORAGE);
+  } catch {
+    // storage blocked (private window etc.) -- the key just isn't remembered
+  }
+}
+
+function withApiKey(headers: HeadersInit | undefined): HeadersInit {
+  const key = storedApiKey();
+  return key ? { ...headers, "X-API-Key": key } : { ...headers };
+}
+
+// One prompt per 401, then one retry. A wrong key is forgotten so the next
+// action asks again instead of failing silently forever.
+async function fetchWithApiKey(path: string, init: RequestInit): Promise<Response> {
+  const res = await fetch(path, { ...init, headers: withApiKey(init.headers) });
+  if (res.status !== 401) return res;
+  storeApiKey(null);
+  const entered = window.prompt("This action needs the subtitle-ai API key (SUBTITLE_AI_API_KEY):");
+  if (!entered) return res;
+  storeApiKey(entered.trim());
+  const retried = await fetch(path, { ...init, headers: withApiKey(init.headers) });
+  if (retried.status === 401) storeApiKey(null);
+  return retried;
+}
+
+async function parse<T>(res: Response): Promise<T> {
   let body: unknown = null;
   try {
     body = await res.json();
@@ -44,6 +83,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(detail);
   }
   return body as T;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return parse<T>(
+    await fetchWithApiKey(path, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...init?.headers },
+    }),
+  );
 }
 
 const qs = (params: Record<string, string | number | undefined>) => {
@@ -67,21 +115,9 @@ export const api = {
     // the browser must set its own multipart boundary for FormData.
     const form = new FormData();
     form.append("file", file);
-    const res = await fetch("/api/srt-uploads", { method: "POST", body: form });
-    let body: unknown = null;
-    try {
-      body = await res.json();
-    } catch {
-      // no/invalid JSON body
-    }
-    if (!res.ok) {
-      const detail =
-        body && typeof body === "object" && "detail" in body
-          ? String((body as { detail: unknown }).detail)
-          : res.statusText;
-      throw new ApiError(detail);
-    }
-    return body as UploadSrtResponse;
+    return parse<UploadSrtResponse>(
+      await fetchWithApiKey("/api/srt-uploads", { method: "POST", body: form }),
+    );
   },
   audioStreams: (path: string) =>
     request<AudioStreamRecommendation>(`/api/audio-streams${qs({ path })}`),
