@@ -327,19 +327,23 @@ supported`). The field is still stored on job records for compatibility.
 
 ## Status
 
-Production-deployed, running on a single NVIDIA Tesla P4 GPU (Pascal,
-`int8` compute -- this card has no efficient `float16` tensor
-throughput; see `asr.AsrConfig.compute_type`'s docstring). Translation
-(NLLB) runs on GPU, serialized against ASR via the same per-job GPU lock
-(see `translate.TranslationConfig.device`'s docstring for the real
-VRAM-headroom analysis behind this and the safety margin tuned into
-`num_beams`/`batch_size`) -- this does mean real, ongoing GPU contention
-with any other process sharing the card (e.g. a hardware-transcode tool),
-which is not eliminated (the VRAM pre-flight check above bounds the damage
-but doesn't remove the contention). Translation can optionally be
-offloaded to a second GPU host (see "Remote translate-server"). Run the
-tests (see "Development" below) rather than trusting a hardcoded number
-here, since it drifts with every change.
+Production-deployed on a single dedicated NVIDIA RTX 3070 GPU (Ampere,
+`float16` compute -- see `asr.AsrConfig.compute_type`'s docstring for
+which GPUs need `int8` instead, e.g. a Tesla P4, this project's prior
+host until a 2026-09-27 migration to dedicated hardware). Translation
+(NLLB) runs on the same GPU, serialized against ASR via the same per-job
+GPU lock (see `translate.TranslationConfig.device`'s docstring for the
+real VRAM-headroom analysis behind this and the safety margin tuned into
+`num_beams`/`batch_size`). The card is dedicated to this app -- nothing
+else shares it, so the external contention the VRAM pre-flight check
+exists to bound (a hardware-transcode tool, etc.) isn't a factor on this
+deployment today, though the check stays on regardless, since it's cheap
+insurance for any deployment where a GPU is shared. Translation can
+optionally be offloaded to a second GPU host instead of running locally
+(see "Remote translate-server"); this deployment currently runs both
+stages on the one local GPU. Run the tests (see "Development" below)
+rather than trusting a hardcoded number here, since it drifts with every
+change.
 
 ## Running it
 
