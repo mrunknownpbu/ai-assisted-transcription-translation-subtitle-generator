@@ -124,6 +124,52 @@ Workflow A (video transcription) moves through the following stages:
     a failed or interrupted job never leaves a partial/corrupt file in
     place of a previous good one.
 
+## System architecture
+
+One FastAPI process (`main.py` / `api.py`) serves the REST API, the built
+frontend, and a Server-Sent Events stream (`GET /api/events`), and owns a
+single background worker thread (`worker.py`) that claims and runs jobs
+one at a time.
+
+- **Job store** (`jobstore.py`) is the single source of truth for a job's
+  state: a SQLite table (WAL mode) mutated only inside `BEGIN IMMEDIATE`
+  transactions, so `claim()` (queued → running) can never race a
+  concurrent `request_cancel()`. A job is `queued`, `running`, or one of
+  three terminal states — `completed`, `failed`, `cancelled` (a fourth
+  terminal value, `skipped`, is defined in the schema but no code path
+  sets it today). `retry()` never reopens a finished job; it always
+  inserts a new row linked back via `retry_of_job_id`, so a job's history
+  is never lost, and `delete()` only ever removes a terminal job's row.
+  If the process restarts while a job is `running` (crash, OOM-kill,
+  redeploy), a startup sweep resets it to `queued` before the worker
+  starts claiming again.
+- **Live updates**: every pipeline-stage event (`ASR_PROGRESS`,
+  `TRANSLATION_PROGRESS`, `QC_COMPLETED`, ...) updates the job row's
+  `stage`/`progress` columns and fires an in-process `EventBus`
+  (`events.py`), which pushes a change signal over SSE to every connected
+  browser tab. The event carries no payload of its own — just "this job
+  changed" — so a subscriber reacts by refetching `/api/jobs*`, which
+  stays the single source of truth for shape.
+- **GPU lock** (`gpu.py`): a single `flock` on a file under the shared
+  `/cache` mount serializes GPU-heavy sections (model load through
+  inference) across *every process* sharing that path, not just threads
+  within one. It's reentrant per thread: the worker acquires it once for
+  a job's whole pipeline run, and the pipeline's own stages (stream
+  selection, ASR, translation) each acquire it again internally without
+  deadlocking against that outer hold. That closes a real gap a
+  per-stage-only lock left open: a concurrent "Analyze" click loading its
+  own (cached) sampler model into the window *between* two of a job's own
+  stages, right before the job's next stage tried to construct its model.
+- **Two-host GPU split**: ASR always runs on the same host as the main
+  app. Translation prefers a second GPU host running
+  `translate_server.py` (`TRANSLATE_SERVER_URL`) over HTTP and falls back
+  to a local NLLB copy automatically if that server is unreachable — see
+  "Remote translate-server" below. The VRAM pre-flight check runs before
+  every CUDA model load on *either* host, guarding against contention
+  from something outside this project (a Tdarr, Jellyfin, or Plex
+  transcode) that the GPU lock alone can't see, since it only serializes
+  this project's own processes against each other.
+
 ## Architecture highlights
 
 - **ASR**: [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
