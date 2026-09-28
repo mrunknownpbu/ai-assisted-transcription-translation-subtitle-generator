@@ -379,6 +379,11 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     qc.segmentation = coverage
     qc.timing = timing_qc.run(projected)
     qc.readability = readability_qc.run(projected)
+    # Advisory only -- same checks as the target's, run on the SOURCE cues
+    # too, so a bad source split is visible without affecting `valid` or
+    # needs_review_count() (see qc/types.py's JobQc.source_readability/
+    # source_output docstring).
+    qc.source_readability = readability_qc.run(source_cues)
     _emit(on_event, events, "QC_COMPLETED",
          flagged={k: v.flagged for k, v in qc.__dict__.items() if v is not None})
 
@@ -391,6 +396,7 @@ def run(video_path: str, media_root: str, work_dir: str, *,
         target_path = work / f"{video.stem}.{target_language}.srt"
         write_srt_atomic(target_path, srt.render(projected), allow_overwrite=allow_overwrite)
         qc.output = output_qc.run(target_path)
+        qc.source_output = output_qc.run(source_path)   # advisory -- see above
         valid = valid and qc.output.flagged == 0
         _emit(on_event, events, "OUTPUT_COMMITTED", source=str(source_path), target=str(target_path))
 

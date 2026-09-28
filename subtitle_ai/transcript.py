@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -32,11 +33,43 @@ NO_SPACE_LANGUAGES = frozenset({"ja", "zh", "th"})
 
 
 def join_words(words: list[str], language: str) -> str:
-    """Reconstruct running text from word-level tokens, space-delimited or
-    not depending on the language. See NO_SPACE_LANGUAGES."""
+    """Reconstruct running text from plain word-token STRINGS, space-
+    delimited or not depending on the language (see NO_SPACE_LANGUAGES).
+    For joining already-rendered text (e.g. cue texts back into one
+    sentence for translation) where no per-word attachment information is
+    available. See render_words() for word-level joining that also
+    honours Word.joins_previous."""
     if language in NO_SPACE_LANGUAGES:
         return "".join(words)
     return " ".join(words)
+
+
+# A token that is ITSELF just a leading apostrophe/suffix ("'a", "'ın",
+# "'de") -- the one shape a naive space-join was visibly wrong on before
+# Word.joins_previous existed ("New York 'a" instead of "New York'a").
+# Used only as a fallback for transcripts cached before that field existed
+# (joins_previous defaults to False on load, see CanonicalTranscript.from_dict).
+_SUFFIX_CONTINUATION = re.compile(r"^['’]\w")
+
+
+def render_words(words: list["Word"], language: str) -> str:
+    """Reconstruct running text from Word objects, honouring each word's
+    `joins_previous` (set by asr.segments_from_raw from faster-whisper's
+    own leading-space marker: a token with no leading space is a
+    continuation of the previous one, not a new word -- e.g. a Turkish
+    dative suffix). Falls back to a regex heuristic for old cached
+    transcripts that predate the field (see _SUFFIX_CONTINUATION)."""
+    if language in NO_SPACE_LANGUAGES:
+        return "".join(w.text for w in words if w.text)
+    out: list[str] = []
+    for w in words:
+        if not w.text:
+            continue
+        glue = w.joins_previous or (bool(out) and bool(_SUFFIX_CONTINUATION.match(w.text)))
+        if out and not glue:
+            out.append(" ")
+        out.append(w.text)
+    return "".join(out)
 
 
 class BoundaryReason(str, Enum):
@@ -88,6 +121,12 @@ class Word:
     start: float
     end: float
     probability: float | None = None
+    # True if this token attaches directly to the PREVIOUS word with no
+    # space (faster-whisper's own leading-space marker on the raw token,
+    # preserved by asr.segments_from_raw -- see render_words()). Defaults
+    # to False for transcripts cached before this field existed; those
+    # fall back to a regex heuristic in render_words() instead.
+    joins_previous: bool = False
     corrections: list[Correction] = field(default_factory=list)
 
     @property
@@ -113,10 +152,15 @@ class Segment:
     hallucination_reasons: list[str] = field(default_factory=list)
     suppressed: bool = False                  # True if excluded from output entirely
     language: str = ""                        # see NO_SPACE_LANGUAGES; "" = space-delimited
+    # Display line-wrap for this cue (segmentation_source.build_cues wraps
+    # source cues to MAX_LINE_CHARS, same as segmentation_target.TargetCue).
+    # Empty by default -- srt.render() falls back to [self.text] when
+    # empty, so every existing caller that never sets this is unaffected.
+    lines: list[str] = field(default_factory=list)
 
     @property
     def text(self) -> str:
-        return join_words([w.text for w in self.words if w.text], self.language)
+        return render_words([w for w in self.words if w.text], self.language)
 
     @property
     def is_suspect(self) -> bool:
@@ -164,6 +208,7 @@ class CanonicalTranscript:
         for s in data.get("segments", []):
             words = [Word(text=w["text"], original_text=w.get("original_text", w["text"]),
                           start=w["start"], end=w["end"], probability=w.get("probability"),
+                          joins_previous=w.get("joins_previous", False),
                           corrections=[Correction(**c) if not isinstance(c, Correction) else c
                                        for c in w.get("corrections", [])])
                     for w in s.get("words", [])]
@@ -175,7 +220,8 @@ class CanonicalTranscript:
                 boundary_before=BoundaryReason(boundary) if boundary else None,
                 hallucination_score=s.get("hallucination_score", 0.0),
                 hallucination_reasons=list(s.get("hallucination_reasons", [])),
-                suppressed=s.get("suppressed", False), language=s.get("language", "")))
+                suppressed=s.get("suppressed", False), language=s.get("language", ""),
+                lines=list(s.get("lines", []))))
         asr = data["asr_model"]
         align = data.get("alignment_model")
         return cls(

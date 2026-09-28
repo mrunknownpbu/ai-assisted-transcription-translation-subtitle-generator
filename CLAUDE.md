@@ -204,6 +204,35 @@ rediscover most of them one failure at a time:
   (0% turn recall is impossible to improve without a turn detector, so
   the 50% here is boundaries that happen to land near a turn point by
   coincidence, not evidence of turn awareness).
+- **`segmentation_source.build_cues` rewrite (2026-09-28, natural-dialogue
+  plan step 2)**: two passes -- ACOUSTIC grouping only (a real gap or
+  MAX_DURATION), then SENTENCE splitting within each group with no
+  minimum length (the old `len(cur_text) >= 12` gate is gone -- a short
+  "Tamam." right before a pause is now its own cue instead of glued onto
+  the next sentence), a too-long sentence split at the best clause/
+  conjunction boundary (`text_segmentation.py`, ported from
+  `segmentation_target.py`'s already-validated algorithm, Turkish-lexicon
+  tie-breaks) instead of an arbitrary 84-char cutoff, and every cue's
+  `.lines` wrapped to 2x42 (new `Segment.lines` field; `Word.joins_previous`
+  fixes the "New York 'a" spacing bug via `transcript.render_words`).
+  Advisory QC now runs on source cues too (`qc.source_readability`/
+  `qc.source_output`, never affects `valid`/`needs_review_count`).
+  Measured on S01E01 (`benchmark-results/segmentation-naturalness-after-step2-2026-09-28.json`
+  vs the baseline above): over-box cues 23.1% -> 18.2% (line wrap is
+  working), turn recall 50.0% -> 58.3%, but boundary F1 63.5% -> 61.9%
+  (precision fell as cue count rose 2035 -> 2419, further past the human
+  1863) and mid-sentence-ending cues 12.8% -> 18.8%. That last pair is a
+  real, disclosed tradeoff, not a bug: sentence-splitting with no minimum
+  length means more, shorter cues, and a genuine mid-sentence acoustic
+  pause (a real hesitation) now surfaces as its own short cue instead of
+  being silently absorbed into a bigger blob by the old flat char gate --
+  BoundaryReason.REAL_ACOUSTIC_GAP is deliberately never merged across
+  (see the orphan-context-padding entry below; the same invariant
+  translate.build_context_spans() relies on), so this is not something to
+  "fix" by re-merging across real pauses. If cue count vs. human proves
+  to matter in practice, the right lever is turn detection (step 3) and/or
+  a readability-only merge pass that never touches BoundaryReason
+  semantics -- not loosening the acoustic-gap rule.
 - **NLLB decode passes `clean_up_tokenization_spaces=True` explicitly**
   (`translate.py::_generate_one_batch`). This tokenizer's own default
   (transformers 4.48) is False unless overridden, which leaked raw

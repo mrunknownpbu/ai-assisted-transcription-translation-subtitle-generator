@@ -183,9 +183,22 @@ def segments_from_raw(raw_segments: list[dict], language: str = "") -> list[Segm
     running text."""
     out = []
     for i, seg in enumerate(raw_segments):
-        words = [Word(text=w["word"].strip(), original_text=w["word"].strip(),
-                      start=w["start"], end=w["end"], probability=w.get("probability"))
-                for w in seg.get("words", []) if w.get("word", "").strip()]
+        words = []
+        for w in seg.get("words", []):
+            raw_text = w.get("word", "")
+            if not raw_text.strip():
+                continue
+            # faster-whisper's own word text carries a leading space when a
+            # token is a new word, and none when it's a continuation of the
+            # previous one (e.g. a Turkish suffix: "York" then "'a", no
+            # space) -- preserved here as Word.joins_previous instead of
+            # being discarded by .strip(), which previously lost it and
+            # made join_words() always insert a space ("York 'a" instead of
+            # "York'a"; see transcript.render_words()).
+            text = raw_text.strip()
+            words.append(Word(text=text, original_text=text, start=w["start"], end=w["end"],
+                              probability=w.get("probability"),
+                              joins_previous=not raw_text.startswith((" ", " "))))
         out.append(Segment(index=i, start=seg["start"], end=seg["end"], words=words,
                            avg_logprob=seg.get("avg_logprob", 0.0),
                            no_speech_prob=seg.get("no_speech_prob", 0.0),

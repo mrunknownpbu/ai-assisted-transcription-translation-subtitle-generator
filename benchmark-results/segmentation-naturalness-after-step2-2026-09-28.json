@@ -1,0 +1,205 @@
+{
+  "season": "/data/media/drama/turkish/Love Is In The Air (2020) {tvdb-383383}/Season 01",
+  "reference_language": "tr",
+  "metric": "WER vs human subtitles, 60s windows, normalised (see script docstring)",
+  "results": [
+    {
+      "system": "cache",
+      "episodes": {
+        "E01": {
+          "wer": 16.7,
+          "subst": 5.4,
+          "missed": 5.8,
+          "extra": 5.6,
+          "cer": 10.8
+        }
+      },
+      "wer": 16.7,
+      "subst": 5.4,
+      "missed": 5.8,
+      "extra": 5.6,
+      "name_recall": 85.4,
+      "lyrics_coverage": 33.1,
+      "name_corrections": null,
+      "lyric_words": 178,
+      "names": {
+        "Serkan": "95/110",
+        "Eda": "54/67",
+        "Bolat": "32/42",
+        "Melo": "24/30",
+        "Selin": "25/30",
+        "Cenk": "27/28",
+        "Engin": "20/23",
+        "Leyla": "17/17",
+        "Can": "14/15",
+        "Evren": "11/14",
+        "Ferit": "13/13",
+        "Kaan": "7/7",
+        "Efe": "6/7",
+        "Deniz": "7/7",
+        "Fifi": "2/5",
+        "Yıldız": "3/3",
+        "Ceren": "2/3",
+        "Pırıl": "2/2",
+        "Melek": "2/2",
+        "Erdem": "1/1"
+      },
+      "top_substitutions": [
+        [
+          "serkan",
+          "sarkan",
+          5
+        ],
+        [
+          "carla",
+          "karla",
+          4
+        ],
+        [
+          "seninle",
+          "sen",
+          3
+        ],
+        [
+          "frene",
+          "brene",
+          2
+        ],
+        [
+          "köşeyi",
+          "köşeye",
+          2
+        ],
+        [
+          "adımı",
+          "adamı",
+          2
+        ],
+        [
+          "senkronize",
+          "senkroneze",
+          2
+        ],
+        [
+          "seni",
+          "senin",
+          2
+        ],
+        [
+          "çıkartmam",
+          "çıkarmam",
+          2
+        ],
+        [
+          "peri",
+          "feriha",
+          2
+        ],
+        [
+          "o",
+          "bu",
+          2
+        ],
+        [
+          "dadam",
+          "dadan",
+          2
+        ],
+        [
+          "bu",
+          "o",
+          2
+        ],
+        [
+          "dedin",
+          "dedim",
+          2
+        ],
+        [
+          "selin",
+          "senin",
+          2
+        ]
+      ],
+      "worst_windows": [
+        [
+          "E01@9min",
+          37,
+          61
+        ],
+        [
+          "E01@28min",
+          20,
+          38
+        ],
+        [
+          "E01@17min",
+          45,
+          88
+        ],
+        [
+          "E01@29min",
+          11,
+          25
+        ],
+        [
+          "E01@59min",
+          34,
+          82
+        ],
+        [
+          "E01@45min",
+          28,
+          78
+        ],
+        [
+          "E01@107min",
+          5,
+          14
+        ],
+        [
+          "E01@116min",
+          21,
+          61
+        ]
+      ],
+      "seconds": 21.2,
+      "segmentation": {
+        "boundary_precision": 54.8,
+        "boundary_recall": 71.2,
+        "boundary_f1": 61.9,
+        "turn_recall": 58.3,
+        "turn_points": 12,
+        "ref_over_box_pct": 0.0,
+        "sys_over_box_pct": 18.2,
+        "ref_mid_sentence_pct": 0.4,
+        "sys_mid_sentence_pct": 18.8,
+        "ref_mean_duration": 2.21,
+        "sys_mean_duration": 1.59,
+        "ref_cues": 1863,
+        "sys_cues": 2419,
+        "interjection_recall": 78.7,
+        "interjection_ref": 89
+      },
+      "segmentation_by_episode": {
+        "E01": {
+          "boundary_precision": 54.8,
+          "boundary_recall": 71.2,
+          "boundary_f1": 61.9,
+          "turn_recall": 58.3,
+          "turn_points": 12,
+          "ref_over_box_pct": 0.0,
+          "sys_over_box_pct": 18.2,
+          "ref_mid_sentence_pct": 0.4,
+          "sys_mid_sentence_pct": 18.8,
+          "ref_mean_duration": 2.21,
+          "sys_mean_duration": 1.59,
+          "ref_cues": 1863,
+          "sys_cues": 2419,
+          "interjection_recall": 78.7,
+          "interjection_ref": 89
+        }
+      }
+    }
+  ]
+}

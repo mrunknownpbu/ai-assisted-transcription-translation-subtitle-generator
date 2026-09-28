@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import unittest
 
-from segmentation_source import MAX_CUE_CHARS, build_cues
-from transcript import Word
+from segmentation_source import MAX_CUE_CHARS, MAX_LINE_CHARS, build_cues
+from transcript import BoundaryReason, Word
 
 
 def _word(text: str, start: float, end: float) -> Word:
     return Word(text=text, original_text=text, start=start, end=end, probability=0.9)
+
+
+def _sentence(words_text: list[str], start: float = 0.0, step: float = 0.3) -> list[Word]:
+    return [_word(t, start + i * step, start + i * step + step * 0.8) for i, t in enumerate(words_text)]
 
 
 class BuildCuesLanguageTests(unittest.TestCase):
@@ -42,6 +46,59 @@ class BuildCuesLanguageTests(unittest.TestCase):
         words = [_word("a", 0.0, 0.1), _word("b", 0.1, 0.2)]
         cues = build_cues(words)
         self.assertEqual(cues[0].text, "a b")
+
+
+class SentenceSplitTests(unittest.TestCase):
+    """Natural-dialogue rework: sentences split within an acoustic group,
+    no minimum-length gluing (the old 12-char gate is gone)."""
+
+    def test_short_sentence_before_a_pause_is_its_own_cue(self):
+        # "Tamam." (6 chars) used to be glued onto the next sentence by the
+        # old `len(cur_text) >= 12` gate -- a real, complete short cue now.
+        words = _sentence(["Tamam."], start=0.0) + _sentence(["Valizin", "hazır", "mı?"], start=1.0)
+        cues = build_cues(words, language="tr")
+        self.assertEqual([c.text for c in cues], ["Tamam.", "Valizin hazır mı?"])
+
+    def test_two_sentences_with_no_pause_still_split_at_the_period(self):
+        words = _sentence(["Tamam.", "Gidelim", "hadi."], start=0.0, step=0.2)
+        cues = build_cues(words, language="tr")
+        self.assertEqual([c.text for c in cues], ["Tamam.", "Gidelim hadi."])
+        self.assertEqual(cues[1].boundary_before, BoundaryReason.SENTENCE_END)
+
+    def test_title_abbreviation_period_does_not_split_the_sentence(self):
+        words = _sentence(["Dr.", "Serkan", "geldi."], start=0.0, step=0.2)
+        cues = build_cues(words, language="tr")
+        self.assertEqual([c.text for c in cues], ["Dr. Serkan geldi."])
+
+    def test_real_acoustic_gap_still_forces_a_break_mid_sentence(self):
+        words = [_word("Bekle", 0.0, 0.3), _word("biraz", 2.0, 2.3)]   # 1.7s gap > MAX_GAP
+        cues = build_cues(words, language="tr")
+        self.assertEqual(len(cues), 2)
+        self.assertEqual(cues[1].boundary_before, BoundaryReason.REAL_ACOUSTIC_GAP)
+
+    def test_long_sentence_is_split_at_a_clause_boundary_not_an_arbitrary_cutoff(self):
+        text = ("Sana bunu söylemek istemiyordum ama artık gerçeği bilmen gerekiyor bence "
+               "çünkü bu böyle devam edemez.")
+        words = _sentence(text.split(), start=0.0, step=0.25)
+        cues = build_cues(words, language="tr")
+        self.assertGreater(len(cues), 1)
+        self.assertTrue(all(len(c.text) <= MAX_CUE_CHARS for c in cues))
+        self.assertEqual(" ".join(c.text for c in cues).split(), text.split())
+        self.assertEqual(cues[1].boundary_before, BoundaryReason.DISPLAY_SPLIT)
+
+    def test_lines_are_wrapped_to_max_line_chars(self):
+        text = "Serkan ile Eda bugün sahile gidip uzun uzun konuştular ve çok güldüler beraber."
+        words = _sentence(text.split(), start=0.0, step=0.25)
+        cues = build_cues(words, language="tr")
+        for c in cues:
+            self.assertLessEqual(len(c.lines), 2)
+            self.assertTrue(all(len(l) <= MAX_LINE_CHARS for l in c.lines))
+            self.assertEqual(" ".join(c.lines), c.text)
+
+    def test_unspaced_language_never_attempts_line_wrap(self):
+        words = [_word("あ", i * 0.05, i * 0.05 + 0.04) for i in range(MAX_CUE_CHARS)]
+        cues = build_cues(words, language="ja")
+        self.assertEqual(cues[0].lines, [cues[0].text])
 
 
 if __name__ == "__main__":

@@ -117,10 +117,23 @@ class JobQc:
     segmentation: QcResult | None = None
     readability: QcResult | None = None
     output: QcResult | None = None
+    # Advisory-only QC on the SOURCE-language cues (same checks as the
+    # target's readability/output stages, run on segmentation_source's
+    # cues/file instead) -- deliberately separate fields, not the same
+    # stage slots as the target's, so they can never affect `valid` or
+    # needs_review_count() (both read specific named fields/QcStage
+    # members, never these two; see pipeline.py).
+    source_readability: QcResult | None = None
+    source_output: QcResult | None = None
 
     def to_dict(self) -> dict:
-        return {stage.value: getattr(self, stage.value).to_dict()
-               for stage in QcStage if getattr(self, stage.value) is not None}
+        out = {stage.value: getattr(self, stage.value).to_dict()
+              for stage in QcStage if getattr(self, stage.value) is not None}
+        if self.source_readability is not None:
+            out["source_readability"] = self.source_readability.to_dict()
+        if self.source_output is not None:
+            out["source_output"] = self.source_output.to_dict()
+        return out
 
     def needs_review_count(self) -> int:
         """See the module-level comment above REVIEW_CATEGORIES for the
