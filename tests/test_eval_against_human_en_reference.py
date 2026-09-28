@@ -53,6 +53,37 @@ class GapCoverageTests(unittest.TestCase):
         self.assertEqual(flagged[0]["text"], "Actual dialogue")
 
 
+class FragmentationTests(unittest.TestCase):
+    def test_real_three_way_split_counts_three_cues_per_human_cue(self):
+        # The measured S01E01 case: one human cue, three of ours.
+        ours = [SrtCue(1881.2, 1885.9, "Hey, can"), SrtCue(1885.9, 1892.7, "you"),
+                SrtCue(1892.7, 1895.6, "read it?")]
+        human = [SrtCue(1881.0, 1896.0, "What!? You want to fight me?")]
+        f = ev.fragmentation(ours, human)
+        self.assertEqual(f["cues_per_human_cue"], 3.0)
+        self.assertEqual(f["split_human_cue_rate"], 1.0)
+        self.assertEqual(f["short_cue_rate"], 1.0)  # all three are <= 10 chars
+        self.assertEqual(f["mid_sentence_end_rate"], 1.0)
+
+    def test_same_granularity_as_human(self):
+        ours = [SrtCue(0.0, 2.0, "Hello there."), SrtCue(3.0, 5.0, "How are you doing?")]
+        human = [SrtCue(0.0, 2.0, "Hi there."), SrtCue(3.0, 5.0, "How are you?")]
+        f = ev.fragmentation(ours, human)
+        self.assertEqual(f["cues_per_human_cue"], 1.0)
+        self.assertEqual(f["split_human_cue_rate"], 0.0)
+        self.assertEqual(f["mid_sentence_end_rate"], 0.0)
+        self.assertEqual(f["ours"]["mean_duration"], 2.0)
+
+    def test_songs_and_sound_only_human_cues_are_skipped(self):
+        ours = [SrtCue(0.0, 1.0, "a"), SrtCue(1.0, 2.0, "b")]
+        human = [SrtCue(0.0, 2.0, "♪ la la ♪"), SrtCue(0.0, 2.0, "(door slams)")]
+        self.assertIsNone(ev.fragmentation(ours, human)["cues_per_human_cue"])
+
+    def test_japanese_sentence_end_punctuation_counts(self):
+        ours = [SrtCue(0.0, 1.0, "危ない。"), SrtCue(1.0, 2.0, "くそ！")]
+        self.assertEqual(ev.fragmentation(ours, [])["mid_sentence_end_rate"], 0.0)
+
+
 class ParseEpisodesTests(unittest.TestCase):
     def test_range(self):
         self.assertEqual(ev.parse_episodes("1-3"), [1, 2, 3])

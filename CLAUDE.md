@@ -705,3 +705,31 @@ human editor would, so the time-overlap pairing grabs the wrong fragment
 against the wrong human cue) rather than genuinely bad translation --
 the best-scoring pairs, where timing does line up, are close paraphrases.
 Not yet investigated further.
+
+**Open, measurement tooling only (2026-09-29): two problems found by the
+S01E01 human-reference comparison, not yet fixed.**
+
+1. *A compression_ratio=51 loop survives.* S01E01 3124.7-3150.1s (25.4s,
+   transcript cache, pipeline 2.0.5) decoded as "ー" repeated ~80 times
+   where the human subtitle has real lines ("It's dangerous to have such
+   kind of things." / "Damn it."). compression_ratio=51.46,
+   no_speech_prob=0.32, avg_logprob=-0.053 -> hallucination_score=0.5, not
+   suppressed: `score_segment()` scores compression_ratio as a step (any
+   value >= 2.4 adds exactly 0.5), and a repetition loop's decoder is
+   confident, so nothing else fires. Before making that term graduated,
+   measure the real distribution: `scripts/hallucination_signal_distribution.py`
+   (percentiles over every cached segment, loop-shaped and suppressed
+   subsets, every segment above a ratio listed with its text, and
+   `--what-if-span S` listing exactly which segments a candidate
+   `0.5 + 0.5 * (ratio - 2.4) / S` would newly suppress -- read that list
+   for real dialogue before choosing S).
+2. *Cues split mid-sentence far more than a human editor's.* chrF 22.43
+   over 361 time-paired cues; e.g. ours "Hey, can" / "you" / "read it?"
+   (1881.2-1895.6s) against one human cue. `eval_against_human_en_reference.py`
+   now reports cue granularity for both our source-language and our English
+   cues (`fragmentation()`: cues per human cue, share of human cues split,
+   short-cue and mid-sentence-end rates, mean duration/chars), so a split
+   made in `segmentation_source.build_cues` can be told apart from one
+   added by the English span distribution in `pipeline.py`; `--worst N`
+   prints the lowest-chrF pairs. Baseline numbers not yet taken -- run it
+   on S01E01 before changing either stage.
