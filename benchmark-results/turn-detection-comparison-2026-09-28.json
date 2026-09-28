@@ -1,0 +1,43 @@
+{
+  "season": "Love Is In The Air (2020) {tvdb-383383}/Season 01",
+  "episode": "E01",
+  "method": "scripts/compare_turn_detectors.py -- turns.heuristic_turns/voice_turns vs "
+           "eval_transcription.dash_turn_points (human two-speaker '- A / - B' single cues) "
+           "as ground truth, time-matched at tol=0.6s",
+  "ground_truth_caveat": "Only 12 turn points exist in this ground truth for the whole "
+                         "episode (10025 words) -- it only captures a speaker change that "
+                         "happens to be rendered as ONE two-line dash cue in the human "
+                         "subtitle, not every real speaker change (most show up as ordinary "
+                         "consecutive cues, invisible to this measurement). Recall is a weak "
+                         "signal (n=12); precision against this sparse a positive set is not "
+                         "trustworthy at all and should not be read as a real false-positive rate.",
+  "runs": [
+    {
+      "label": "heuristic (first cut: PAUSE_THRESHOLD=0.5s, SHORT_REPLY_WORDS=4, no minimum "
+               "gap required for the question/short-reply signals)",
+      "words": 10025, "turns_detected": 1606, "trigger_rate_pct": 16.0,
+      "recall_pct": 75.0, "precision_pct": 0.6, "f1_pct": 1.1, "seconds": 0.0
+    },
+    {
+      "label": "voice (WeSpeaker ResNet34 ONNX, CPU, numpy fbank; similarity_threshold=0.6)",
+      "words": 10025, "turns_detected": 1654, "trigger_rate_pct": 16.5,
+      "recall_pct": 41.7, "precision_pct": 0.3, "f1_pct": 0.6, "seconds": 110.5
+    },
+    {
+      "label": "heuristic (retuned: PAUSE_THRESHOLD=0.6s, SHORT_REPLY_WORDS=2, "
+               "MIN_TURN_GAP=0.15s required for the question/short-reply signals)",
+      "words": 10025, "turns_detected": 1093, "trigger_rate_pct": 10.9,
+      "recall_pct": 33.3, "precision_pct": 0.4, "f1_pct": 0.7, "seconds": 0.0
+    }
+  ],
+  "decision": "SUBTITLE_AI_TURN_DETECTION default left at 'off' (subtitle_ai/turns.py). "
+             "Both detectors over-trigger far past what's usable in production (>10% of "
+             "words would become a speaker-turn boundary -- for context, a real "
+             "multi-character scene has nowhere near that turn density), and the available "
+             "ground truth (12 points) cannot validate precision at all. Heuristic is the "
+             "clearly better of the two on the numbers that ARE meaningful (recall, "
+             "runtime: instant vs 110s/episode on CPU) if one had to be picked, but neither "
+             "clears the bar to ship as a default. Code, tests, and the env-var toggle are "
+             "shipped so this can be revisited with better ground truth (e.g. a small "
+             "hand-annotated clip) without redoing the implementation."
+}
