@@ -1,0 +1,268 @@
+{
+  "season": "/data/media/drama/turkish/Love Is In The Air (2020) {tvdb-383383}/Season 01",
+  "reference_language": "tr",
+  "metric": "WER vs human subtitles, 60s windows, normalised (see script docstring)",
+  "results": [
+    {
+      "system": "asr:",
+      "episodes": {
+        "E01": {
+          "wer": 16.4,
+          "subst": 5.4,
+          "missed": 6.1,
+          "extra": 4.9,
+          "cer": 10.6
+        },
+        "E02": {
+          "wer": 19.2,
+          "subst": 5.6,
+          "missed": 7.7,
+          "extra": 6.0,
+          "cer": 13.4
+        },
+        "E06": {
+          "wer": 15.8,
+          "subst": 5.1,
+          "missed": 5.7,
+          "extra": 5.0,
+          "cer": 10.1
+        },
+        "E17": {
+          "wer": 21.5,
+          "subst": 6.7,
+          "missed": 7.8,
+          "extra": 6.9,
+          "cer": 14.7
+        },
+        "E22": {
+          "wer": 20.0,
+          "subst": 6.2,
+          "missed": 6.9,
+          "extra": 6.9,
+          "cer": 13.5
+        },
+        "E30": {
+          "wer": 20.6,
+          "subst": 6.0,
+          "missed": 5.9,
+          "extra": 8.6,
+          "cer": 14.2
+        },
+        "E36": {
+          "wer": 24.6,
+          "subst": 7.4,
+          "missed": 7.3,
+          "extra": 9.9,
+          "cer": 17.2
+        }
+      },
+      "wer": 19.8,
+      "subst": 6.1,
+      "missed": 6.8,
+      "extra": 6.9,
+      "name_recall": 84.6,
+      "names": {
+        "Serkan": "638/685",
+        "Eda": "530/600",
+        "Selin": "199/238",
+        "Engin": "146/182",
+        "Deniz": "158/180",
+        "Melo": "122/173",
+        "Aydan": "99/161",
+        "Can": "107/123",
+        "Erdem": "101/123",
+        "Efe": "106/120",
+        "Bolat": "81/113",
+        "Ceren": "66/76",
+        "Ferit": "74/76",
+        "Seyfi": "57/75",
+        "Leyla": "69/72",
+        "Pırıl": "39/57",
+        "Yıldız": "40/55",
+        "Fikret": "45/46",
+        "Kemal": "36/38",
+        "Cenk": "36/37",
+        "Kaan": "35/37",
+        "Balca": "29/37",
+        "Sevda": "32/32",
+        "Fifi": "22/31",
+        "Bobby": "16/27",
+        "Emre": "23/26",
+        "Alptekin": "12/21",
+        "Melek": "16/19",
+        "Evren": "11/14",
+        "Sirius": "5/12"
+      },
+      "top_substitutions": [
+        [
+          "aydan",
+          "aydın",
+          33
+        ],
+        [
+          "evet",
+          "hı",
+          16
+        ],
+        [
+          "aman",
+          "ama",
+          14
+        ],
+        [
+          "şeyi",
+          "şey",
+          14
+        ],
+        [
+          "edayla",
+          "eda",
+          13
+        ],
+        [
+          "selin",
+          "selim",
+          11
+        ],
+        [
+          "bu",
+          "o",
+          10
+        ],
+        [
+          "yiter",
+          "biter",
+          8
+        ],
+        [
+          "böyle",
+          "öyle",
+          8
+        ],
+        [
+          "melo",
+          "melih",
+          8
+        ],
+        [
+          "evet",
+          "ha",
+          7
+        ],
+        [
+          "gözlerimde",
+          "gözlerinde",
+          6
+        ],
+        [
+          "serkan",
+          "sarkan",
+          6
+        ],
+        [
+          "seninle",
+          "sen",
+          6
+        ],
+        [
+          "dadam",
+          "dadan",
+          6
+        ],
+        [
+          "selin",
+          "senin",
+          6
+        ],
+        [
+          "seninle",
+          "senle",
+          6
+        ],
+        [
+          "niye",
+          "ne",
+          6
+        ],
+        [
+          "ne",
+          "ya",
+          6
+        ],
+        [
+          "ver",
+          "boşver",
+          6
+        ],
+        [
+          "hayır",
+          "yok",
+          6
+        ],
+        [
+          "yaa",
+          "ya",
+          5
+        ],
+        [
+          "seline",
+          "seninle",
+          5
+        ],
+        [
+          "bolat",
+          "balat",
+          5
+        ],
+        [
+          "dedin",
+          "dedim",
+          5
+        ]
+      ],
+      "worst_windows": [
+        [
+          "E02@121min",
+          36,
+          36
+        ],
+        [
+          "E02@140min",
+          49,
+          49
+        ],
+        [
+          "E02@141min",
+          27,
+          27
+        ],
+        [
+          "E22@117min",
+          38,
+          38
+        ],
+        [
+          "E22@137min",
+          66,
+          66
+        ],
+        [
+          "E30@133min",
+          20,
+          20
+        ],
+        [
+          "E30@134min",
+          51,
+          51
+        ],
+        [
+          "E36@4min",
+          14,
+          14
+        ]
+      ],
+      "seconds": 129.6
+    }
+  ]
+}

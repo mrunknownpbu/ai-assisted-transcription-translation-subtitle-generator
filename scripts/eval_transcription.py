@@ -64,7 +64,7 @@ _TENS = ["", "on", "yirmi", "otuz", "kırk", "elli", "altmış", "yetmiş", "sek
 # Colloquial spoken form -> the written form subtitles use. Both sides are
 # mapped, so either spelling scores as a match. Extend from real data only.
 VARIANTS = {"valla": "vallahi", "abicim": "abiciğim", "baya": "bayağı", "napıyorsun": "ne yapıyorsun",
-            "naber": "ne haber", "yo": "yok", "bi": "bir"}
+            "naber": "ne haber", "yo": "yok", "bi": "bir", "tabi": "tabii", "eee": "ee", "eeee": "ee"}
 
 
 def turkish_number(n: int) -> list[str]:
