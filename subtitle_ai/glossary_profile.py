@@ -19,7 +19,21 @@ from glossary import Entity, PhraseEntry, _phrase_key
 _TVDB_PATTERN = re.compile(r"\{tvdb-(\d+)\}", re.IGNORECASE)
 
 
+def _arr_series(path: str):
+    """Sonarr's record for `path`, when Sonarr is configured (arr_client)."""
+    import arr_client
+    info = arr_client.lookup(path, ("series",)) if path else None
+    return info if info and info.tvdb_id else None
+
+
 def find_tvdb_id(path: str) -> int | None:
+    """Sonarr's tvdbId for the series containing `path` when Sonarr is
+    configured and knows it; otherwise the `{tvdb-<id>}` folder tag. Sonarr
+    wins because it is right where the tag isn't (typos like "{tvbd-...}",
+    re-matched series whose tag was never renamed -- see arr_client.py)."""
+    info = _arr_series(path)
+    if info:
+        return int(info.tvdb_id)
     m = _TVDB_PATTERN.search(path)
     return int(m.group(1)) if m else None
 
@@ -84,6 +98,9 @@ def find_series_root(path: str) -> Path | None:
     exactly the same condition find_tvdb_id() would (no {tvdb-<id>}
     anywhere in the path), so callers can treat "no match" identically
     for both."""
+    info = _arr_series(path)
+    if info:
+        return Path(info.path)
     for parent in Path(path).parents:
         if _TVDB_PATTERN.search(parent.name):
             return parent
@@ -96,6 +113,9 @@ def title_from_video_path(path: str) -> str | None:
     `Show (2020)`). The fallback for a series with no glossary `title:` and
     no TVDB lookup, so a Series page never has to show a bare "Series #123".
     None under the same condition as find_series_root()."""
+    info = _arr_series(path)
+    if info and info.title:
+        return info.title
     root = find_series_root(path)
     if root is None:
         return None
@@ -117,6 +137,19 @@ def _load_yaml_entities(path: Path) -> tuple[dict | None, list[dict]]:
     return data, list(data.get("entities", []))
 
 
+# What makes a glossary file belong to one title rather than being a global
+# layer: a series' TVDB id, or (since 2026-09-28, via Radarr) a movie's TMDB id.
+KEY_FIELDS = ("tvdb_id", "tmdb_movie_id")
+
+
+def find_glossary_path(glossary_dir: str | Path, key_field: str, key: int) -> Path | None:
+    for path in sorted(Path(glossary_dir).glob("*.yaml")):
+        data, _ = _load_yaml_entities(path)
+        if data and data.get(key_field) == key:
+            return path
+    return None
+
+
 def find_series_glossary_path(glossary_dir: str | Path, tvdb_id: int) -> Path | None:
     """Scans every `*.yaml` under glossary_dir for the one file whose own
     `tvdb_id` key matches -- the same content-addressed rule load_profile()
@@ -135,7 +168,8 @@ def find_series_glossary_path(glossary_dir: str | Path, tvdb_id: int) -> Path | 
 def load_profile(glossary_dir: str | Path, tvdb_id: int | None = None, *,
                  enrich_from_tvdb: bool = True,
                  episode: tuple[int, int] | None = None,
-                 all_episodes: bool = False) -> Profile:
+                 all_episodes: bool = False,
+                 tmdb_movie_id: int | None = None) -> Profile:
     """Layering is decided by content, never by filename convention: a
     file with no `tvdb_id` key is a global/category layer and always
     applies; a file that DOES declare one is series-specific and applies
@@ -162,10 +196,14 @@ def load_profile(glossary_dir: str | Path, tvdb_id: int | None = None, *,
     layered: list[Path] = []
     for path in sorted(directory.glob("*.yaml")):
         data, _ = _load_yaml_entities(path)
-        declared_tvdb_id = data.get("tvdb_id") if data else None
-        if declared_tvdb_id is None:
+        if not data or all(data.get(f) is None for f in KEY_FIELDS):
             layered.append(path)
-    series_layer = find_series_glossary_path(directory, tvdb_id) if tvdb_id is not None else None
+    if tvdb_id is not None:
+        series_layer = find_series_glossary_path(directory, tvdb_id)
+    elif tmdb_movie_id is not None:
+        series_layer = find_glossary_path(directory, "tmdb_movie_id", tmdb_movie_id)
+    else:
+        series_layer = None
 
     ordered = layered + ([series_layer] if series_layer else [])
     for path in ordered:

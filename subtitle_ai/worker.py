@@ -22,6 +22,7 @@ import api
 import auto_glossary
 import cast_enrichment
 import glossary_profile
+import media_servers
 import gpu
 import pipeline
 import srt_translation
@@ -199,10 +200,18 @@ class Worker(threading.Thread):
             return glossary_profile.Profile(tvdb_id=None, title=None)
         try:
             tvdb_id = glossary_profile.find_tvdb_id(video_path)
+            # A movie (no TVDB series) gets its own glossary by TMDB id when
+            # Radarr knows it -- see arr_client.py.
+            tmdb_movie_id = None
+            if tvdb_id is None:
+                import arr_client
+                movie = arr_client.lookup(video_path, ("movie",))
+                tmdb_movie_id = movie.ids.get("tmdb") if movie else None
             # The episode decides which episode-scoped names apply (see
             # glossary_profile.in_scope -- e.g. "Deniz" is a name only in
             # the episodes the cast metadata credits it to).
             return glossary_profile.load_profile(self.glossary_dir, tvdb_id=tvdb_id,
+                                                 tmdb_movie_id=tmdb_movie_id,
                                                  episode=glossary_profile.find_episode(video_path))
         except (FileNotFoundError, OSError):
             return glossary_profile.Profile(tvdb_id=None, title=None)
@@ -289,6 +298,21 @@ class Worker(threading.Thread):
         except Exception:  # noqa: BLE001
             logger.warning("work-dir sweep failed", exc_info=True)
 
+    def _notify_media_servers(self, job_id: str, outputs: list[str]) -> None:
+        """Ask Plex/Jellyfin to pick up the files this job just wrote (see
+        media_servers.py). On its own thread: a slow or down media server
+        must never hold up the next job, and the outcome only goes to the
+        job log."""
+        if not outputs or not media_servers.configured():
+            return
+
+        def run():
+            results = media_servers.notify(list(outputs))
+            if results:
+                self.store.append_log(job_id, "MEDIA_SERVERS_NOTIFIED " + "; ".join(
+                    f"{name}: {outcome}" for name, outcome in results.items()))
+        threading.Thread(target=run, name=f"media-refresh-{job_id[:8]}", daemon=True).start()
+
     def _maybe_refresh_cast(self) -> None:
         """Idle-time only: pull cast metadata for one series whose check is
         stale and protect names that pass the evidence gate (see
@@ -322,8 +346,36 @@ class Worker(threading.Thread):
                     report = {"tvdb_id": tvdb_id, "checked_at": retry_at, "error": str(exc)}
                 cast_enrichment.save_report(report)
                 return
+            if self._maybe_refresh_movie_cast(now):
+                return
         except Exception:  # noqa: BLE001
             logger.warning("cast metadata check failed", exc_info=True)
+
+    def _maybe_refresh_movie_cast(self, now: float) -> bool:
+        """Movies this app has worked on (jobs with no TVDB series) that
+        Radarr knows: one stale one per idle tick, like series."""
+        import arr_client
+        seen = set()
+        for job in self.store.list_by_tvdb_id(None):
+            movie = arr_client.lookup(job.get("video_path") or "", ("movie",)) if job.get("video_path") else None
+            tmdb_id = movie.ids.get("tmdb") if movie else None
+            if not tmdb_id or tmdb_id in seen:
+                continue
+            seen.add(tmdb_id)
+            key = f"movie-{tmdb_id}"
+            if not cast_enrichment.is_stale(key, now):
+                continue
+            try:
+                report = cast_enrichment.enrich_movie(tmdb_id, Path(movie.path), Path(self.glossary_dir),
+                                                      imdb_id=movie.ids.get("imdb"))
+                logger.info("cast metadata for movie %s: protected %s", tmdb_id, report.get("added") or "nothing new")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("cast metadata for movie %s failed", tmdb_id, exc_info=True)
+                retry_at = now - max(0.0, cast_enrichment.refresh_days() - 1) * 86400
+                report = {"key": key, "checked_at": retry_at, "error": str(exc)}
+            cast_enrichment.save_report(report)
+            return True
+        return False
 
     def run(self) -> None:
         logger.info("worker thread started")
@@ -506,6 +558,7 @@ class Worker(threading.Thread):
 
             self.store.finish(job_id, "completed", outputs=outputs, qc=result.qc.to_dict(),
                              needs_review=result.qc.needs_review_count())
+            self._notify_media_servers(job_id, outputs)
         except JobCancelled:
             self.store.finish(job_id, "cancelled")
         except OutputSafetyError as exc:
@@ -639,6 +692,7 @@ class Worker(threading.Thread):
                     self.store.append_log(job_id, f"KEEP: {target_path.name} already exists")
                 self.store.finish(job_id, "completed", outputs=outputs, qc=result.qc.to_dict(),
                                   needs_review=result.qc.needs_review_count())
+                self._notify_media_servers(job_id, outputs)
                 return
 
             # write_srt_atomic itself is the KEEP/REPLACE decision point:
@@ -661,6 +715,7 @@ class Worker(threading.Thread):
 
             self.store.finish(job_id, "completed", outputs=outputs, qc=result.qc.to_dict(),
                              needs_review=result.qc.needs_review_count())
+            self._notify_media_servers(job_id, outputs)
         except JobCancelled:
             self.store.finish(job_id, "cancelled")
         except OutputSafetyError as exc:

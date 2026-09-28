@@ -55,6 +55,16 @@ TRANSLATE_SERVER_URL = os.environ.get("TRANSLATE_SERVER_URL")
 FAILED_WORK_RETENTION_HOURS = workdir.parse_retention_hours(
     os.environ.get("SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS"))
 
+# Warm the Sonarr/Radarr index in the background so the first job
+# submission never waits on it (arr_client.py; no-op when unconfigured).
+import threading as _threading
+
+import arr_client
+
+if arr_client.configured():
+    _threading.Thread(target=lambda: [arr_client.all_items(k) for k in ("series", "movie")],
+                      name="arr-warmup", daemon=True).start()
+
 # Keep NLLB loaded between consecutive jobs on a dedicated GPU (default
 # 600s idle; 0 on a shared one) -- see translate._ResidentNllb.
 translate.enable_model_residency(translate.model_idle_seconds_from_env())

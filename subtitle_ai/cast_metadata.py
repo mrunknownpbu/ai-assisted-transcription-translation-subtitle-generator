@@ -19,6 +19,8 @@ fewer credits, never an error):
   (datasets.imdbws.com, title.episode + title.principals), streamed and
   filtered to one show, cached for CAST_CACHE_DAYS. Principals only
   (~10 per episode), names often without diacritics ("Eda Yildiz").
+* TVmaze -- no key. Series cast (and per-episode guest cast where it has
+  any); nicknames in parentheses ("Melek Yücel (Melo)").
 * .nfo -- the series folder's tvshow.nfo <actor><role> list (Jellyfin/Kodi
   metadata): series regulars only, no episode numbers.
 
@@ -61,6 +63,8 @@ _PREFIX_TITLES = {"chef", "dr", "dr.", "doctor", "mr", "mr.", "mrs", "mrs.", "ms
 _SUFFIX_TITLES = {"bey", "hanım", "hanim", "abla", "abi", "ağabey", "teyze", "amca", "hoca", "efendi"}
 _NOT_CHARACTERS = {"", "self", "himself", "herself", "themselves", "narrator", "voice", "guest",
                    "host", "various", "unknown", "extra", "additional voices"}
+_PAREN_ANNOTATIONS = {"voice", "uncredited", "archive", "footage", "young", "younger", "child", "teen",
+                      "adult", "old", "older", "credit", "only", "cameo", "flashback", "photo", "singing"}
 _NICKNAME = re.compile(r"[\"“”'‘’]([^\"“”'‘’]+)[\"“”'‘’]")
 
 
@@ -98,7 +102,14 @@ def parse_character(raw: str | None) -> tuple[str, str, list[str]] | None:
         return None
     nicknames = [n.strip() for n in _NICKNAME.findall(raw) if n.strip()]
     name = _NICKNAME.sub(" ", raw)
-    name = re.sub(r"\([^)]*\)", " ", name)             # "(voice)", "(uncredited)"
+    # TVmaze writes nicknames in parentheses ("Melek Yücel (Melo)"); other
+    # sources use them for annotations ("(voice)", "(uncredited)").
+    for inner in re.findall(r"\(([^)]*)\)", name):
+        words = inner.split()
+        if (1 <= len(words) <= 2 and words[0][:1].isupper()
+                and not set(w.casefold() for w in words) & _PAREN_ANNOTATIONS):
+            nicknames.append(inner.strip())
+    name = re.sub(r"\([^)]*\)", " ", name)
     name = name.split("/")[0]                          # "Eda / Young Eda" -> first role
     words = [w for w in re.split(r"\s+", name.strip()) if w]
     while words and words[0].casefold() in _PREFIX_TITLES:
@@ -231,6 +242,30 @@ def add_tvdb(book: CastBook, tvdb_id: int) -> None:
                 book.add(character.get("name"), "tvdb", (season, number))
 
 
+# --- TVmaze (no key) --------------------------------------------------------
+
+def add_tvmaze(book: CastBook, tvmaze_id: int) -> None:
+    """Series cast (no episode numbers) plus per-episode guest cast where
+    TVmaze has it (many non-English shows: none)."""
+    def fetch():
+        try:
+            cast = httpx.get(f"https://api.tvmaze.com/shows/{tvmaze_id}/cast", timeout=REQUEST_TIMEOUT)
+            episodes = httpx.get(f"https://api.tvmaze.com/shows/{tvmaze_id}/episodes",
+                                 params={"embed": "guestcast"}, timeout=REQUEST_TIMEOUT)
+            cast.raise_for_status()
+            episodes.raise_for_status()
+        except httpx.HTTPError as exc:
+            _logger.info("TVmaze unavailable: %s", exc)
+            return None
+        credits = [[(c.get("character") or {}).get("name"), None, None] for c in cast.json()]
+        for ep in episodes.json():
+            for g in (ep.get("_embedded") or {}).get("guestcast") or []:
+                credits.append([(g.get("character") or {}).get("name"), ep.get("season"), ep.get("number")])
+        return credits
+    for character, season, ep in _cached(f"tvmaze-{tvmaze_id}", fetch) or []:
+        book.add(character, "tvmaze", (season, ep) if season else None)
+
+
 # --- IMDb datasets ----------------------------------------------------------
 
 def _stream_tsv(name: str):
@@ -312,20 +347,59 @@ def nfo_ids(series_root: Path) -> dict[str, str]:
 
 
 def fetch_cast(tvdb_id: int, series_root: Path | None = None, *,
-               sources: tuple[str, ...] = ("tmdb", "tvdb", "imdb", "nfo")) -> CastBook:
+               sources: tuple[str, ...] = ("tmdb", "tvdb", "tvmaze", "imdb", "nfo")) -> CastBook:
+    """IDs come from Sonarr first (arr_client -- it knows TMDB, IMDb and
+    TVmaze ids for every series), then the series' tvshow.nfo, then TMDB's
+    /find by TVDB id."""
+    import arr_client
     book = CastBook()
-    local = nfo_ids(series_root) if series_root else {}
-    tmdb_id, imdb_id = (None, None)
-    if "tmdb" in sources or "imdb" in sources:
+    ids: dict = {}
+    if series_root:
+        info = arr_client.lookup(str(series_root), ("series",))
+        if info and info.tvdb_id == tvdb_id:
+            ids.update(info.ids)
+        local = nfo_ids(series_root)
+        if local.get("tmdb", "").isdigit():
+            ids.setdefault("tmdb", int(local["tmdb"]))
+        if local.get("imdb"):
+            ids.setdefault("imdb", local["imdb"])
+        if local.get("tvmaze", "").isdigit():
+            ids.setdefault("tvmaze", int(local["tvmaze"]))
+    if ("tmdb" in sources or "imdb" in sources) and not (ids.get("tmdb") and ids.get("imdb")):
         tmdb_id, imdb_id = tmdb_ids(tvdb_id)
-    tmdb_id = tmdb_id or (int(local["tmdb"]) if local.get("tmdb", "").isdigit() else None)
-    imdb_id = imdb_id or local.get("imdb") or None
-    if "tmdb" in sources and tmdb_id:
-        add_tmdb(book, tmdb_id)
+        ids.setdefault("tmdb", tmdb_id)
+        ids.setdefault("imdb", imdb_id)
+    if "tmdb" in sources and ids.get("tmdb"):
+        add_tmdb(book, ids["tmdb"])
     if "tvdb" in sources:
         add_tvdb(book, tvdb_id)
-    if "imdb" in sources and imdb_id:
-        add_imdb(book, imdb_id)
+    if "tvmaze" in sources and ids.get("tvmaze"):
+        add_tvmaze(book, ids["tvmaze"])
+    if "imdb" in sources and ids.get("imdb"):
+        add_imdb(book, ids["imdb"])
     if "nfo" in sources and series_root:
         add_nfo(book, series_root)
+    return book
+
+
+def fetch_movie_cast(tmdb_id: int, movie_dir: Path | None = None) -> CastBook:
+    """A movie's characters: TMDB's full movie credits plus the folder's
+    .nfo roles. No episode numbers, so every credit is film-wide. IMDb is
+    not used for movies: its dataset has only ~10 principals per title
+    (TMDB lists the whole cast) and would cost a 784MB stream per movie."""
+    book = CastBook()
+
+    def fetch():
+        data = _tmdb_get(f"/movie/{tmdb_id}/credits")
+        return None if data is None else [c.get("character") for c in data.get("cast") or []]
+    for character in _cached(f"tmdb-movie-{tmdb_id}", fetch) or []:
+        book.add(character, "tmdb", None)
+    if movie_dir:
+        for nfo in sorted(Path(movie_dir).glob("*.nfo")):
+            try:
+                root = ET.parse(nfo).getroot()
+            except (OSError, ET.ParseError):
+                continue
+            for actor in root.iter("actor"):
+                book.add(actor.findtext("role"), "nfo", None)
     return book

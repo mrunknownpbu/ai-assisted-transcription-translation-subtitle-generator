@@ -70,7 +70,10 @@ class Candidate:
 
 # --- source subtitles -------------------------------------------------------
 
-def source_subtitles(series_root: Path) -> tuple[str | None, dict[tuple[int, int], list[str]]]:
+MOVIE_EPISODE = (0, 0)  # a movie's subtitles, keyed like one episode
+
+
+def source_subtitles(series_root: Path, *, movie: bool = False) -> tuple[str | None, dict[tuple[int, int], list[str]]]:
     """(language, {(season, episode): [cue text, ...]}) from the series'
     original-language `<stem>.<lang>.srt` files -- the most common non-English
     language code wins."""
@@ -85,7 +88,7 @@ def source_subtitles(series_root: Path) -> tuple[str | None, dict[tuple[int, int
         if parts[-2] in _SUBTITLE_MODIFIERS and len(parts) >= 4 and 2 <= len(parts[-3]) <= 3:
             continue
         lang = parts[-2]
-        episode = glossary_profile.find_episode(path.name)
+        episode = MOVIE_EPISODE if movie else glossary_profile.find_episode(path.name)
         if lang == "en" or episode is None:
             continue
         by_lang.setdefault(lang, {})[episode] = path
@@ -160,14 +163,15 @@ def _sample(items: list[str], n: int) -> list[str]:
 
 # --- glossary ---------------------------------------------------------------
 
-def _existing_forms(glossary_dir: Path, tvdb_id: int) -> tuple[dict[str, dict], Path | None, object]:
-    """{folded surface form: entry} over every layer, plus the series file
-    path and its round-trip data (to write to)."""
+def _existing_forms(glossary_dir: Path, key_field: str, key: int) -> tuple[dict[str, dict], Path | None, object]:
+    """{folded surface form: entry} over every layer that applies to this
+    series/movie, plus its own file's path and round-trip data (to write to)."""
     forms: dict[str, dict] = {}
-    series_path = glossary_profile.find_series_glossary_path(glossary_dir, tvdb_id)
+    series_path = glossary_profile.find_glossary_path(glossary_dir, key_field, key)
     for path in sorted(glossary_dir.glob("*.yaml")):
         data = glossary_files.load(path)
-        if data.get("tvdb_id") not in (None, tvdb_id):
+        own = data.get(key_field) == key
+        if not own and any(data.get(f) is not None for f in glossary_profile.KEY_FIELDS):
             continue
         for entry in data.get("entities") or []:
             for form in [entry.get("canonical"), *(entry.get("aliases") or [])]:
@@ -179,11 +183,29 @@ def _existing_forms(glossary_dir: Path, tvdb_id: int) -> tuple[dict[str, dict], 
 
 def enrich_series(tvdb_id: int, series_root: Path, glossary_dir: Path, *, probe=default_probe,
                   book: cast_metadata.CastBook | None = None, dry_run: bool = False) -> dict:
-    """Fetch cast, gather evidence, protect what passes. Returns the report."""
-    started = time.time()
+    """Fetch a series' cast, gather evidence, protect what passes. Returns the report."""
     book = book or cast_metadata.fetch_cast(tvdb_id, series_root)
     lang, subtitles = source_subtitles(series_root)
-    report = {"tvdb_id": tvdb_id, "checked_at": started, "language": lang,
+    return _enrich("tvdb_id", tvdb_id, f"tvdb-{tvdb_id}", book, lang, subtitles, Path(glossary_dir),
+                   probe=probe, dry_run=dry_run, min_episodes=MIN_NAME_EPISODES)
+
+
+def enrich_movie(tmdb_id: int, movie_dir: Path, glossary_dir: Path, *, imdb_id: str | None = None,
+                 probe=default_probe, book: cast_metadata.CastBook | None = None,
+                 dry_run: bool = False) -> dict:
+    """The movie version: cast from TMDB movie credits (+ the movie's .nfo),
+    subtitles from the movie's folder, protection film-wide, and the
+    recurrence gate relaxed to the one film (no episodes to span)."""
+    book = book or cast_metadata.fetch_movie_cast(tmdb_id, movie_dir)
+    lang, subtitles = source_subtitles(movie_dir, movie=True)
+    return _enrich("tmdb_movie_id", tmdb_id, f"movie-{tmdb_id}", book, lang, subtitles, Path(glossary_dir),
+                   probe=probe, dry_run=dry_run, min_episodes=1)
+
+
+def _enrich(key_field: str, key: int, report_key: str, book, lang, subtitles, glossary_dir: Path, *,
+            probe, dry_run: bool, min_episodes: int) -> dict:
+    started = time.time()
+    report = {"key": report_key, key_field: key, "checked_at": started, "language": lang,
               "episodes_with_subtitles": len(subtitles), "candidates": [], "added": [], "flags": []}
     if not book.members or not subtitles or not lang:
         report["note"] = "no cast metadata or no source subtitles"
@@ -196,7 +218,7 @@ def enrich_series(tvdb_id: int, series_root: Path, glossary_dir: Path, *, probe=
     for season, number in subtitles:
         known[season] = max(known.get(season, 0), number)
 
-    existing, series_path, series_data = _existing_forms(Path(glossary_dir), tvdb_id)
+    existing, series_path, series_data = _existing_forms(glossary_dir, key_field, key)
     candidates: list[Candidate] = []
     for member in book.members.values():
         cand = Candidate(member=member, scope=scope_for(member, known))
@@ -217,10 +239,10 @@ def enrich_series(tvdb_id: int, series_root: Path, glossary_dir: Path, *, probe=
                 if any(name_shaped(line, f) for f in forms):
                     cand.name_lines.append(line)
                     cand.name_episodes.add(episode)
-        if len(cand.name_lines) < MIN_NAME_LINES or len(cand.name_episodes) < MIN_NAME_EPISODES:
+        if len(cand.name_lines) < MIN_NAME_LINES or len(cand.name_episodes) < min_episodes:
             cand.decision = "skip"
             cand.reason = (f"used as a name in {len(cand.name_lines)} lines / {len(cand.name_episodes)} "
-                           f"episodes (needs {MIN_NAME_LINES} / {MIN_NAME_EPISODES})")
+                           f"episodes (needs {MIN_NAME_LINES} / {min_episodes})")
 
     to_probe = [c for c in candidates if not c.decision]
     batches = [(c, _sample(sorted(set(c.name_lines)), PROBE_LINES)) for c in to_probe]
@@ -258,8 +280,8 @@ def enrich_series(tvdb_id: int, series_root: Path, glossary_dir: Path, *, probe=
     report["added"] = [cand.member.given for cand, _ in changed]
     if changed and not dry_run:
         if series_path is None:
-            series_path = Path(glossary_dir) / f"{tvdb_id}.yaml"
-            series_data = {"tvdb_id": tvdb_id, "title": None, "entities": []}
+            series_path = glossary_dir / f"{report_key}.yaml"
+            series_data = {key_field: key, "title": None, "entities": []}
         entities = series_data.setdefault("entities", [])
         for cand, aliases in changed:
             m = cand.member
@@ -283,26 +305,34 @@ def enrich_series(tvdb_id: int, series_root: Path, glossary_dir: Path, *, probe=
                 entities.append(entry)
         glossary_files.write(series_path, series_data)
         glossary_files.commit(series_path, "Protect " + ", ".join(repr(n) for n in report["added"])
-                              + f" (series {tvdb_id}) from cast metadata")
+                              + f" ({report_key}) from cast metadata")
     report["seconds"] = round(time.time() - started, 1)
     return report
 
 
 # --- report / scheduling ----------------------------------------------------
 
-def report_path(tvdb_id: int) -> Path:
-    return cast_metadata.CACHE_DIR / f"report-{tvdb_id}.json"
+def _report_key(key) -> str:
+    """A tvdb id (series, the original form) or a "movie-<tmdb>" key."""
+    return f"tvdb-{key}" if isinstance(key, int) else str(key)
+
+
+def report_path(key) -> Path:
+    name = _report_key(key)
+    # Series reports keep their original file name (report-<tvdb>.json).
+    return cast_metadata.CACHE_DIR / (f"report-{key}.json" if isinstance(key, int) else f"report-{name}.json")
 
 
 def save_report(report: dict) -> None:
-    path = report_path(report["tvdb_id"])
+    key = report.get("tvdb_id") if report.get("tvdb_id") is not None else report["key"]
+    path = report_path(key)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
-def load_report(tvdb_id: int) -> dict | None:
+def load_report(key) -> dict | None:
     try:
-        return json.loads(report_path(tvdb_id).read_text(encoding="utf-8"))
+        return json.loads(report_path(key).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
@@ -316,9 +346,10 @@ def refresh_days() -> float:
         return 30.0
 
 
-def is_stale(tvdb_id: int, now: float | None = None) -> bool:
+def is_stale(key, now: float | None = None) -> bool:
+    """`key`: a series' tvdb id, or "movie-<tmdb>"."""
     days = refresh_days()
     if days <= 0:
         return False
-    report = load_report(tvdb_id)
+    report = load_report(key)
     return report is None or ((now or time.time()) - report.get("checked_at", 0)) > days * 86400
