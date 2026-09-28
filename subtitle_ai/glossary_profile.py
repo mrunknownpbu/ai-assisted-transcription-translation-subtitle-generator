@@ -24,6 +24,59 @@ def find_tvdb_id(path: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+_EPISODE_PATTERN = re.compile(r"S(\d{1,3})E(\d{1,4})", re.IGNORECASE)
+# One scope item: "S01E29" or a same-season range "S01E29-E40" / "S01E29-S01E40".
+_SCOPE_PATTERN = re.compile(r"^\s*S(\d{1,3})E(\d{1,4})(?:\s*-\s*(?:S(\d{1,3}))?E(\d{1,4}))?\s*$",
+                            re.IGNORECASE)
+
+
+def find_episode(path: str) -> tuple[int, int] | None:
+    """(season, episode) from the LAST SxxEyy in a path's filename, or None."""
+    matches = _EPISODE_PATTERN.findall(Path(path).name)
+    if not matches:
+        return None
+    season, episode = matches[-1]
+    return int(season), int(episode)
+
+
+def parse_episode_scope(items) -> list[tuple[int, int, int]] | None:
+    """An entity's optional `episodes:` list -> [(season, first, last)].
+    None = no scope (applies everywhere). Unparseable items are ignored;
+    a list with nothing parseable means "nowhere", not "everywhere", so a
+    typo can never silently widen a deliberately narrowed name."""
+    if items is None:
+        return None
+    if isinstance(items, str):
+        items = [items]
+    ranges = []
+    for item in items:
+        m = _SCOPE_PATTERN.match(str(item))
+        if not m:
+            continue
+        season, first = int(m.group(1)), int(m.group(2))
+        end_season = int(m.group(3)) if m.group(3) else season
+        last = int(m.group(4)) if m.group(4) else first
+        if end_season != season:
+            continue  # cross-season ranges are not supported; list each season
+        ranges.append((season, min(first, last), max(first, last)))
+    return ranges
+
+
+def in_scope(ranges: list[tuple[int, int, int]] | None, episode: tuple[int, int] | None) -> bool:
+    """Episode-scoped entities (2026-09-28): a name credited only to some
+    episodes -- "Deniz" is a character in S01E29-E37 and the ordinary word
+    for "sea" everywhere else -- is protected only where it is a name. An
+    unknown episode gets no scoped names (the conservative side: an
+    unprotected name is the pre-existing behaviour; a wrongly protected
+    common word is the collision this exists to prevent)."""
+    if ranges is None:
+        return True
+    if episode is None:
+        return False
+    season, number = episode
+    return any(s == season and first <= number <= last for s, first, last in ranges)
+
+
 def find_series_root(path: str) -> Path | None:
     """The series folder itself (e.g. `Show (2020) {tvdb-383383}/`),
     not just its id -- used by auto_glossary.py to know where to look
@@ -80,7 +133,9 @@ def find_series_glossary_path(glossary_dir: str | Path, tvdb_id: int) -> Path | 
 
 
 def load_profile(glossary_dir: str | Path, tvdb_id: int | None = None, *,
-                 enrich_from_tvdb: bool = True) -> Profile:
+                 enrich_from_tvdb: bool = True,
+                 episode: tuple[int, int] | None = None,
+                 all_episodes: bool = False) -> Profile:
     """Layering is decided by content, never by filename convention: a
     file with no `tvdb_id` key is a global/category layer and always
     applies; a file that DOES declare one is series-specific and applies
@@ -92,7 +147,12 @@ def load_profile(glossary_dir: str | Path, tvdb_id: int | None = None, *,
     test_series_layer_excluded_when_tvdb_id_does_not_match.)
 
     Series-specific entries are applied last, so they override a
-    same-named canonical entry from an earlier layer."""
+    same-named canonical entry from an earlier layer.
+
+    An entity with an `episodes:` scope (see in_scope()) is included only
+    when `episode` (season, number) falls inside it. `all_episodes=True`
+    ignores scopes -- for listing/editing a glossary, never for
+    translating one specific episode."""
     directory = Path(glossary_dir)
     sources: list[str] = []
     by_canonical: dict[str, dict] = {}
@@ -124,8 +184,13 @@ def load_profile(glossary_dir: str | Path, tvdb_id: int | None = None, *,
             by_phrase_key[_phrase_key(p["source"])] = {**p, "language": file_language}
         sources.append(path.name)
 
-    entities = [Entity(canonical=e["canonical"], surface_forms=[e["canonical"], *e.get("aliases", [])])
-               for e in by_canonical.values() if e.get("protected")]
+    entities = [Entity(canonical=e["canonical"], surface_forms=[e["canonical"], *(e.get("aliases") or [])],
+                       episodes=([str(x) for x in e["episodes"]] if isinstance(e.get("episodes"), list)
+                                 else [str(e["episodes"])] if e.get("episodes") else None),
+                       source=e.get("source"), case_sensitive=bool(e.get("case_sensitive")))
+               for e in by_canonical.values()
+               if e.get("protected")
+               and (all_episodes or in_scope(parse_episode_scope(e.get("episodes")), episode))]
     phrases = [PhraseEntry(source=p["source"], translation=p["translation"], language=p.get("language"))
               for p in by_phrase_key.values()]
     title_source = "local" if title else "none"

@@ -210,3 +210,21 @@ class EpisodeResolutionTests(TvdbClientTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EpisodeCharactersTests(TvdbClientTestCase):
+    """episode_characters() (revived 2026-09-28 per-episode, with a real
+    key and cross-checked against TMDB/IMDb -- see its docstring)."""
+
+    def test_returns_the_episodes_characters(self):
+        self.with_key()
+        payload = {"data": {"characters": [{"name": "Deniz Saraçhan", "peopleType": "Guest Star"}]}}
+        with patch("tvdb_client.httpx.post", return_value=_response(200, {"data": {"token": "tok1"}})), \
+             patch("tvdb_client.httpx.get", return_value=_response(200, payload)) as get:
+            chars = tvdb_client.episode_characters(8138944)
+        self.assertEqual(chars[0]["name"], "Deniz Saraçhan")
+        self.assertIn("/episodes/8138944/extended", get.call_args.args[0])
+
+    def test_degrades_to_empty_without_a_key(self):
+        tvdb_client.API_KEY = None
+        self.assertEqual(tvdb_client.episode_characters(1), [])

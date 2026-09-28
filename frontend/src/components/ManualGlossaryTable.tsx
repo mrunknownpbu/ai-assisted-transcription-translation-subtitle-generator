@@ -31,7 +31,7 @@ export function ManualGlossaryTable({
   const visible = entries.filter((e) => !justDeleted.has(e.canonical));
 
   if (visible.length === 0) {
-    return <p className="lang-info">No hand-curated glossary entries for this series.</p>;
+    return <p className="lang-info">No protected names for this series yet.</p>;
   }
 
   const startEdit = (entry: GlossaryEntity) => {
@@ -82,6 +82,7 @@ export function ManualGlossaryTable({
           <tr>
             <th>Name</th>
             <th>Aliases</th>
+            <th>Applies to</th>
             <th>Action</th>
           </tr>
         </thead>
@@ -109,6 +110,7 @@ export function ManualGlossaryTable({
                         aria-label="Aliases"
                       />
                     </td>
+                    <td>{entry.episodes?.length ? entry.episodes.join(", ") : "All episodes"}</td>
                     <td>
                       <button
                         className="text-button"
@@ -126,8 +128,12 @@ export function ManualGlossaryTable({
                   <>
                     <td>
                       <strong>{entry.canonical}</strong>
+                      {entry.source === "metadata" && (
+                        <div className="lang-info">from cast metadata</div>
+                      )}
                     </td>
                     <td>{aliases.join(", ")}</td>
+                    <td>{entry.episodes?.length ? entry.episodes.join(", ") : "All episodes"}</td>
                     <td>
                       {isConfirming ? (
                         <>

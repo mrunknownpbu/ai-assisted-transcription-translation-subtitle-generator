@@ -1,6 +1,7 @@
 import { useParams } from "react-router-dom";
 
 import { useSeriesDetail } from "../api/hooks";
+import { CastReportPanel } from "../components/CastReportPanel";
 import { GlossarySuggestionsTable } from "../components/GlossarySuggestionsTable";
 import { JobTable } from "../components/JobTable";
 import { ManualGlossaryTable } from "../components/ManualGlossaryTable";
@@ -27,9 +28,16 @@ export function SeriesDetailPage() {
 
       <section className="panel">
         <div className="panel-head">
-          <h2>Manual glossary</h2>
+          <h2>Protected names</h2>
         </div>
         <ManualGlossaryTable tvdbId={data.tvdb_id} entries={data.manual_glossary} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Cast metadata (TMDB, TheTVDB, IMDb)</h2>
+        </div>
+        <CastReportPanel report={data.cast_report} />
       </section>
 
       <section className="panel">

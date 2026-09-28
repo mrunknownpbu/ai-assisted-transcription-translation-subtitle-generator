@@ -195,6 +195,36 @@ export interface SeriesListResponse {
 export interface GlossaryEntity {
   canonical: string;
   surface_forms: string[];
+  /** `episodes:` scope, e.g. ["S01E29-E40"]; null/absent = every episode. */
+  episodes?: string[] | null;
+  /** "metadata" when cast_enrichment.py protected it automatically. */
+  source?: string | null;
+}
+
+export interface CastCandidate {
+  name: string;
+  full_names: string[];
+  nicknames: string[];
+  sources: string[];
+  credited_episodes: number;
+  scope: string[] | null;
+  name_lines: number;
+  name_episodes: number;
+  probe: string | null;
+  examples: { source: string; unprotected: string }[];
+  decision: string;
+  reason: string;
+}
+
+export interface CastReport {
+  tvdb_id: number;
+  checked_at: number;
+  language?: string | null;
+  candidates?: CastCandidate[];
+  added?: string[];
+  flags?: string[];
+  error?: string;
+  note?: string;
 }
 
 export interface AutoSuggestion {
@@ -211,6 +241,7 @@ export interface SeriesDetailResponse {
   jobs: Job[];
   manual_glossary: GlossaryEntity[];
   auto_suggestions: AutoSuggestion[];
+  cast_report?: CastReport | null;
 }
 
 export interface PromoteGlossaryEntityRequest {

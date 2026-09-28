@@ -89,7 +89,7 @@ describe("ManualGlossaryTable", () => {
     expect(JSON.parse(init.body as string)).toEqual({ canonical: "Eda" });
 
     await waitFor(() =>
-      expect(screen.getByText("No hand-curated glossary entries for this series.")).toBeInTheDocument(),
+      expect(screen.getByText("No protected names for this series yet.")).toBeInTheDocument(),
     );
   });
 
@@ -99,5 +99,26 @@ describe("ManualGlossaryTable", () => {
     fireEvent.click(screen.getByText("Cancel"));
     expect(screen.getByText("Eda")).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ManualGlossaryTable scope and provenance", () => {
+  it("shows an episode scope and the cast-metadata tag", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ToastProvider>
+          <ManualGlossaryTable
+            tvdbId={1}
+            entries={[
+              { canonical: "Kiraz", surface_forms: ["Kiraz"], episodes: ["S02E01-E13"], source: "metadata" },
+              { canonical: "Eda", surface_forms: ["Eda"] },
+            ]}
+          />
+        </ToastProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("S02E01-E13")).toBeInTheDocument();
+    expect(screen.getByText("All episodes")).toBeInTheDocument();
+    expect(screen.getByText("from cast metadata")).toBeInTheDocument();
   });
 });

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import api
 import auto_glossary
+import cast_enrichment
 import glossary_profile
 import gpu
 import pipeline
@@ -33,6 +34,9 @@ from output import (TARGET_LANG, OutputSafetyError, resolve_media_path, resolve_
 logger = logging.getLogger(__name__)
 
 _WORK_SWEEP_INTERVAL_SECONDS = 3600.0
+# How often an idle worker looks for a series whose cast-metadata check is
+# stale (cast_enrichment.is_stale -- default every 30 days per series).
+_CAST_CHECK_INTERVAL_SECONDS = 600.0
 
 # Real gap this closes (IMPROVEMENT_PLAN.md 4.3): pipeline.py/
 # srt_translation.py already emit fine-grained per-stage events (ASR_
@@ -164,6 +168,7 @@ class Worker(threading.Thread):
         # diagnosis before the periodic sweep removes it -- see workdir.py.
         self.failed_work_retention_hours = failed_work_retention_hours
         self._last_work_sweep = 0.0  # 0 = sweep on the first loop iteration (startup)
+        self._last_cast_check = time.time()  # first check one interval after startup, never mid-deploy
         self._stop_event = threading.Event()
         # Real gap this closes (production-readiness audit, 2026-09-21):
         # nothing previously distinguished a wedged-but-alive worker
@@ -194,7 +199,11 @@ class Worker(threading.Thread):
             return glossary_profile.Profile(tvdb_id=None, title=None)
         try:
             tvdb_id = glossary_profile.find_tvdb_id(video_path)
-            return glossary_profile.load_profile(self.glossary_dir, tvdb_id=tvdb_id)
+            # The episode decides which episode-scoped names apply (see
+            # glossary_profile.in_scope -- e.g. "Deniz" is a name only in
+            # the episodes the cast metadata credits it to).
+            return glossary_profile.load_profile(self.glossary_dir, tvdb_id=tvdb_id,
+                                                 episode=glossary_profile.find_episode(video_path))
         except (FileNotFoundError, OSError):
             return glossary_profile.Profile(tvdb_id=None, title=None)
 
@@ -280,6 +289,42 @@ class Worker(threading.Thread):
         except Exception:  # noqa: BLE001
             logger.warning("work-dir sweep failed", exc_info=True)
 
+    def _maybe_refresh_cast(self) -> None:
+        """Idle-time only: pull cast metadata for one series whose check is
+        stale and protect names that pass the evidence gate (see
+        cast_enrichment.py). One series per idle tick so a queued job
+        never waits behind more than one (~15s-2min, most of it the IMDb
+        dataset download once per 30 days). Never raises."""
+        if not self.glossary_dir or cast_enrichment.refresh_days() <= 0:
+            return
+        now = time.time()
+        if now - self._last_cast_check < _CAST_CHECK_INTERVAL_SECONDS:
+            return
+        self._last_cast_check = now
+        try:
+            for series in self.store.list_series():
+                tvdb_id = series["tvdb_id"]
+                if tvdb_id is None or not cast_enrichment.is_stale(tvdb_id, now):
+                    continue
+                video_path = self.store.latest_video_path(tvdb_id)
+                root = glossary_profile.find_series_root(str(Path(self.media_root) / video_path)) \
+                    if video_path else None
+                if root is None:
+                    continue
+                try:
+                    report = cast_enrichment.enrich_series(tvdb_id, root, Path(self.glossary_dir))
+                    logger.info("cast metadata for series %s: protected %s (%.0fs)", tvdb_id,
+                                report.get("added") or "nothing new", report.get("seconds", 0))
+                except Exception as exc:  # noqa: BLE001 -- enrichment must never stop the worker
+                    logger.warning("cast metadata for series %s failed", tvdb_id, exc_info=True)
+                    # Retry in about a day rather than every idle tick.
+                    retry_at = now - max(0.0, cast_enrichment.refresh_days() - 1) * 86400
+                    report = {"tvdb_id": tvdb_id, "checked_at": retry_at, "error": str(exc)}
+                cast_enrichment.save_report(report)
+                return
+        except Exception:  # noqa: BLE001
+            logger.warning("cast metadata check failed", exc_info=True)
+
     def run(self) -> None:
         logger.info("worker thread started")
         while not self._stop_event.is_set():
@@ -287,6 +332,7 @@ class Worker(threading.Thread):
             self._maybe_sweep_work_root()
             job = self.store.claim()
             if not job:
+                self._maybe_refresh_cast()
                 self._stop_event.wait(self.poll_interval)
                 continue
             self._process(job)

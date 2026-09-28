@@ -646,8 +646,9 @@ def series_detail(tvdb_id: int) -> dict:
     jobs = get_store().list_by_tvdb_id(tvdb_id)
     manual_entities = []
     if get_glossary_dir():
-        profile = glossary_profile.load_profile(get_glossary_dir(), tvdb_id=tvdb_id)
-        manual_entities = [{"canonical": e.canonical, "surface_forms": e.surface_forms}
+        profile = glossary_profile.load_profile(get_glossary_dir(), tvdb_id=tvdb_id, all_episodes=True)
+        manual_entities = [{"canonical": e.canonical, "surface_forms": e.surface_forms,
+                                 "episodes": e.episodes, "source": e.source}
                            for e in profile.entities]
     suggestions = []
     suggestions_dir = get_glossary_suggestions_dir()
@@ -656,7 +657,9 @@ def series_detail(tvdb_id: int) -> dict:
         if path.is_file():
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             suggestions = data.get("entities", [])
+    import cast_enrichment
     return {"tvdb_id": tvdb_id, "title": _series_title(tvdb_id), "jobs": [_job_summary(j) for j in jobs],
+            "cast_report": cast_enrichment.load_report(tvdb_id),
             "manual_glossary": manual_entities, "auto_suggestions": suggestions}
 
 
@@ -700,8 +703,9 @@ def promote_glossary_entity(tvdb_id: int, request: PromoteGlossaryEntityRequest)
 
     _write_series_glossary(path, data, f"Protect {request.canonical!r} (series {tvdb_id})")
 
-    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id)
-    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms}
+    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id, all_episodes=True)
+    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms,
+                                 "episodes": e.episodes, "source": e.source}
                                 for e in profile.entities]}
 
 
@@ -748,8 +752,9 @@ def update_glossary_entity(tvdb_id: int, request: UpdateGlossaryEntityRequest) -
     entry["aliases"] = request.aliases
 
     _write_series_glossary(path, data, f"Edit {request.original_canonical!r} (series {tvdb_id})")
-    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id)
-    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms}
+    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id, all_episodes=True)
+    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms,
+                                 "episodes": e.episodes, "source": e.source}
                                 for e in profile.entities]}
 
 
@@ -775,8 +780,9 @@ def delete_glossary_entity(tvdb_id: int, request: DeleteGlossaryEntityRequest) -
     entities.remove(entry)
 
     _write_series_glossary(path, data, f"Unprotect {request.canonical!r} (series {tvdb_id})")
-    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id)
-    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms}
+    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id, all_episodes=True)
+    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms,
+                                 "episodes": e.episodes, "source": e.source}
                                 for e in profile.entities]}
 
 

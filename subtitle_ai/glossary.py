@@ -32,6 +32,26 @@ def _bounded(pattern: str) -> str:
 class Entity:
     canonical: str            # the form restored into the final translation
     surface_forms: list[str]  # every spelling/inflection worth protecting
+    # Display-only provenance (glossary_profile fills them; protection
+    # ignores them): the entry's `episodes:` scope, and `source: metadata`
+    # for names cast_enrichment.py protected automatically.
+    episodes: list[str] | None = None
+    source: str | None = None
+    # Match only exactly as spelled (protect() is otherwise case-
+    # insensitive). For names that are also ordinary words: "Melek"
+    # (angel), "Kiraz" (cherry), "Deniz" (sea) are capitalised when they
+    # are names and lowercase when they are words, and protecting the
+    # lowercase word turned "deniz kenarında" into "the edge of Deniz".
+    case_sensitive: bool = False
+
+
+class GlossaryMap(dict):
+    """build_glossary()'s form -> (placeholder, canonical) dict, plus the
+    set of forms protect() must match case-sensitively."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.case_sensitive: set[str] = set()
 
 
 @dataclass
@@ -88,7 +108,7 @@ def build_glossary(entities: list[Entity]) -> dict[str, tuple[str, str]]:
     proving this was specifically the Turkish-İ casefold expansion, not
     the apostrophe boundary handling (already correct -- see _bounded()).
     """
-    glossary: dict[str, tuple[str, str]] = {}
+    glossary = GlossaryMap()
     seen_casefolded: set[str] = set()
     counter = 0
     for entity in entities:
@@ -97,13 +117,17 @@ def build_glossary(entities: list[Entity]) -> dict[str, tuple[str, str]]:
             if key not in seen_casefolded:
                 seen_casefolded.add(key)
                 glossary[form] = (_placeholder(counter), entity.canonical)
+                if getattr(entity, "case_sensitive", False):
+                    glossary.case_sensitive.add(form)
                 counter += 1
     return glossary
 
 
 def protect(text: str, glossary: dict[str, tuple[str, str]]) -> str:
+    exact = getattr(glossary, "case_sensitive", ())
     for form, (placeholder, _canonical) in sorted(glossary.items(), key=lambda kv: -len(kv[0])):
-        text = re.sub(_bounded(re.escape(form)), placeholder, text, flags=re.IGNORECASE)
+        text = re.sub(_bounded(re.escape(form)), placeholder, text,
+                      flags=0 if form in exact else re.IGNORECASE)
     return text
 
 

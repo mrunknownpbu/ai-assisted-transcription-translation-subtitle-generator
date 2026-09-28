@@ -160,15 +160,22 @@ def episode(tvdb_id: int, season: int, episode_number: int,
     return None
 
 
-# A characters()/cast-list function used to live here, for seeding or
-# enriching the series entity glossary from TVDB's cast records. Removed
-# 2026-09-23 (IMPROVEMENT_PLAN.md 3.3) as confirmed dead code: it had no
-# application caller (only its own unit test exercised it), and no
-# TVDB_API_KEY has ever been configured in this deployment, so it was
-# never exercised against a real API response either. auto_glossary.py's
-# corpus-mining of a series' own already-completed episodes is the
-# established, validated source of candidate entity names (see its module
-# docstring) and needs no TVDB dependency. See CLAUDE.md's "TheTVDB
-# integration is metadata-only" note for the full reasoning -- revive
-# this (from git history) only alongside a real TVDB_API_KEY and a way to
-# validate its output against real cast data, not speculatively.
+def episode_characters(episode_id: int) -> list[dict]:
+    """Characters TVDB credits to one episode (`name`, `peopleType` such as
+    "Guest Star"/"Actor", `personName`), from /episodes/{id}/extended.
+
+    History: a series-level characters() used to live here and was removed
+    2026-09-23 as dead code with no key to validate it against. This is
+    its revival on the terms that removal set: a real TVDB_API_KEY
+    (configured 2026-09-28) and output validated against real data --
+    cast_metadata.py cross-checks it against TMDB and IMDb, and
+    cast_enrichment.py only acts on a name the series' own subtitles use
+    and NLLB demonstrably mistranslates. Per-episode, not series-level,
+    because the series record carries no characters for many shows
+    (Love Is In The Air: 0) while its episodes do."""
+    data = _cached("episode-extended", str(episode_id),
+                   lambda: _get(f"/episodes/{episode_id}/extended"))
+    if not isinstance(data, dict):
+        return []
+    characters = data.get("characters")
+    return characters if isinstance(characters, list) else []

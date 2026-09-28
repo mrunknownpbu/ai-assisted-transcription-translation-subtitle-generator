@@ -39,13 +39,19 @@ services:
       # old deployment's remote server.
       TRANSLATE_SERVER_URL: ${TRANSLATE_SERVER_URL:-}
       # Optional TheTVDB API v4 credentials (see tvdb_client.py) -- metadata
-      # enrichment only (series title, cast lookup), never a runtime
+      # enrichment only (series title, per-episode characters), never a runtime
       # dependency for translation itself. Left unset by default: every
       # function in tvdb_client.py degrades to None/empty with no key
       # configured, exactly today's production behavior. Set via .env
       # (see .env.example) to enable it.
       TVDB_API_KEY: ${TVDB_API_KEY:-}
       TVDB_API_PIN: ${TVDB_API_PIN:-}
+      # Optional TMDB v3 API key: per-episode cast/guest-star credits for
+      # cast_metadata.py (with TVDB and the key-free IMDb datasets).
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      # Empty = re-check each series' cast metadata every 30 days while the
+      # worker is idle; 0 disables (see cast_enrichment.py).
+      SUBTITLE_AI_CAST_REFRESH_DAYS: ${SUBTITLE_AI_CAST_REFRESH_DAYS:-}
       # Optional job-failure webhook (see alerting.py) -- unset by
       # default, matching today's behavior (silent failure until the UI
       # is checked).
