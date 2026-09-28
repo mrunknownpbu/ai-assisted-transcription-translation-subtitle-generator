@@ -83,3 +83,11 @@ class ReferenceCheckTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LyricTests(unittest.TestCase):
+    def test_quoted_cues_are_lyrics(self):
+        self.assertTrue(ev.is_lyric('"Gün olur, ben de gelirim"'))
+        self.assertTrue(ev.is_lyric('- “Bir yitik düş ülkesi bu”'))
+        self.assertTrue(ev.is_lyric("♪ la la ♪"))
+        self.assertFalse(ev.is_lyric("Selin, gel buraya."))

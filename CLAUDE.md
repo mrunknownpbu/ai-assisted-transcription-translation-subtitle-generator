@@ -174,7 +174,13 @@ rediscover most of them one failure at a time:
   `scripts/bench_translate.py` (speed, which lines change) and
   `scripts/eval_translation.py` (chrF vs the library's human
   `.en.hi.srt` subtitles through the real Workflow B path, with bootstrap
-  CIs and blind A/B sheets). Results live in `benchmark-results/`.
+  CIs and blind A/B sheets), and `scripts/eval_transcription.py` (WER vs
+  the human `<lang>.srt`, dialogue and lyrics scored separately, name
+  recall; it skips references this app wrote itself). Results live in
+  `benchmark-results/`. ASR baseline 2026-09-28 (7 LIITA S01 episodes):
+  dialogue WER 19.8%, name recall 84.9%, lyrics coverage 10.7% -- the
+  top name losses are near-miss confusions (Aydan -> "Aydın" x33,
+  Selin -> "Selim", Melo -> "Melih").
 - **NLLB decode passes `clean_up_tokenization_spaces=True` explicitly**
   (`translate.py::_generate_one_batch`). This tokenizer's own default
   (transformers 4.48) is False unless overridden, which leaked raw

@@ -7,66 +7,68 @@
       "system": "asr:",
       "episodes": {
         "E01": {
-          "wer": 16.4,
+          "wer": 16.7,
           "subst": 5.4,
-          "missed": 6.1,
-          "extra": 4.9,
-          "cer": 10.6
+          "missed": 5.8,
+          "extra": 5.6,
+          "cer": 10.8
         },
         "E02": {
-          "wer": 19.2,
+          "wer": 19.0,
           "subst": 5.6,
-          "missed": 7.7,
-          "extra": 6.0,
-          "cer": 13.4
+          "missed": 6.7,
+          "extra": 6.7,
+          "cer": 13.1
         },
         "E06": {
-          "wer": 15.8,
+          "wer": 16.3,
           "subst": 5.1,
-          "missed": 5.7,
-          "extra": 5.0,
-          "cer": 10.1
+          "missed": 5.2,
+          "extra": 6.0,
+          "cer": 10.5
         },
         "E17": {
-          "wer": 21.5,
+          "wer": 21.7,
           "subst": 6.7,
-          "missed": 7.8,
-          "extra": 6.9,
-          "cer": 14.7
+          "missed": 7.5,
+          "extra": 7.5,
+          "cer": 14.8
         },
         "E22": {
-          "wer": 20.0,
-          "subst": 6.2,
-          "missed": 6.9,
-          "extra": 6.9,
-          "cer": 13.5
+          "wer": 19.1,
+          "subst": 6.3,
+          "missed": 5.2,
+          "extra": 7.7,
+          "cer": 12.5
         },
         "E30": {
-          "wer": 20.6,
-          "subst": 6.0,
-          "missed": 5.9,
-          "extra": 8.6,
-          "cer": 14.2
+          "wer": 20.2,
+          "subst": 6.1,
+          "missed": 5.1,
+          "extra": 9.1,
+          "cer": 13.8
         },
         "E36": {
-          "wer": 24.6,
-          "subst": 7.4,
-          "missed": 7.3,
-          "extra": 9.9,
-          "cer": 17.2
+          "wer": 24.9,
+          "subst": 7.5,
+          "missed": 6.9,
+          "extra": 10.5,
+          "cer": 17.5
         }
       },
       "wer": 19.8,
       "subst": 6.1,
-      "missed": 6.8,
-      "extra": 6.9,
-      "name_recall": 84.6,
+      "missed": 6.0,
+      "extra": 7.6,
+      "name_recall": 84.9,
+      "lyrics_coverage": 10.7,
+      "lyric_words": 1265,
       "names": {
-        "Serkan": "638/685",
-        "Eda": "530/600",
+        "Serkan": "636/682",
+        "Eda": "528/598",
         "Selin": "199/238",
         "Engin": "146/182",
-        "Deniz": "158/180",
+        "Deniz": "158/179",
         "Melo": "122/173",
         "Aydan": "99/161",
         "Can": "107/123",
@@ -78,7 +80,6 @@
         "Seyfi": "57/75",
         "Leyla": "69/72",
         "Pırıl": "39/57",
-        "Yıldız": "40/55",
         "Fikret": "45/46",
         "Kemal": "36/38",
         "Cenk": "36/37",
@@ -88,6 +89,7 @@
         "Fifi": "22/31",
         "Bobby": "16/27",
         "Emre": "23/26",
+        "Yıldız": "23/24",
         "Alptekin": "12/21",
         "Melek": "16/19",
         "Evren": "11/14",
@@ -103,11 +105,6 @@
           "evet",
           "hı",
           16
-        ],
-        [
-          "aman",
-          "ama",
-          14
         ],
         [
           "şeyi",
@@ -130,11 +127,6 @@
           10
         ],
         [
-          "yiter",
-          "biter",
-          8
-        ],
-        [
           "böyle",
           "öyle",
           8
@@ -145,14 +137,14 @@
           8
         ],
         [
-          "evet",
-          "ha",
+          "aman",
+          "ama",
           7
         ],
         [
-          "gözlerimde",
-          "gözlerinde",
-          6
+          "evet",
+          "ha",
+          7
         ],
         [
           "serkan",
@@ -218,51 +210,61 @@
           "dedin",
           "dedim",
           5
+        ],
+        [
+          "carla",
+          "karla",
+          5
+        ],
+        [
+          "yoo",
+          "yok",
+          5
         ]
       ],
       "worst_windows": [
         [
-          "E02@121min",
-          36,
-          36
-        ],
-        [
-          "E02@140min",
-          49,
-          49
-        ],
-        [
-          "E02@141min",
-          27,
-          27
-        ],
-        [
-          "E22@117min",
-          38,
-          38
-        ],
-        [
-          "E22@137min",
-          66,
-          66
-        ],
-        [
-          "E30@133min",
-          20,
-          20
-        ],
-        [
-          "E30@134min",
-          51,
-          51
-        ],
-        [
           "E36@4min",
           14,
           14
+        ],
+        [
+          "E30@31min",
+          8,
+          10
+        ],
+        [
+          "E06@100min",
+          46,
+          67
+        ],
+        [
+          "E02@70min",
+          12,
+          18
+        ],
+        [
+          "E06@92min",
+          20,
+          30
+        ],
+        [
+          "E06@124min",
+          8,
+          12
+        ],
+        [
+          "E17@42min",
+          31,
+          47
+        ],
+        [
+          "E36@13min",
+          20,
+          31
         ]
       ],
-      "seconds": 129.6
+      "seconds": 129.9
     }
   ]
 }

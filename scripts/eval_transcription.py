@@ -8,7 +8,9 @@ hallucination suppression production applies -- is compared with it in
 60-second windows (by midpoint, so small timing differences don't count),
 and reports:
 
-* WER, split into wrong words / missed words / extra words, plus CER;
+* WER on dialogue, split into wrong / missed / extra words, plus CER;
+* lyrics coverage: quoted song lyrics are scored separately, because
+  Whisper mostly skips singing and they'd swamp the dialogue numbers;
 * name recall: of the character names the human subtitle contains (the
   series glossary's protected names), how many the transcript also has --
   the errors that matter most downstream ("Serkan" -> "Sarkan");
@@ -314,6 +316,11 @@ def series_names(season: Path, glossary_dir: str) -> dict[str, str]:
     return names
 
 
+def is_lyric(text: str) -> bool:
+    t = text.strip().lstrip("-– ").strip()
+    return t[:1] in ('"', "“", "♪", "♫")
+
+
 def parse_episodes(spec: str) -> list[int]:
     out: list[int] = []
     for part in spec.split(","):
@@ -347,8 +354,15 @@ def main() -> int:
         if app_written(ref):
             print(f"E{number:02d}: skipped ({ref.name} was written by this app, not a person)")
             continue
+        cues = parse(ref)
+        # Song lyrics are quoted in these subtitles ("Gün olur, ben de gelirim").
+        # Whisper mostly skips singing; scored with dialogue they made the
+        # theme-song minutes 100% "missed" and hid the dialogue error rate,
+        # so they're scored on their own (lyrics coverage).
+        dialogue = [c for c in cues if not is_lyric(c.text)]
+        lyric_times = [((c.start + c.end) / 2, c.text) for c in cues if is_lyric(c.text)]
         episodes.append((f"E{number:02d}", video, ref,
-                         windows(parse(ref), lambda c: (c.start + c.end) / 2, lambda c: c.text)))
+                         windows(dialogue, lambda c: (c.start + c.end) / 2, lambda c: c.text), lyric_times))
 
     results = []
     for spec in args.system:
@@ -361,7 +375,8 @@ def main() -> int:
         agg_subs, agg_ref, agg_hit = collections.Counter(), collections.Counter(), collections.Counter()
         tot = collections.Counter()
         t0 = time.time()
-        for name, video, ref_path, ref_w in episodes:
+        lyric_words = lyric_hit = 0
+        for name, video, ref_path, ref_w, lyric_times in episodes:
             if kind == "cache":
                 data = cached_transcript(video)
                 if data is None:
@@ -370,7 +385,16 @@ def main() -> int:
             else:
                 work = Path(args.work) / hashlib.sha1(rest.encode()).hexdigest()[:10]
                 data = run_asr(video, overrides, work, None)
-            hyp_w = windows(kept_segments(data), lambda s: (s.start + s.end) / 2, segment_text)
+            segs = kept_segments(data)
+            lyric_windows = {int(t // WINDOW) for t, _ in lyric_times}
+            # Transcript text inside lyric-only minutes belongs to the lyrics.
+            hyp_all = windows(segs, lambda s: (s.start + s.end) / 2, segment_text)
+            hyp_w = {k: v for k, v in hyp_all.items() if k in ref_w or k not in lyric_windows}
+            for k in lyric_windows:
+                ref_l = [w for t, txt in lyric_times if int(t // WINDOW) == k for w in normalise(txt)]
+                sub_l, del_l, _, _ = align(ref_l, hyp_all.get(k, []) if k not in ref_w else [])
+                lyric_words += len(ref_l)
+                lyric_hit += len(ref_l) - sub_l - del_l
             r = score(ref_w, hyp_w, names)
             if r["wer"] < 5:
                 print(f"{spec} {name}: WER {r['wer']:.1f}% -- reference looks machine-made; skipped")
@@ -389,6 +413,8 @@ def main() -> int:
                "subst": round(100 * tot["s"] / n, 1), "missed": round(100 * tot["d"] / n, 1),
                "extra": round(100 * tot["i"] / n, 1),
                "name_recall": round(100 * sum(agg_hit.values()) / (sum(agg_ref.values()) or 1), 1),
+               "lyrics_coverage": round(100 * lyric_hit / lyric_words, 1) if lyric_words else None,
+               "lyric_words": lyric_words,
                "names": {k: f"{agg_hit[k]}/{v}" for k, v in agg_ref.most_common()},
                "top_substitutions": [[a, b, c] for (a, b), c in agg_subs.most_common(args.top)],
                "worst_windows": sorted(([f"{e}@{k}min", v[0], v[1]] for (e, k), v in all_windows.items()
@@ -396,7 +422,8 @@ def main() -> int:
                "seconds": round(time.time() - t0, 1), "_windows": all_windows}
         results.append(res)
         print(f"\n== {spec}: WER {res['wer']}% (wrong {res['subst']}, missed {res['missed']}, "
-              f"extra {res['extra']}) | name recall {res['name_recall']}% | {len(per_episode)} episodes")
+              f"extra {res['extra']}) | name recall {res['name_recall']}% | lyrics coverage "
+              f"{res['lyrics_coverage']}% of {res['lyric_words']} words | {len(per_episode)} episodes")
         for ep, v in per_episode.items():
             print(f"   {ep}: WER {v['wer']}%  CER {v['cer']}%")
         print("   names (found/in reference):", ", ".join(f"{k} {v}" for k, v in list(res["names"].items())[:12]))

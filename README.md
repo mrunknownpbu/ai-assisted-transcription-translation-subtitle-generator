@@ -470,6 +470,11 @@ it again on a new host.
   human English subtitles (`.en.hi.srt`) kept beside many episodes, using
   the real Workflow B path and corpus chrF with bootstrap intervals. It can
   also write a blind A/B review sheet.
+- `scripts/eval_transcription.py` scores transcription against the same
+  human subtitles. It reports word error rate on dialogue (wrong, missed
+  and extra words), character-name recall, and song-lyric coverage
+  separately. It can re-score cached transcripts instantly, or run Whisper
+  with changed settings.
 
 Results are kept in `benchmark-results/`.
 
