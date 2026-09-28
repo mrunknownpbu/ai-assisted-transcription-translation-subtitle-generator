@@ -615,3 +615,35 @@ normally, then retried in fixed word chunks (`_chunk`), preferring the
 chunked candidate whenever entity preservation or length-ratio checks
 indicate superior content preservation. Covered by unit tests in
 `tests/test_translate.py` and `tests/test_glossary.py`.
+
+## VAD-merged singing+dialogue: recovered, not just flagged (2026-09-28)
+
+Real user report, not a hypothesis: Hammer Session! S01E02, 0:20-2:14 (the
+OP), contains both singing AND spoken dialogue. Production transcribed
+NONE of it -- zero segments in that 90-second span, not even suppressed
+ones. Root cause, confirmed by isolating that exact window
+(`ffmpeg -ss -t` clip) and re-transcribing it directly: with VAD on
+(production default), faster-whisper's Silero VAD never sees a silence
+gap long enough to clear `min_silence_duration_ms` across that span (the
+song bridges every pause between spoken lines), so it hands the decoder
+one continuous ~95-second "speech island." A single uninterrupted span
+that long decodes very poorly -- one segment, single-digit characters of
+text for the whole span. With VAD off on the same clip, 4 segments came
+back spread across the same span, each with real content.
+
+Fix (`asr.recover_vad_merged_segments`, called from `asr.transcribe`
+whenever `vad_filter` is on): any decoded segment >= `VAD_MERGE_MIN_DURATION`
+(12s) with <= `VAD_MERGE_MAX_DENSITY` (2.5) characters/second of text is
+re-decoded in isolation with VAD off (`condition_on_previous_text=False`,
+same as the main pass); the replacement is kept only if it holds MORE
+text than the original, so a legitimately sparse-but-correct segment
+(long silence, one trailing word) is never made worse. This is a
+correctness recovery, not a style change -- normal dense dialogue never
+matches the shape (measured: a real 20-second monologue segment runs
+tens of chars/second, an order of magnitude above the threshold) and is
+never touched. Part of the transcript cache key
+(`AsrConfig.vad_merge_recovery`, `_model_info`), and `PIPELINE_VERSION`
+bumped to `2.0.2` to invalidate every cached transcript made before this
+existed -- cached transcripts hide this bug identically to the
+zero-duration-word bug above; they must be regenerated, not reused.
+Unit tests: `tests/test_vad_merge_recovery.py`.

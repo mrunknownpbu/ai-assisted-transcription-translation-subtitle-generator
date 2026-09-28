@@ -70,7 +70,14 @@ from pathlib import Path
 from media import MediaError
 from transcript import CanonicalTranscript, ModelInfo, Segment, Word
 
-PIPELINE_VERSION = "2.0.1"
+PIPELINE_VERSION = "2.0.2"
+
+# A VAD-merged "speech island" this long or longer, holding this little
+# text or less per second, is treated as pathological -- see
+# recover_vad_merged_segments() below for the real production case that
+# motivates this.
+VAD_MERGE_MIN_DURATION = 12.0
+VAD_MERGE_MAX_DENSITY = 2.5
 
 # A word's real duration is never allowed to be zero -- see
 # segments_from_raw()'s own comment for the real (rare) faster-whisper
@@ -191,6 +198,10 @@ class AsrConfig:
     # a transcript made under one prompt (or none) is never silently
     # reused under another.
     initial_prompt: str | None = None
+    # See recover_vad_merged_segments() -- always on for VAD runs; part
+    # of the cache key so a transcript made before this existed is never
+    # silently reused as if it had already been recovered.
+    vad_merge_recovery: bool = True
 
 
 def vad_parameters(config: "AsrConfig") -> dict | None:
@@ -213,7 +224,8 @@ def _model_info(config: AsrConfig, model_version: str) -> ModelInfo:
                                 "vad_parameters": vad_parameters(config),
                                 "compute_type": config.compute_type,
                                 "hotwords": config.hotwords,
-                                "initial_prompt": config.initial_prompt})
+                                "initial_prompt": config.initial_prompt,
+                                "vad_merge_recovery": config.vad_merge_recovery and config.vad_filter})
 
 
 def segments_from_raw(raw_segments: list[dict], language: str = "") -> list[Segment]:
@@ -260,6 +272,63 @@ def segments_from_raw(raw_segments: list[dict], language: str = "") -> list[Segm
                            no_speech_prob=seg.get("no_speech_prob", 0.0),
                            compression_ratio=seg.get("compression_ratio", 0.0),
                            language=language))
+    return out
+
+
+def _segment_text_density(seg: dict) -> tuple[float, float]:
+    """(duration, chars-per-second) for a raw faster-whisper segment dict,
+    using the word tokens rather than any already-stripped/joined text."""
+    duration = seg["end"] - seg["start"]
+    text_len = sum(len(w.get("word", "")) for w in seg.get("words", []))
+    density = text_len / duration if duration > 0 else float("inf")
+    return duration, density
+
+
+def recover_vad_merged_segments(raw: list[dict], wav_path: str, model, config: "AsrConfig",
+                                language: str | None) -> list[dict]:
+    """faster-whisper's VAD can merge a long stretch of singing with
+    interleaved spoken dialogue into one continuous "speech island" (no
+    internal silence gap ever clears the VAD's min_silence threshold),
+    and then the decoder produces almost nothing for it. Real case:
+    Hammer Session! S01E02 (2026-09-28), a 90-second window of an opening
+    song with dialogue over it produced ZERO segments in production;
+    isolated re-transcription of that exact window with VAD OFF produced
+    4 segments with real text spread across the whole span, while VAD ON
+    on the same isolated window produced one 95s segment holding only 36
+    characters -- the same pathological shape, just short of dropping
+    the window's content entirely. Any segment matching that shape
+    (VAD_MERGE_MIN_DURATION+ seconds, VAD_MERGE_MAX_DENSITY or fewer
+    chars/sec) is re-decoded in isolation with VAD off; the replacement
+    is kept only if it recovers more text than the original held, so a
+    genuinely sparse-but-correct segment (e.g. a long silence with one
+    trailing word) is never made worse."""
+    out = []
+    for seg in raw:
+        duration, density = _segment_text_density(seg)
+        if duration < VAD_MERGE_MIN_DURATION or density >= VAD_MERGE_MAX_DENSITY:
+            out.append(seg)
+            continue
+        with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
+            _extract_wav_window(wav_path, seg["start"], duration, tmp.name)
+            retry_iter, _ = model.transcribe(
+                tmp.name, beam_size=config.beam_size, temperature=list(config.temperature),
+                compression_ratio_threshold=config.compression_ratio_threshold,
+                log_prob_threshold=config.logprob_threshold,
+                no_speech_threshold=config.no_speech_threshold,
+                condition_on_previous_text=False, vad_filter=False,
+                word_timestamps=config.word_timestamps, language=language,
+                hotwords=config.hotwords or None)
+            retried = [{
+                "start": rseg.start + seg["start"], "end": rseg.end + seg["start"],
+                "avg_logprob": rseg.avg_logprob, "no_speech_prob": rseg.no_speech_prob,
+                "compression_ratio": rseg.compression_ratio,
+                "words": [{"word": w.word, "start": w.start + seg["start"],
+                          "end": w.end + seg["start"], "probability": w.probability}
+                         for w in (rseg.words or [])],
+            } for rseg in retry_iter]
+        original_text_len = sum(len(w.get("word", "")) for w in seg.get("words", []))
+        retried_text_len = sum(len(w["word"]) for r in retried for w in r["words"])
+        out.extend(retried if retried_text_len > original_text_len else [seg])
     return out
 
 
@@ -463,6 +532,8 @@ def transcribe(wav_path: str, media_path: str, media_hash: str, audio_stream_ind
                     on_progress(seg.end, total_duration, len(raw))
             if on_progress and raw:
                 on_progress(raw[-1]["end"], total_duration, len(raw))
+            if config.vad_merge_recovery and config.vad_filter:
+                raw = recover_vad_merged_segments(raw, wav_path, model, config, effective_language)
             segments = segments_from_raw(raw, language=info.language)
             model_version = getattr(model, "model_size_or_path", config.model_name)
             # Once an explicit language is passed to model.transcribe()
