@@ -59,7 +59,11 @@ REQUEST_TIMEOUT = 15
 # the dialogue uses.
 _PREFIX_TITLES = {"chef", "dr", "dr.", "doctor", "mr", "mr.", "mrs", "mrs.", "ms", "ms.", "miss",
                   "prof", "prof.", "professor", "officer", "detective", "captain", "uncle", "aunt",
-                  "grandma", "grandpa", "young", "little", "old"}
+                  "grandma", "grandpa", "young", "little", "old",
+                  # Turkish titles before a name (TVmaze: "Şef Alexander Zucco"
+                  # -- protecting "Şef", "chef/boss", would break the word).
+                  "şef", "doktor", "hemşire", "komiser", "avukat", "müdür", "bay", "bayan",
+                  "sayın", "hoca", "prens", "prenses", "kaptan", "profesör", "öğretmen"}
 _SUFFIX_TITLES = {"bey", "hanım", "hanim", "abla", "abi", "ağabey", "teyze", "amca", "hoca", "efendi"}
 _NOT_CHARACTERS = {"", "self", "himself", "herself", "themselves", "narrator", "voice", "guest",
                    "host", "various", "unknown", "extra", "additional voices"}

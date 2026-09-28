@@ -25,6 +25,8 @@ class ParseCharacterTests(unittest.TestCase):
         self.assertEqual(cm.parse_character('Melek Yücel "Melo"'), ("Melek", "Melek Yücel", ["Melo"]))
         self.assertEqual(cm.parse_character("Chef Alexander Zucco"), ("Alexander", "Alexander Zucco", []))
         self.assertEqual(cm.parse_character("Fikret Bey"), ("Fikret", "Fikret", []))
+        # TVmaze's Turkish title (live data, 2026-09-28): "Şef" is not a name.
+        self.assertEqual(cm.parse_character("Şef Alexander Zucco"), ("Alexander", "Alexander Zucco", []))
         self.assertEqual(cm.parse_character("Eda (voice)"), ("Eda", "Eda", []))
         for raw in ("", None, "Self", "Himself", "Narrator (voice)"):
             self.assertIsNone(cm.parse_character(raw))
