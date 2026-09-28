@@ -45,7 +45,13 @@ API (`8099` in `compose.yml`):
   parameters. A video that fails to queue stays checked instead of being
   silently dropped.
 - **Series** (`/series`) — per-series glossary: promote auto-mined name
-  candidates to protected entities, edit or delete them.
+  candidates to protected entities, edit or delete them. A **Cast
+  metadata** panel shows which characters TMDB, TheTVDB and IMDb credit,
+  and which of them were protected automatically. A name is protected
+  only when the series' own subtitles use it as a name and the
+  translation engine mistranslates it unprotected, and then only in the
+  episodes it's credited in. For example, "Deniz" is a character in some
+  episodes and the word for "sea" in others.
 - **Translate Subtitle** (`/translate`) — Workflow B. **Batch translate**
   mode translates every episode in a folder that already has an
   original-language subtitle beside it (`<stem>.<lang>.srt`) and no English
@@ -412,7 +418,9 @@ Cleanup problems are logged and never change a job's result.
 | `SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS` | `24` | How long a failed job's scratch directory is kept (see below). |
 | `SUBTITLE_AI_ASR_HOTWORDS` | off | `on` feeds glossary names to Whisper as hotwords (see "ASR decoding defaults"). |
 | `FAILURE_WEBHOOK_URL` | unset | A plain JSON POST is sent to this URL when a job fails (works with anything that accepts one, or a relay in front of it). |
-| `TVDB_API_KEY`, `TVDB_API_PIN` | unset | Optional TheTVDB series-title enrichment; the app never depends on it. |
+| `TVDB_API_KEY`, `TVDB_API_PIN` | unset | Optional TheTVDB access: series titles and per-episode characters. The app never depends on it. |
+| `TMDB_API_KEY` | unset | Optional TMDB access: per-episode cast and guest stars. With TVDB and IMDb's free datasets, this feeds automatic name protection (below). |
+| `SUBTITLE_AI_CAST_REFRESH_DAYS` | `30` | How often the idle worker re-checks each series' cast metadata. `0` turns automatic checks off. |
 | `SUBTITLE_AI_SAMPLE_MODEL` | `small` | Whisper model the library's "Analyze" button uses. |
 | `SUBTITLE_AI_VRAM_MARGIN_GB` | `3.2` | Free VRAM the pre-flight check waits for before loading a large model. Must be a number. |
 | `SUBTITLE_AI_ORPHAN_CONTEXT_PADDING` | on | `off`, `0`, `false` or `no` disables the isolated-word grounding pass. |

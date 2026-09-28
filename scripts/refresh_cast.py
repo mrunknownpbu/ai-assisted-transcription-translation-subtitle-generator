@@ -6,7 +6,7 @@ on its own every SUBTITLE_AI_CAST_REFRESH_DAYS while idle.
 Run inside the app container (GPU for the probe, /glossary, /cache):
 
     docker cp scripts/refresh_cast.py subtitle-ai:/tmp/
-    docker exec -w /app subtitle-ai python /tmp/refresh_cast.py \\
+    docker exec -e PYTHONPATH=/app subtitle-ai python /tmp/refresh_cast.py \\
         "/data/media/drama/turkish/Love Is In The Air (2020) {tvdb-383383}" [--dry-run]
 
 Prints every candidate with its decision; --dry-run writes nothing.

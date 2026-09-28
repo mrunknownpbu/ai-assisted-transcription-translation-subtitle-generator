@@ -297,23 +297,43 @@ excluded regardless of translation quality, on recurrence alone.
 
 `auto_glossary.py` mines a series' own already-completed episodes for
 candidate names automatically, but only feeds ASR hotwords, never
-translation protection directly -- promoting a mined name to `protected:
-true` is always a deliberate human/session decision, never automatic.
+translation protection directly -- promoting a MINED name to `protected:
+true` is always a deliberate human/session decision. The one automatic
+path is `cast_enrichment.py` (next section), which enforces this same bar
+in code -- credited by cast metadata, recurring as a name, and a measured
+mistranslation -- and scopes what it protects to credited episodes.
 
-## TheTVDB integration is metadata-only, unused for entities
+## Cast metadata: TVDB + TMDB + IMDb feed name protection (since 2026-09-28)
 
-`tvdb_client.py` exists and works (series title enrichment is wired into
-`glossary_profile.load_profile()`). Its `characters()` function (cast-
-list fetching) was removed 2026-09-23 (IMPROVEMENT_PLAN.md 3.3) as
-confirmed dead code -- no application caller, and no `TVDB_API_KEY` has
-ever been configured in this deployment, so it was never exercised
-against a real API response either. Don't assume TVDB is a source of
-entity/character data for the glossary; `auto_glossary.py`'s corpus-
-mining is the only thing that actually populates candidate names today,
-and it works from the show's own real dialogue, not billing/cast
-metadata. If cast-list enrichment is wanted again, it needs a real
-`TVDB_API_KEY` and a way to validate output against real data before
-merging, not a speculative revival.
+`cast_metadata.py` pulls per-episode character credits from TMDB
+(`TMDB_API_KEY`), TheTVDB (`tvdb_client.episode_characters()`,
+`TVDB_API_KEY`), IMDb's free non-commercial datasets (no key -- the
+official IMDb API is paid and scraping imdb.com is against its terms) and
+the series' `tvshow.nfo`, merged on the diacritic-folded first name
+(services disagree on surnames). `cast_enrichment.py` then applies the
+evidence bar below automatically: a credited name is protected only if the
+series' own source subtitles use it *as a name* and the production engine
+demonstrably loses it unprotected. What passes is written as a
+`source: metadata`, `case_sensitive: true`, episode-scoped entry with its
+evidence and committed to the glossary repo; entries a person wrote are
+never edited (the report only flags them). The worker re-checks each
+series every `SUBTITLE_AI_CAST_REFRESH_DAYS` (30) while idle;
+`scripts/refresh_cast.py` runs it on demand. First run (Love Is In The
+Air): 8 names protected, each with real mistranslations behind it (Kiraz ->
+"Cherry" 30/30 lines, Balca -> "The hammer", Melek -> "The angel", Sevda ->
+"Love"), while names that translate fine unprotected (Ayfer, Semiha, ...)
+were left alone.
+
+Two glossary features exist because of this and apply to any entry:
+`episodes: ["S01E29-E40", ...]` (the job's SxxEyy decides; an unknown
+episode gets no scoped names) and `case_sensitive: true`. Deniz is the
+reference case: "sea" in S01E01-E28, a character from E29 -- see the
+comment on its entry in `love-is-in-the-air.yaml`.
+
+Known limit: a capitalised common word inside a scoped name's episodes is
+still protected (e.g. the pun "O yanındaki Melek değil, şeytan", angel vs
+the character Melek). The evidence gate keeps such names few; don't widen
+`name_shaped()` to count sentence-initial capitals as names.
 
 ## Readability vs. content-completeness: an accepted, disclosed tradeoff
 
