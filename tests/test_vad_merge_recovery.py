@@ -1,23 +1,29 @@
-"""recover_vad_merged_segments (asr.py): a real production bug (Hammer
-Session! S01E02, 2026-09-28) -- a 90-second window of song + interleaved
-spoken dialogue produced ZERO decoded segments in full-episode
-production. Root cause: faster-whisper's VAD treats the whole span as
-one continuous "speech island", and word_timestamps=True's alignment
-pass then collapses on that unbroken span -- keeps the first ~5s, drops
-the rest, VAD on or off, full-episode or isolated (confirmed directly by
-decoding the isolated window both ways). Only isolating the gap AND
-decoding it with VAD off recovers the content. This pass finds any gap
-this long between decoded segments and re-decodes it in isolation with
-VAD off, splicing back whatever (if anything) comes out; a genuinely
-silent gap still relies on the existing hallucination.py gate
-downstream, same as any other segment."""
+"""recover_vad_merged_segments (asr.py): faster-whisper's VAD, over a
+whole episode, can treat a long stretch (e.g. a song bridging every
+pause between spoken lines) as one continuous "speech island", and
+word_timestamps=True (required throughout this pipeline) then collapses
+its own alignment on that span. Two real production shapes, both
+confirmed by decoding the isolated span with VAD kept ON (reproduces the
+exact same collapse -- it's the alignment pass, not full-episode
+context) versus VAD OFF (recovers normal segments with real text):
+
+* a GAP: no segment at all (Hammer Session! S01E02, 2026-09-28, a
+  90-second window of song + dialogue, ZERO segments in production).
+* a SPARSE segment: one segment nominally covers the span but holds
+  almost no text (Hammer Session! S01E01, 2026-09-29, a 38.9s segment
+  holding ~14 characters where a human subtitle has a full line).
+
+Both are re-decoded in isolation with VAD off; a gap's result is always
+spliced in (even empty, for a genuinely silent gap -- still gated by the
+existing hallucination.py downstream, same as any other segment), a
+sparse segment's result replaces it only if it recovers more text."""
 
 from __future__ import annotations
 
 import unittest
 from unittest.mock import patch
 
-from asr import AsrConfig, GAP_MIN_DURATION, recover_vad_merged_segments
+from asr import AsrConfig, GAP_MIN_DURATION, SPARSE_MAX_DENSITY, recover_vad_merged_segments
 
 
 def _raw_segment(start, end, text):
@@ -28,16 +34,17 @@ def _raw_segment(start, end, text):
 
 
 class _RetryModel:
-    """Records the retry-transcribe call and returns canned segments,
-    relative to the clip (i.e. starting near 0), the way faster-whisper
-    would for an isolated sub-window."""
+    """Records every retry-transcribe call; `call_responses` gives one
+    "words per recovered segment" list per expected call, popped in
+    order (last one reused if there are more calls than responses)."""
 
-    def __init__(self, retried_words_per_segment):
+    def __init__(self, call_responses):
         self.calls = []
-        self._retried_words_per_segment = retried_words_per_segment
+        self._responses = list(call_responses)
 
     def transcribe(self, wav_path, **kwargs):
         self.calls.append(kwargs)
+        words_per_segment = self._responses.pop(0) if self._responses else []
 
         class _W:
             def __init__(self, word, start, end):
@@ -51,15 +58,15 @@ class _RetryModel:
 
         segs = []
         t = 0.0
-        for words in self._retried_words_per_segment:
+        for words in words_per_segment:
             ws = [_W(" " + w, t + i, t + i + 0.5) for i, w in enumerate(words)]
             segs.append(_Seg(t, t + len(words) + 0.5, ws))
             t += len(words) + 1.0
         return iter(segs), object()
 
 
-class RecoverVadMergedSegmentsTests(unittest.TestCase):
-    def test_no_gap_means_no_retry_call_at_all(self):
+class GapRecoveryTests(unittest.TestCase):
+    def test_no_gap_and_no_sparse_segment_means_no_retry_call_at_all(self):
         raw = [_raw_segment(0.0, 5.0, "a"), _raw_segment(6.0, 10.0, "b")]
         model = _RetryModel([])
         with patch("asr._extract_wav_window"):
@@ -76,10 +83,10 @@ class RecoverVadMergedSegmentsTests(unittest.TestCase):
         self.assertEqual(model.calls, [])
 
     def test_real_bug_shape_zero_segments_across_a_long_gap_is_recovered(self):
-        # The confirmed real production shape: nothing at all between
-        # 10.2s and 100.1s, not one sparse segment.
+        # The confirmed real production shape (S01E02): nothing at all
+        # between 10.2s and 100.1s, not one sparse segment.
         raw = [_raw_segment(0.0, 10.2, "a"), _raw_segment(100.1, 105.0, "b")]
-        model = _RetryModel([["ichi", "ni", "san"], ["shi", "go"]])
+        model = _RetryModel([[["ichi", "ni", "san"], ["shi", "go"]]])
         with patch("asr._extract_wav_window"):
             out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
         self.assertEqual(len(model.calls), 1)
@@ -99,14 +106,14 @@ class RecoverVadMergedSegmentsTests(unittest.TestCase):
 
     def test_genuinely_silent_gap_recovers_nothing_and_stays_a_gap(self):
         raw = [_raw_segment(0.0, 10.2, "a"), _raw_segment(100.1, 105.0, "b")]
-        model = _RetryModel([])  # isolated re-decode finds nothing either
+        model = _RetryModel([[]])  # isolated re-decode finds nothing either
         with patch("asr._extract_wav_window"):
             out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
         self.assertEqual(out, raw)
 
     def test_trailing_gap_after_the_last_segment_uses_total_duration(self):
         raw = [_raw_segment(0.0, 5.0, "a")]
-        model = _RetryModel([["word"]])
+        model = _RetryModel([[["word"]]])
         with patch("asr._extract_wav_window"):
             out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja",
                                               total_duration=30.0)
@@ -116,12 +123,71 @@ class RecoverVadMergedSegmentsTests(unittest.TestCase):
 
     def test_trailing_gap_skipped_when_total_duration_unknown(self):
         raw = [_raw_segment(0.0, 5.0, "a")]
-        model = _RetryModel([["word"]])
+        model = _RetryModel([[["word"]]])
         with patch("asr._extract_wav_window"):
             out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja",
                                               total_duration=None)
         self.assertEqual(out, raw)
         self.assertEqual(model.calls, [])
+
+
+class SparseSegmentRecoveryTests(unittest.TestCase):
+    def test_short_segment_is_never_touched_regardless_of_density(self):
+        raw = [_raw_segment(0.0, 5.0, "a")]  # below GAP_MIN_DURATION
+        model = _RetryModel([])
+        with patch("asr._extract_wav_window"):
+            out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
+        self.assertEqual(out, raw)
+        self.assertEqual(model.calls, [])
+
+    def test_long_dense_segment_is_never_touched(self):
+        # Plenty of text for its length -- a real, correctly-decoded
+        # monologue, not a collapsed span.
+        dense_text = " ".join(f"kotoba{i}" for i in range(60))
+        raw = [_raw_segment(0.0, 20.0, dense_text)]
+        model = _RetryModel([])
+        with patch("asr._extract_wav_window"):
+            out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
+        self.assertEqual(out, raw)
+        self.assertEqual(model.calls, [])
+
+    def test_real_bug_shape_long_sparse_segment_is_replaced(self):
+        # The confirmed real production shape (S01E01): one 38.9s
+        # segment holding ~14 characters, where isolated VAD-off decoding
+        # recovers 6 real segments across the same span.
+        raw = [_raw_segment(11.6, 50.5, "a")]  # 1 char over 38.9s, well under density
+        model = _RetryModel([[["atsui", "na"], ["dayo"]]])
+        with patch("asr._extract_wav_window"):
+            out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
+        self.assertEqual(len(model.calls), 1)
+        self.assertFalse(model.calls[0]["vad_filter"])
+        self.assertEqual(len(out), 2)  # the original sparse segment is gone, replaced
+        self.assertTrue(all(11.6 <= s["start"] for s in out))
+
+    def test_sparse_segment_kept_when_retry_recovers_no_more_text(self):
+        raw = [_raw_segment(0.0, GAP_MIN_DURATION + 5, "a")]
+        model = _RetryModel([[]])  # retry finds nothing better
+        with patch("asr._extract_wav_window"):
+            out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
+        self.assertEqual(out, raw)
+
+    def test_just_under_the_density_threshold_is_sparse(self):
+        duration = GAP_MIN_DURATION
+        text = "x" * int(duration * SPARSE_MAX_DENSITY * 0.5)
+        raw = [_raw_segment(0.0, duration, text)]
+        model = _RetryModel([[["y"]]])
+        with patch("asr._extract_wav_window"):
+            recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
+        self.assertEqual(len(model.calls), 1)
+
+    def test_well_above_the_density_threshold_is_not_sparse(self):
+        duration = GAP_MIN_DURATION
+        text = "x" * int(duration * SPARSE_MAX_DENSITY * 4)
+        raw = [_raw_segment(0.0, duration, text)]
+        model = _RetryModel([])
+        with patch("asr._extract_wav_window"):
+            recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
+        self.assertEqual(len(model.calls), 0)
 
 
 class VadMergeRecoveryIsRecordedInModelInfoTests(unittest.TestCase):

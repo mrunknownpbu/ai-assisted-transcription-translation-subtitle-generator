@@ -670,3 +670,38 @@ measure the FIX against the real failing case before declaring it done
 and moving to the next step, not just the plausible mechanism -- and
 remember to bump the cache key every time the fix's own logic changes,
 not just once per feature.
+
+**4th attempt (2.0.5, 2026-09-29): the collapse also has a second
+shape.** Built `scripts/eval_against_human_en_reference.py` to check gap
+coverage against a season's human `.en.hi.srt` systematically instead of
+by hand, and ran it on S01E01 (756 human cues): 18.8% had zero
+overlapping source-language coverage -- far more than one OP song
+explains. Investigating the worst offenders found the same
+`word_timestamps=True` alignment collapse can also leave ONE segment
+nominally covering the span instead of no segment at all: a real
+11.6-50.5s (38.9s) segment holding only ~14 characters, where a human
+subtitle has a full line ("Hot, isn't it? It's so hot!..."). Confirmed
+the same way as the gap case -- VAD kept ON for an isolated re-decode of
+just that span reproduces the identical collapse; VAD off recovers 6
+normal segments with real text. `_find_long_gaps` alone never sees this
+shape (there IS a segment there). Added `_is_long_and_sparse` (same
+`GAP_MIN_DURATION`, new `SPARSE_MAX_DENSITY` = 2.5 chars/sec) alongside
+gap detection in `recover_vad_merged_segments`; a sparse segment's
+VAD-off retry replaces it only if it recovers MORE text, same
+keep-if-not-worse rule as before. Verified on the real case: gap-coverage
+rate on S01E01 dropped 18.8% -> 13.4% (142 -> 101 of 756 human cues),
+and the "Hot, isn't it" line specifically is now covered.
+`PIPELINE_VERSION` bumped again (2.0.5). The remaining 13.4% still needs
+its own investigation (a spot check found more genuine misses plus at
+least one repetitive-hallucination case Whisper's own decoder-native
+mitigation and `hallucination.py` both missed -- "Oh, oh, my God, oh,
+Oh, oh my God, Oh, my God." replacing real dialogue -- not yet
+addressed). Separately, `eval_against_human_en_reference.py` also scores
+the production `.en.srt` against the human reference with `eval_translation.py`'s
+chrF/`pair_cues`: on S01E01 this reads low (~22-23) but a manual check of
+the actual worst-scoring pairs shows it is dominated by a cue-granularity/
+timing-pairing mismatch (our cues split mid-sentence far more than a
+human editor would, so the time-overlap pairing grabs the wrong fragment
+against the wrong human cue) rather than genuinely bad translation --
+the best-scoring pairs, where timing does line up, are close paraphrases.
+Not yet investigated further.
