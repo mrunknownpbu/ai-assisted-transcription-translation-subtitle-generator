@@ -141,6 +141,15 @@ def wrap_lines(text: str, max_line_chars: int = MAX_LINE_CHARS) -> list[str]:
     if len(text) <= max_line_chars:
         return [text]
     words = text.split()
+    if len(words) < 2:
+        # A single unspaced token longer than max_line_chars (e.g. a URL)
+        # can't be cut anywhere -- return it as one over-length line
+        # rather than crash (same latent bug found and fixed in
+        # text_segmentation.py's ported copy, 2026-09-28; this original
+        # never happened to hit it on real English output, but the code
+        # shape is identical, so it gets the same guard). Same pattern as
+        # split_long_piece()'s own len(words) < 2 guard above.
+        return [text]
     best = None
     for i in range(1, len(words)):
         a, b = " ".join(words[:i]), " ".join(words[i:])

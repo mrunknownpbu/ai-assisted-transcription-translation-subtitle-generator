@@ -87,6 +87,14 @@ class WrapLinesTests(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         self.assertTrue(all(len(l) <= 42 for l in lines))
 
+    def test_single_unspaced_token_longer_than_max_returns_it_unsplit(self):
+        # Real production crash this fixes (2026-09-28, Hammer Session!
+        # S01E01): "ValueError: min() iterable argument is empty" when
+        # text.split() produces 0 or 1 words -- range(1, len(words)) is
+        # then empty, and the old code called min() on it unconditionally.
+        text = "a" * 60
+        self.assertEqual(wrap_lines(text), [text])
+
 
 class SegmentEndToEndTests(unittest.TestCase):
     def test_eda_regression_case_produces_readable_cues(self):

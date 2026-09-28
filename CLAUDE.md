@@ -15,7 +15,7 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-28: 1063 passing, 0 failures (plus 89 frontend
+Baseline as of 2026-09-28: 1065 passing, 0 failures (plus 89 frontend
 tests -- `cd frontend && npm test -- --run`; up from 939 after the
 natural-dialogue plan's five steps -- see the segmentation-naturalness,
 turn-detection and ASR-style entries elsewhere in this file). Every
@@ -252,6 +252,25 @@ rediscover most of them one failure at a time:
   the transcript cache key changes and no stale cached transcript (made
   before this fix) can be silently reused with the old zero-width words
   still in it.
+- **`wrap_lines()` crash on an unspaced token, real production failure
+  (2026-09-28, Hammer Session! (2010) S01E01, job `f6cc6c...`)**:
+  `ValueError: min() iterable argument is empty` in
+  `text_segmentation.wrap_lines()`, thrown from `segmentation_source.build_cues`
+  on a real user-added episode. Cause: `wrap_lines()` (ported from
+  `segmentation_target.py`) calls `text.split()` and, if no split point
+  keeps both halves under budget, falls back to `min(range(1, len(words)), ...)`
+  -- but if `text` is a single token with NO spaces at all (garbled/
+  unusual ASR output, a URL, ...) longer than `MAX_LINE_CHARS`,
+  `len(words) == 1` and `range(1, 1)` is empty, so `min()` crashes on an
+  empty iterable. `split_long_piece()` right above it already guards this
+  exact shape (`if len(words) < 2: return [piece]`); `wrap_lines()`
+  didn't have the matching guard. Never triggered in
+  `segmentation_target.py` (translated English rarely produces one
+  60+-char unspaced token), but `segmentation_source.py` calls the same
+  function on SOURCE text in any language, where it's a real, reachable
+  case -- fixed in both `text_segmentation.py` (the copy actually in the
+  crash path) and the original in `segmentation_target.py` (same latent
+  bug, same fix, before it gets its own real-world trigger).
 - **NLLB decode passes `clean_up_tokenization_spaces=True` explicitly**
   (`translate.py::_generate_one_batch`). This tokenizer's own default
   (transformers 4.48) is False unless overridden, which leaked raw

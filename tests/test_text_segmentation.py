@@ -65,6 +65,15 @@ class TurkishLexiconTests(unittest.TestCase):
         from text_segmentation import _boundary_score
         self.assertEqual(_boundary_score("bir", "ev", TURKISH), 0.0)
 
+    def test_single_unspaced_token_longer_than_max_returns_it_unsplit(self):
+        # Real production crash this fixes (2026-09-28, Hammer Session!
+        # S01E01 via segmentation_source.build_cues -> wrap_lines):
+        # "ValueError: min() iterable argument is empty" when text.split()
+        # produces 0 or 1 words -- range(1, len(words)) is then empty.
+        text = "a" * 60
+        self.assertEqual(wrap_lines(text), [text])
+        self.assertEqual(wrap_lines(text, lexicon=TURKISH), [text])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -132,6 +132,15 @@ def wrap_lines(text: str, max_line_chars: int = MAX_LINE_CHARS, lexicon: SplitLe
     if len(text) <= max_line_chars:
         return [text]
     words = text.split()
+    if len(words) < 2:
+        # A single unspaced token longer than max_line_chars (e.g.
+        # garbled ASR output, a URL) can't be cut anywhere -- return it
+        # as one over-length line rather than crash. Real production
+        # failure this fixes (2026-09-28, Hammer Session! S01E01,
+        # "ValueError: min() iterable argument is empty"): `range(1, 1)`
+        # is empty, and the fallback below used to call min() on it
+        # unconditionally. Same guard split_long_piece() already has.
+        return [text]
     best = None
     for i in range(1, len(words)):
         a, b = " ".join(words[:i]), " ".join(words[i:])
