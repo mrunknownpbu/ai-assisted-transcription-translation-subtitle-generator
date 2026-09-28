@@ -81,6 +81,32 @@ def hotwords_enabled() -> bool:
     return os.environ.get("SUBTITLE_AI_ASR_HOTWORDS", "").strip().lower() in {"on", "1", "true", "yes"}
 
 
+# Natural-dialogue plan step 5 (gated, off by default): a short sample of
+# ordinary sentence-case Turkish dialogue, WITH the punctuation and
+# interjections real dialogue has, in the hope Whisper's decoder leans
+# toward the same style for genuinely spoken interjections it otherwise
+# drops. Deliberately NOT Title Case and NOT a name list -- that shape
+# (glossary/mined hotwords) is the one already measured to induce Title
+# Case output and cost word recall (see this module's docstring).
+ASR_STYLE_PRESETS: dict[str, str] = {
+    "natural": ("Aa, gerçekten mi? Vay canına, hiç beklemiyordum. Hadi ama, "
+               "şaka yapıyorsun herhalde. Aman dikkat et, düşecektin az kalsın. "
+               "Ay, ne oldu şimdi böyle? Eyvah, geç kaldık galiba. Tabii ki "
+               "gelirim, elbette. Yani, bilmiyorum aslında, bakarız."),
+}
+
+
+def asr_style_prompt() -> str | None:
+    """SUBTITLE_AI_ASR_STYLE=natural selects ASR_STYLE_PRESETS["natural"]
+    as AsrConfig.initial_prompt; "off" or unset (default) is None -- see
+    initial_prompt's own field docstring. An unrecognised value is
+    treated as "off" rather than raising, consistent with this project's
+    other env-toggle functions (hotwords_enabled, name_correction.enabled)."""
+    import os
+    style = os.environ.get("SUBTITLE_AI_ASR_STYLE", "").strip().lower()
+    return ASR_STYLE_PRESETS.get(style)
+
+
 def _compute_type_from_env(default: str = "int8") -> str:
     """SUBTITLE_AI_COMPUTE_TYPE, tolerant of a blank value -- compose.yml
     forwards it as `${SUBTITLE_AI_COMPUTE_TYPE:-}` (this project's usual
@@ -147,6 +173,19 @@ class AsrConfig:
     # per-series entity list translation already uses for protection.
     # None/empty is a no-op, identical to this field not existing before.
     hotwords: str | None = None
+    # A short text sample fed to Whisper before decoding starts, biasing
+    # its output STYLE (punctuation, casing, interjection spelling) toward
+    # the sample rather than forcing any specific words -- unlike
+    # `hotwords`, which biases vocabulary. Gated experiment
+    # (SUBTITLE_AI_ASR_STYLE, see asr_style_prompt() below): natural
+    # sentence-case Turkish dialogue with interjections, tried because
+    # real production transcripts drop short interjections ("Aa!", "Of
+    # ya!") that a human transcriber keeps. None (default, matching every
+    # transcript made before this field existed) is a no-op. Part of
+    # _model_info()'s parameters -- changing it changes the cache key, so
+    # a transcript made under one prompt (or none) is never silently
+    # reused under another.
+    initial_prompt: str | None = None
 
 
 def vad_parameters(config: "AsrConfig") -> dict | None:
@@ -168,7 +207,8 @@ def _model_info(config: AsrConfig, model_version: str) -> ModelInfo:
                                 "vad_filter": config.vad_filter,
                                 "vad_parameters": vad_parameters(config),
                                 "compute_type": config.compute_type,
-                                "hotwords": config.hotwords})
+                                "hotwords": config.hotwords,
+                                "initial_prompt": config.initial_prompt})
 
 
 def segments_from_raw(raw_segments: list[dict], language: str = "") -> list[Segment]:
@@ -390,7 +430,8 @@ def transcribe(wav_path: str, media_path: str, media_hash: str, audio_stream_ind
                 condition_on_previous_text=config.condition_on_previous_text,
                 vad_filter=config.vad_filter, vad_parameters=vad_parameters(config),
                 word_timestamps=config.word_timestamps,
-                language=effective_language, hotwords=config.hotwords or None)
+                language=effective_language, hotwords=config.hotwords or None,
+                initial_prompt=config.initial_prompt or None)
 
             total_duration = getattr(info, "duration", None)
             raw = []

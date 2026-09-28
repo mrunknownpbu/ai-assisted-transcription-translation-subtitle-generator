@@ -22,7 +22,8 @@ import segmentation_source
 import segmentation_target
 import srt
 import translate
-from asr import AsrConfig, PIPELINE_VERSION, hotwords_enabled, transcribe as asr_transcribe, vad_parameters
+import turns
+from asr import AsrConfig, PIPELINE_VERSION, asr_style_prompt, hotwords_enabled, transcribe as asr_transcribe, vad_parameters
 from output import TARGET_LANG, write_srt_atomic, resolve_output_path
 from projection import ProjectedCue, merge_groups, project, validate_coverage
 from qc import entity_qc, output_qc, readability_qc, timing_qc, transcription_qc, translation_qc
@@ -239,7 +240,8 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     # and dropped audio windows (asr.py module docstring has the numbers).
     if not hotwords_enabled():
         hotwords = None
-    asr_config = asr_config or AsrConfig(language=asr_language, hotwords=hotwords)
+    asr_config = asr_config or AsrConfig(language=asr_language, hotwords=hotwords,
+                                        initial_prompt=asr_style_prompt())
 
     # Cache lookup key is computed BEFORE extraction/ASR so a hit can skip
     # both. AUTO mode uses auto_lookup_key() (no language -- unknown until
@@ -346,7 +348,24 @@ def run(video_path: str, media_root: str, work_dir: str, *,
             examples = sorted({f"{w.original_text.strip()} -> {w.text.strip()}" for w in fixed})[:10]
             _emit(on_event, events, "NAME_CORRECTIONS_APPLIED", words=len(fixed), examples=examples)
 
-    source_cues = segmentation_source.build_cues(live_words, language=transcript.language)
+    # Speaker-turn detection (SUBTITLE_AI_TURN_DETECTION, off by default
+    # -- see turns.py/CLAUDE.md for the measured reason). Voice mode needs
+    # the extracted WAV, which an ASR cache hit above skipped getting;
+    # extracted here on demand rather than unconditionally for every job.
+    turn_mode = turns.turn_detection_mode()
+    turn_word_ids = None
+    if turn_mode != "off":
+        turn_wav_path = None
+        if turn_mode == "voice":
+            if not wav_path.is_file():
+                media.extract_audio(video, audio_stream_index, wav_path)
+            turn_wav_path = str(wav_path)
+        turn_indices = turns.detect_turns(live_words, turn_wav_path, mode=turn_mode)
+        turn_word_ids = frozenset(id(live_words[i]) for i in turn_indices if 0 <= i < len(live_words))
+        _emit(on_event, events, "TURN_DETECTION_COMPLETED", mode=turn_mode, turns=len(turn_indices))
+
+    source_cues = segmentation_source.build_cues(live_words, language=transcript.language,
+                                                 turn_word_ids=turn_word_ids)
     _emit(on_event, events, "SOURCE_SEGMENTATION_COMPLETED", cues=len(source_cues))
 
     glossary_map = glossary_mod.build_glossary(glossary_entities) if glossary_entities else {}

@@ -101,5 +101,30 @@ class SentenceSplitTests(unittest.TestCase):
         self.assertEqual(cues[0].lines, [cues[0].text])
 
 
+class TurnWordIdsTests(unittest.TestCase):
+    """SUBTITLE_AI_TURN_DETECTION (off by default -- see turns.py): a
+    turn-marked word forces an acoustic-group break recorded as
+    UTTERANCE_END, which translate.build_context_spans() treats as a
+    real translation-context break (SENTENCE_END alone does not)."""
+
+    def test_turn_word_forces_an_utterance_end_boundary(self):
+        words = _sentence(["Tamam."], start=0.0) + _sentence(["Valizin", "hazır", "mı?"], start=0.3, step=0.2)
+        turn_ids = frozenset({id(words[1])})   # "Valizin" starts the new turn
+        cues = build_cues(words, language="tr", turn_word_ids=turn_ids)
+        self.assertEqual([c.text for c in cues], ["Tamam.", "Valizin hazır mı?"])
+        self.assertEqual(cues[1].boundary_before, BoundaryReason.UTTERANCE_END)
+
+    def test_no_turn_word_ids_is_unchanged_behaviour(self):
+        words = _sentence(["Tamam."], start=0.0) + _sentence(["Valizin", "hazır", "mı?"], start=0.3, step=0.2)
+        cues = build_cues(words, language="tr")
+        self.assertEqual(cues[1].boundary_before, BoundaryReason.SENTENCE_END)
+
+    def test_unrecognised_word_id_has_no_effect(self):
+        words = _sentence(["Tamam.", "Devam", "ediyor."], start=0.0, step=0.2)
+        cues = build_cues(words, language="tr", turn_word_ids=frozenset({999999}))
+        self.assertEqual(len(cues), 2)
+        self.assertEqual(cues[1].boundary_before, BoundaryReason.SENTENCE_END)
+
+
 if __name__ == "__main__":
     unittest.main()

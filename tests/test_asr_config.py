@@ -111,6 +111,40 @@ class VadParametersTests(unittest.TestCase):
         self.assertIsNone(AsrConfig().hotwords)
 
 
+class AsrStylePromptTests(unittest.TestCase):
+    """Natural-dialogue plan step 5 (gated, off by default): SUBTITLE_AI_ASR_STYLE."""
+
+    def _style(self, value):
+        with patch.dict(os.environ, {}, clear=False):
+            if value is None:
+                os.environ.pop("SUBTITLE_AI_ASR_STYLE", None)
+            else:
+                os.environ["SUBTITLE_AI_ASR_STYLE"] = value
+            return asr.asr_style_prompt()
+
+    def test_off_by_default(self):
+        self.assertIsNone(self._style(None))
+        self.assertIsNone(self._style(""))
+
+    def test_unrecognised_value_is_off_not_an_error(self):
+        self.assertIsNone(self._style("bogus"))
+
+    def test_natural_selects_the_preset_and_it_is_not_title_case(self):
+        prompt = self._style("natural")
+        self.assertIsNotNone(prompt)
+        self.assertEqual(prompt, asr.ASR_STYLE_PRESETS["natural"])
+        # The measured failure mode this avoids repeating (asr.py's own
+        # hotwords docstring): a decoding bias that induces Title Case.
+        words = [w for w in prompt.replace(",", " ").replace(".", " ").split() if w.isalpha()]
+        self.assertTrue(any(w[0].islower() for w in words))
+
+    def test_initial_prompt_is_recorded_in_model_info_so_cache_key_changes(self):
+        a = asr._model_info(AsrConfig(), "v").parameters
+        b = asr._model_info(AsrConfig(initial_prompt="Aa, gerçekten mi?"), "v").parameters
+        self.assertIsNone(a["initial_prompt"])
+        self.assertNotEqual(a["initial_prompt"], b["initial_prompt"])
+
+
 class _RecordingModel:
     model_size_or_path = "fake-model"
 
@@ -143,6 +177,17 @@ class TranscribePassesDecodingOptionsTests(unittest.TestCase):
         self.assertFalse(model.kwargs["vad_filter"])
         self.assertIsNone(model.kwargs["vad_parameters"])
         self.assertIsNone(model.kwargs["hotwords"])
+
+    def test_initial_prompt_reaches_faster_whisper(self):
+        model = _RecordingModel()
+        asr.transcribe("a.wav", "v.mkv", "h", 0, model=model,
+                       config=AsrConfig(language="tr", initial_prompt="Aa, gerçekten mi?"))
+        self.assertEqual(model.kwargs["initial_prompt"], "Aa, gerçekten mi?")
+
+    def test_default_initial_prompt_is_none(self):
+        model = _RecordingModel()
+        asr.transcribe("a.wav", "v.mkv", "h", 0, model=model, config=AsrConfig(language="tr"))
+        self.assertIsNone(model.kwargs["initial_prompt"])
 
 
 if __name__ == "__main__":

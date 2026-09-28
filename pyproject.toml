@@ -18,6 +18,12 @@ dependencies = [
     "httpx==0.28.1",
     "langdetect==1.0.9",
     "python-multipart==0.0.20",
+    # subtitle_ai/turns.py's fbank feature extraction (speaker-turn
+    # detection, off by default -- see CLAUDE.md); already an incidental
+    # transitive dependency of faster-whisper's VAD, pinned explicitly now
+    # that it's a direct, unconditional import (pipeline.py imports turns
+    # at module load regardless of whether turn detection is enabled).
+    "numpy==2.5.3",
 ]
 
 # Deliberately dropped from v1's dependency list: whisperx + matplotlib.

@@ -103,6 +103,13 @@ services:
       SUBTITLE_AI_GPU_SHARED: ${SUBTITLE_AI_GPU_SHARED:-}
       SUBTITLE_AI_NLLB_BATCH_SIZE: ${SUBTITLE_AI_NLLB_BATCH_SIZE:-}
       SUBTITLE_AI_NLLB_NUM_BEAMS: ${SUBTITLE_AI_NLLB_NUM_BEAMS:-}
+      # Natural-dialogue plan (2026-09-28), both empty = off by default --
+      # see CLAUDE.md for the measured reasons neither is on yet.
+      # heuristic|voice turn on subtitle_ai/turns.py's speaker-turn
+      # detection (turns.py); natural selects asr.py's initial_prompt
+      # style experiment.
+      SUBTITLE_AI_TURN_DETECTION: ${SUBTITLE_AI_TURN_DETECTION:-}
+      SUBTITLE_AI_ASR_STYLE: ${SUBTITLE_AI_ASR_STYLE:-}
       # Empty = keep NLLB loaded 600s between jobs (0 when GPU_SHARED).
       SUBTITLE_AI_MODEL_IDLE_SECONDS: ${SUBTITLE_AI_MODEL_IDLE_SECONDS:-}
       # Empty = ct2 (falls back to hf if scripts/convert_nllb_ct2.py hasn't

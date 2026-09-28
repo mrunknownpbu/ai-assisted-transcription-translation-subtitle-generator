@@ -219,7 +219,7 @@ def production_params() -> dict:
     import asr
     c = asr.AsrConfig()
     return {"model": c.model_name, "compute_type": c.compute_type, "beam_size": c.beam_size,
-            "hotwords": None}
+            "hotwords": None, "initial_prompt": None}
 
 
 def cached_transcript(video: Path, cache_dir: str = "/cache/transcripts"):
@@ -237,7 +237,7 @@ def cached_transcript(video: Path, cache_dir: str = "/cache/transcripts"):
         model = data.get("asr_model") or {}
         p = model.get("parameters") or {}
         if (model.get("version") != want["model"] or p.get("compute_type") != want["compute_type"]
-                or p.get("beam_size") != want["beam_size"] or p.get("hotwords")):
+                or p.get("beam_size") != want["beam_size"] or p.get("hotwords") or p.get("initial_prompt")):
             continue
         if best is None or data.get("created_at", 0) > best.get("created_at", 0):
             best = data
@@ -503,7 +503,16 @@ def main() -> int:
         overrides = {}
         for kv in filter(None, rest.split(",")):
             k, _, v = kv.partition("=")
-            overrides[k] = type(getattr(__import__("asr").AsrConfig(), k))(v) if v not in ("None",) else None
+            if k == "style":
+                # Not a real AsrConfig field -- resolves to initial_prompt
+                # via the same preset asr.asr_style_prompt() uses in
+                # production, so `asr:style=natural` exercises exactly
+                # what SUBTITLE_AI_ASR_STYLE=natural would (natural-
+                # dialogue plan step 5).
+                import asr as _asr
+                overrides["initial_prompt"] = _asr.ASR_STYLE_PRESETS.get(v)
+            else:
+                overrides[k] = type(getattr(__import__("asr").AsrConfig(), k))(v) if v not in ("None",) else None
         per_episode, all_windows = {}, {}
         agg_subs, agg_ref, agg_hit = collections.Counter(), collections.Counter(), collections.Counter()
         tot = collections.Counter()

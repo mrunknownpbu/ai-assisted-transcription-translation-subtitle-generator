@@ -433,6 +433,8 @@ Cleanup problems are logged and never change a job's result.
 | `SUBTITLE_AI_NLLB_BACKEND` | `ct2` | `ct2` runs a CTranslate2 conversion of the same model: about 3x faster than `hf` (transformers), with the same measured quality against human subtitles. Convert once with `scripts/convert_nllb_ct2.py`; without the converted model the app logs a warning and uses `hf`. |
 | `TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS` | `120` | Remote translate-server only: idle seconds before its NLLB model is unloaded (see "Remote translate-server"). |
 | `TRANSLATE_SERVER_DEFAULT_LANG` | `tr` | Remote translate-server only: source language warmed at boot so the first request doesn't pay model-load latency. |
+| `SUBTITLE_AI_TURN_DETECTION` | off | `heuristic` or `voice` turn on speaker-turn detection (`subtitle_ai/turns.py`). Off by default -- see CLAUDE.md for why neither cleared the bar yet. |
+| `SUBTITLE_AI_ASR_STYLE` | off | `natural` feeds Whisper a short natural-dialogue sample as `initial_prompt`, an experiment to recover dropped interjections. Gated on measured results (CLAUDE.md); off until then. |
 
 All of these are forwarded from `.env` (see `.env.example`): by `compose.yml`
 for the main app, and by `compose.translate-server.yml` for the remote host

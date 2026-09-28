@@ -15,13 +15,17 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-28: 939 passing, 0 failures (plus 89 frontend
-tests -- `cd frontend && npm test -- --run`). Every backend test is
-`unittest`-style, so with no pytest available this also works:
+Baseline as of 2026-09-28: 1061 passing, 0 failures (plus 89 frontend
+tests -- `cd frontend && npm test -- --run`; up from 939 after the
+natural-dialogue plan's five steps -- see the segmentation-naturalness,
+turn-detection and ASR-style entries elsewhere in this file). Every
+backend test is `unittest`-style, so with no pytest available this also
+works:
 `cd subtitle_ai && PYTHONPATH=.:../tests ../.venv/bin/python -m unittest discover -s ../tests -t ../tests`.
 CI installs an explicit package list (`.github/workflows/test.yml`), not
 uv.lock -- a new runtime dependency must be added there too (ruamel.yaml
-was, 2026-09-28). Verified directly on the
+was, 2026-09-28; numpy was, 2026-09-28, for turns.py -- see pyproject.toml).
+Verified directly on the
 current host (myphy-ai), not just in CI or inside Docker: 0 skips once
 `ffmpeg`, `uv`, and `node`/`npm` are on the bare host too, not just inside
 the image -- CI's own setup installs `ffmpeg` as a separate step for the
@@ -393,6 +397,38 @@ Known limit: a capitalised common word inside a scoped name's episodes is
 still protected (e.g. the pun "O yanındaki Melek değil, şeytan", angel vs
 the character Melek). The evidence gate keeps such names few; don't widen
 `name_shaped()` to count sentence-initial capitals as names.
+
+## ASR initial_prompt style experiment: measured, NOT adopted (2026-09-28)
+
+Natural-dialogue plan step 5 (gated). `AsrConfig.initial_prompt`
+(`asr.py`, `SUBTITLE_AI_ASR_STYLE=natural`, off by default) feeds Whisper
+a short sample of ordinary sentence-case Turkish dialogue with
+interjections before decoding, hoping the decoder would lean toward
+keeping genuinely-spoken interjections ("Aa!", "Of ya!") it otherwise
+drops -- part of `_model_info()` so it's covered by the transcript cache
+key. Measured on S01E01, real GPU run
+(`benchmark-results/asr-style-initial-prompt-2026-09-28.json`,
+`asr:style=natural` vs. the production-default `cache` baseline via
+`eval_transcription.py --segmentation`):
+
+- WER 16.7% -> 16.4% (95% CI [-1.10, +0.00] -- not worse, borderline better)
+- name recall 85.4% -> 85.4% (unchanged)
+- no Title Case surge (26.3% capitalised-first-letter words, ordinary
+  sentence/proper-noun capitalisation -- nowhere near the ~65-75% the
+  hotwords failure showed, this module's own docstring)
+- **interjection recall 78.7% -> 78.7% of 89 -- exactly unchanged.**
+
+Three of the four adoption criteria pass; the fourth -- the entire reason
+for trying this -- shows zero effect. **Not adopted**: `initial_prompt`
+biases decoding STYLE (punctuation/casing conventions), and dropped
+interjections apparently aren't a style problem Whisper's decoder can be
+nudged out of this way; they're being dropped somewhere further upstream
+(VAD, or the decoder simply not "hearing" a very short vocalisation as a
+word at all). Code, `SUBTITLE_AI_ASR_STYLE` toggle, and the eval
+integration (`asr:style=natural`) are shipped -- genuinely useful if this
+gets revisited with a different theory of the drop, e.g. trying VAD
+parameters tuned specifically for short interjections rather than a
+prompt -- but the setting stays off; there is nothing here to turn on.
 
 ## Speaker-turn detection: implemented, measured, shipped OFF (2026-09-28)
 

@@ -93,7 +93,8 @@ def _split_long_words(ws: list[Word], language: str, lexicon: SplitLexicon,
            + _split_long_words(ws[best_pos:], language, lexicon, max_chars))
 
 
-def build_cues(words: list[Word], language: str = "") -> list[Segment]:
+def build_cues(words: list[Word], language: str = "",
+               turn_word_ids: frozenset[int] | None = None) -> list[Segment]:
     """Flatten -> regroup into display cues. Suppressed (hallucinated)
     words are dropped entirely before grouping -- a suppressed word must
     never anchor or extend a cue boundary.
@@ -103,12 +104,24 @@ def build_cues(words: list[Word], language: str = "") -> list[Segment]:
     _lexicon_for) tie-breaks a clause split -- for unspaced languages, no
     line-wrap is attempted (word-count-based wrapping is meaningless
     without word boundaries), matching this project's existing NO_SPACE_LANGUAGES
-    handling elsewhere."""
+    handling elsewhere.
+
+    `turn_word_ids`: `{id(word), ...}` for each word turns.detect_turns()
+    marked as a new speaker's first word (SUBTITLE_AI_TURN_DETECTION,
+    off by default -- see turns.py/CLAUDE.md). Identity-based, not
+    index-based, so it survives this function's own filtering unchanged.
+    Both detectors only ever propose a turn right after a complete
+    sentence (see turns.py), so this only ever forces an ACOUSTIC-group
+    break that pass 2 would very likely have cut into its own cue anyway
+    -- the only real effect is the boundary reason recorded there:
+    UTTERANCE_END instead of SENTENCE_END, which
+    translate.build_context_spans() treats as a real translation-context
+    break (each speaker's own sentence), where SENTENCE_END does not."""
     live = [w for w in words if w.text.strip()]
     lexicon = _lexicon_for(language)
     unspaced = language in NO_SPACE_LANGUAGES
 
-    # Pass 1: acoustic-only groups.
+    # Pass 1: acoustic-only groups (plus any forced speaker-turn breaks).
     groups: list[tuple[list[Word], BoundaryReason | None]] = []
     cur: list[Word] = []
     pending_reason: BoundaryReason | None = None
@@ -118,9 +131,14 @@ def build_cues(words: list[Word], language: str = "") -> list[Segment]:
             continue
         gap = w.start - cur[-1].end
         dur = w.end - cur[0].start
+        is_turn = turn_word_ids is not None and id(w) in turn_word_ids
         if gap > MAX_GAP or dur > MAX_DURATION:
             groups.append((cur, pending_reason))
             pending_reason = BoundaryReason.REAL_ACOUSTIC_GAP if gap > MAX_GAP else BoundaryReason.MAX_DURATION
+            cur = [w]
+        elif is_turn:
+            groups.append((cur, pending_reason))
+            pending_reason = BoundaryReason.UTTERANCE_END
             cur = [w]
         else:
             cur.append(w)
