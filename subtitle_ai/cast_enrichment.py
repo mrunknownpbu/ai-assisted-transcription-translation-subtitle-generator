@@ -98,10 +98,25 @@ def source_subtitles(series_root: Path, *, movie: bool = False) -> tuple[str | N
     texts = {}
     for episode, path in by_lang[lang].items():
         try:
-            texts[episode] = [c.text.replace("\n", " ") for c in parse(path)]
+            cues = parse(path)
         except (OSError, ValueError):
             continue
-    return lang, texts
+        # The file name can lie: a bare ".hi.srt" is Hindi by the naming
+        # convention but English-for-the-hearing-impaired in some releases
+        # (found 2026-09-28: Veer-Zaara's ".hi.srt" is English). Probing
+        # English lines as Hindi would measure nothing, so only files whose
+        # text really is `lang` count.
+        if _text_language(cues) != lang:
+            _logger.info("skipping %s: its text is not %r", path.name, lang)
+            continue
+        texts[episode] = [c.text.replace("\n", " ") for c in cues]
+    return (lang if texts else None), texts
+
+
+def _text_language(cues) -> str:
+    from srt_translation import _detect_source_language
+    detected, _probability = _detect_source_language(cues)
+    return detected
 
 
 def name_shaped(text: str, form: str) -> bool:

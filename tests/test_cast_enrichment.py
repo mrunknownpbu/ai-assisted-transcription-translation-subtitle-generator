@@ -157,7 +157,10 @@ class EnrichSeriesTests(unittest.TestCase):
         return [line.replace("Kiraz'ı", "the cherry").replace("Kiraz", "Cherry") for line in lines]
 
     def run_enrich(self, **kw):
-        with patch.object(ce.glossary_files, "commit", return_value=True) as commit:
+        # Fixture lines are too short for reliable language detection;
+        # MislabelledSubtitleTests covers that check on real-length text.
+        with patch.object(ce.glossary_files, "commit", return_value=True) as commit, \
+             patch.object(ce, "_text_language", return_value="tr"):
             report = ce.enrich_series(1, self.root, self.glossary, probe=self.probe, book=self.book, **kw)
         return report, commit
 
@@ -221,3 +224,21 @@ class StalenessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MislabelledSubtitleTests(unittest.TestCase):
+    def test_file_whose_text_is_not_its_labelled_language_is_skipped(self):
+        # Real case: Veer-Zaara's ".hi.srt" is English (hearing-impaired).
+        with tempfile.TemporaryDirectory() as tmp:
+            english = "".join(f"{i}\n00:00:{i:02d},000 --> 00:00:{i:02d},900\nThe valley is filled with the season of love and memories.\n\n" for i in range(1, 9))
+            Path(tmp, "Film (2004).hi.srt").write_text(english, encoding="utf-8")
+            lang, subs = ce.source_subtitles(Path(tmp), movie=True)
+        self.assertIsNone(lang)
+        self.assertEqual(subs, {})
+
+    def test_real_language_text_is_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            turkish = "".join(f"{i}\n00:00:{i:02d},000 --> 00:00:{i:02d},900\nBugün çok yoruldum, eve gidip biraz dinlenmek istiyorum.\n\n" for i in range(1, 9))
+            Path(tmp, "Show S01E01.tr.srt").write_text(turkish, encoding="utf-8")
+            lang, subs = ce.source_subtitles(Path(tmp))
+        self.assertEqual((lang, list(subs)), ("tr", [(1, 1)]))

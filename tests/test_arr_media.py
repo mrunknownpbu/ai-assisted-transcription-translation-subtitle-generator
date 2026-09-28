@@ -176,7 +176,8 @@ class EnrichMovieTests(unittest.TestCase):
             glossary.mkdir()
             book = cm.CastBook()
             book.add("Hana Kim", "tmdb", None)
-            with patch.object(ce.glossary_files, "commit", return_value=True):
+            with patch.object(ce.glossary_files, "commit", return_value=True), \
+                 patch.object(ce, "_text_language", return_value="ko"):
                 report = ce.enrich_movie(5, movie_dir, glossary, book=book,
                                          probe=lambda lines, lang: [l.replace("Hana", "one") for l in lines])
             self.assertEqual((report["language"], report["added"], report["key"]), ("ko", ["Hana"], "movie-5"))
