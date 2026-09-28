@@ -75,6 +75,68 @@ def _emit(on_event, events, name: str, **data):
         on_event(name, data)
 
 
+def _pack_pieces_by_weight(pieces: list[str], weights: list[int]) -> list[str]:
+    """Distribute `pieces` (sentences) across len(weights) buckets,
+    proportional to `weights`, preferring to cut exactly BETWEEN two
+    sentences (never inside one) -- but every bucket must get at least
+    one word (projection.validate_coverage() hard-fails a group with no
+    cue at all), so when there are fewer sentences than buckets, the
+    buckets that must share a sentence split it at the word level instead
+    of each showing the WHOLE shared sentence (real regression this
+    fixes, caught on a real S01E01 run, 2026-09-28: several consecutive
+    English cues showed byte-identical duplicate text -- an earlier
+    version of this function back-filled every empty bucket with the
+    full joined text, which is correct in isolation but visibly wrong
+    once two adjacent buckets both do it).
+
+    Only in the genuinely pathological case -- fewer WORDS in the whole
+    span than buckets -- is there truly not enough distinct content to
+    give every group its own slice; there, and only there, every bucket
+    gets the same full text (a last resort, not the common path)."""
+    text = " ".join(pieces)
+    words = text.split()
+    n = len(words)
+    if n < len(weights):
+        return [text] * len(weights)
+    sentence_bounds = set()
+    cursor = 0
+    for p in pieces[:-1]:
+        cursor += len(p.split())
+        sentence_bounds.add(cursor)
+    total_w = sum(weights) or 1
+    cuts = [0]
+    for bi in range(len(weights) - 1):
+        remaining_after = len(weights) - bi - 1
+        lo, hi = cuts[-1] + 1, n - remaining_after
+        target = min(max(round(sum(weights[:bi + 1]) / total_w * n), lo), hi)
+        candidates = [b for b in sentence_bounds if lo <= b <= hi]
+        if candidates:
+            target = min(candidates, key=lambda b: abs(b - target))
+        cuts.append(target)
+    cuts.append(n)
+    return [" ".join(words[cuts[i]:cuts[i + 1]]) for i in range(len(weights))]
+
+
+def _distribute_span_text(text: str, weights: list[int]) -> list[str]:
+    """Split `text` (one translation span) across len(weights) pieces,
+    proportional to `weights` -- at LINE boundaries if `text` is
+    multi-speaker dash-formatted (glossary.split_multi_speaker_dash_lines,
+    the shape translate_spans() itself produces for a dash-formatted
+    source span), else at SENTENCE boundaries
+    (segmentation_target.split_sentences) -- never a raw word-count
+    fraction, which could land mid-sentence and always discarded any
+    line break by flattening through plain `.split()`. A single-group
+    span (the overwhelming common case) always gets `text` back
+    unchanged."""
+    if len(weights) <= 1:
+        return [text]
+    dash_lines = glossary_mod.split_multi_speaker_dash_lines(text)
+    if dash_lines is not None and len(dash_lines) == len(weights):
+        return [f"- {line}" for line in dash_lines]
+    pieces = segmentation_target.split_sentences(text) or [text]
+    return _pack_pieces_by_weight(pieces, weights)
+
+
 def run(video_path: str, media_root: str, work_dir: str, *,
        source_lang: str = AUTO, audio_stream_index: int | None = None,
        glossary_entities: list[glossary_mod.Entity] | None = None,
@@ -342,22 +404,21 @@ def run(video_path: str, media_root: str, work_dir: str, *,
         owning_span = next((si for si, span in enumerate(spans) if group.indices[0] in span), 0)
         span_of_group.append(owning_span)
 
-    target_cues_by_group = []
-    for gi, group in enumerate(groups):
-        si = span_of_group[gi]
-        span = spans[si]
-        span_translation = translations[si]
+    # Redistribute each translation SPAN's text across the (possibly
+    # several) display GROUPS it covers -- computed once per span, not
+    # per group (the old version recomputed span_groups_here/weights on
+    # every group iteration). See _distribute_span_text()'s docstring:
+    # this replaced a raw word-count-FRACTION cut (translate.py:343-356's
+    # old logic) that could land mid-sentence and always flattened a
+    # span's own dash/newline structure via plain .split().
+    target_cues_by_group: list[list] = [[] for _ in groups]
+    for si, span in enumerate(spans):
         span_groups_here = [g for g, s in enumerate(span_of_group) if s == si]
         weights = [sum(max(len(source_cues[i].text.split()), 1) for i in groups[g].indices)
                   for g in span_groups_here]
-        words = span_translation.split()
-        my_pos = span_groups_here.index(gi)
-        total_w = sum(weights) or 1
-        start_frac = sum(weights[:my_pos]) / total_w
-        end_frac = sum(weights[:my_pos + 1]) / total_w
-        my_words = words[int(round(start_frac * len(words))):int(round(end_frac * len(words)))]
-        my_text = " ".join(my_words) if my_words else span_translation
-        target_cues_by_group.append(segmentation_target.segment(my_text, group.start, group.end))
+        pieces = _distribute_span_text(translations[si], weights)
+        for g, piece in zip(span_groups_here, pieces):
+            target_cues_by_group[g] = segmentation_target.segment(piece, groups[g].start, groups[g].end)
     _emit(on_event, events, "TARGET_SEGMENTATION_COMPLETED",
          cues=sum(len(c) for c in target_cues_by_group))
 
