@@ -87,6 +87,7 @@ def run(video_path: str, media_root: str, work_dir: str, *,
        write_output: bool = True, allow_overwrite: bool = False,
        low_confidence_threshold: float = DEFAULT_LOW_CONFIDENCE_THRESHOLD,
        low_confidence_action: str = DEFAULT_LOW_CONFIDENCE_ACTION,
+       name_correction_context: dict | None = None,
        on_event=None) -> PipelineResult:
     """audio_stream_index=None (the default) means AUTO: enumerate every
     audio stream, exclude obvious non-dialogue tracks, run cheap
@@ -267,6 +268,21 @@ def run(video_path: str, media_root: str, work_dir: str, *,
         if seg.suppressed:
             continue
         live_words.extend(normalize.normalize_transcript_words(list(seg.words), transcript.language))
+
+    # Misheard character names ("Aydın" -> "Aydan"), from this episode's
+    # cast -- see name_correction.py. `name_correction_context`: the
+    # worker's {"names_here", "known", "series_root"}; None = off.
+    if name_correction_context and name_correction_context.get("names_here"):
+        import name_correction
+        series_vocab = name_correction.series_vocabulary(name_correction_context.get("series_root"),
+                                                         transcript.language)
+        vocabulary = name_correction.lowercase_vocabulary(live_words, series_vocab)
+        live_words = name_correction.correct_words(live_words, name_correction_context["names_here"],
+                                                   name_correction_context["known"], vocabulary)
+        fixed = [w for w in live_words if any(c.rule_id == "cast-name-one-edit" for c in w.corrections)]
+        if fixed:
+            examples = sorted({f"{w.original_text.strip()} -> {w.text.strip()}" for w in fixed})[:10]
+            _emit(on_event, events, "NAME_CORRECTIONS_APPLIED", words=len(fixed), examples=examples)
 
     source_cues = segmentation_source.build_cues(live_words, language=transcript.language)
     _emit(on_event, events, "SOURCE_SEGMENTATION_COMPLETED", cues=len(source_cues))

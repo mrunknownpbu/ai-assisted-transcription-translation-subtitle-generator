@@ -1,0 +1,555 @@
+{
+  "season": "/data/media/drama/turkish/Love Is In The Air (2020) {tvdb-383383}/Season 01",
+  "reference_language": "tr",
+  "metric": "WER vs human subtitles, 60s windows, normalised (see script docstring)",
+  "results": [
+    {
+      "system": "asr:",
+      "episodes": {
+        "E01": {
+          "wer": 16.7,
+          "subst": 5.4,
+          "missed": 5.8,
+          "extra": 5.6,
+          "cer": 10.8
+        },
+        "E02": {
+          "wer": 19.0,
+          "subst": 5.6,
+          "missed": 6.7,
+          "extra": 6.7,
+          "cer": 13.1
+        },
+        "E06": {
+          "wer": 16.3,
+          "subst": 5.1,
+          "missed": 5.2,
+          "extra": 6.0,
+          "cer": 10.5
+        },
+        "E17": {
+          "wer": 21.7,
+          "subst": 6.7,
+          "missed": 7.5,
+          "extra": 7.5,
+          "cer": 14.8
+        },
+        "E22": {
+          "wer": 19.1,
+          "subst": 6.3,
+          "missed": 5.2,
+          "extra": 7.7,
+          "cer": 12.5
+        },
+        "E30": {
+          "wer": 20.2,
+          "subst": 6.1,
+          "missed": 5.1,
+          "extra": 9.1,
+          "cer": 13.8
+        },
+        "E36": {
+          "wer": 24.9,
+          "subst": 7.5,
+          "missed": 6.9,
+          "extra": 10.5,
+          "cer": 17.5
+        }
+      },
+      "wer": 19.8,
+      "subst": 6.1,
+      "missed": 6.0,
+      "extra": 7.6,
+      "name_recall": 84.9,
+      "lyrics_coverage": 10.7,
+      "name_corrections": null,
+      "lyric_words": 1265,
+      "names": {
+        "Serkan": "636/682",
+        "Eda": "528/598",
+        "Selin": "199/238",
+        "Engin": "146/182",
+        "Deniz": "158/179",
+        "Melo": "122/173",
+        "Aydan": "99/161",
+        "Can": "107/123",
+        "Erdem": "101/123",
+        "Efe": "106/120",
+        "Bolat": "81/113",
+        "Ceren": "66/76",
+        "Ferit": "74/76",
+        "Seyfi": "57/75",
+        "Leyla": "69/72",
+        "Pırıl": "39/57",
+        "Fikret": "45/46",
+        "Kemal": "36/38",
+        "Cenk": "36/37",
+        "Kaan": "35/37",
+        "Balca": "29/37",
+        "Sevda": "32/32",
+        "Fifi": "22/31",
+        "Bobby": "16/27",
+        "Emre": "23/26",
+        "Yıldız": "23/24",
+        "Alptekin": "12/21",
+        "Melek": "16/19",
+        "Evren": "11/14",
+        "Sirius": "5/12"
+      },
+      "top_substitutions": [
+        [
+          "aydan",
+          "aydın",
+          33
+        ],
+        [
+          "evet",
+          "hı",
+          16
+        ],
+        [
+          "şeyi",
+          "şey",
+          14
+        ],
+        [
+          "edayla",
+          "eda",
+          13
+        ],
+        [
+          "selin",
+          "selim",
+          11
+        ],
+        [
+          "bu",
+          "o",
+          10
+        ],
+        [
+          "böyle",
+          "öyle",
+          8
+        ],
+        [
+          "melo",
+          "melih",
+          8
+        ],
+        [
+          "aman",
+          "ama",
+          7
+        ],
+        [
+          "evet",
+          "ha",
+          7
+        ],
+        [
+          "serkan",
+          "sarkan",
+          6
+        ],
+        [
+          "seninle",
+          "sen",
+          6
+        ],
+        [
+          "dadam",
+          "dadan",
+          6
+        ],
+        [
+          "selin",
+          "senin",
+          6
+        ],
+        [
+          "seninle",
+          "senle",
+          6
+        ]
+      ],
+      "worst_windows": [
+        [
+          "E36@4min",
+          14,
+          14
+        ],
+        [
+          "E30@31min",
+          8,
+          10
+        ],
+        [
+          "E06@100min",
+          46,
+          67
+        ],
+        [
+          "E02@70min",
+          12,
+          18
+        ],
+        [
+          "E06@92min",
+          20,
+          30
+        ],
+        [
+          "E06@124min",
+          8,
+          12
+        ],
+        [
+          "E17@42min",
+          31,
+          47
+        ],
+        [
+          "E36@13min",
+          20,
+          31
+        ]
+      ],
+      "seconds": 128.7
+    },
+    {
+      "system": "asr:+names",
+      "episodes": {
+        "E01": {
+          "wer": 16.6,
+          "subst": 5.2,
+          "missed": 5.8,
+          "extra": 5.6,
+          "cer": 10.8
+        },
+        "E02": {
+          "wer": 18.9,
+          "subst": 5.4,
+          "missed": 6.7,
+          "extra": 6.7,
+          "cer": 13.1
+        },
+        "E06": {
+          "wer": 16.1,
+          "subst": 4.9,
+          "missed": 5.2,
+          "extra": 6.0,
+          "cer": 10.4
+        },
+        "E17": {
+          "wer": 21.6,
+          "subst": 6.6,
+          "missed": 7.5,
+          "extra": 7.5,
+          "cer": 14.8
+        },
+        "E22": {
+          "wer": 18.9,
+          "subst": 6.1,
+          "missed": 5.2,
+          "extra": 7.7,
+          "cer": 12.5
+        },
+        "E30": {
+          "wer": 20.2,
+          "subst": 6.0,
+          "missed": 5.1,
+          "extra": 9.1,
+          "cer": 13.8
+        },
+        "E36": {
+          "wer": 24.8,
+          "subst": 7.4,
+          "missed": 6.9,
+          "extra": 10.5,
+          "cer": 17.5
+        }
+      },
+      "wer": 19.6,
+      "subst": 6.0,
+      "missed": 6.0,
+      "extra": 7.6,
+      "name_recall": 87.8,
+      "lyrics_coverage": 10.7,
+      "name_corrections": {
+        "right": 115,
+        "wrong": 6,
+        "most_common": [
+          [
+            "Aydın -> Aydan",
+            32
+          ],
+          [
+            "Selim -> Selin",
+            13
+          ],
+          [
+            "Sarkan -> Serkan",
+            7
+          ],
+          [
+            "Bulat -> Bolat",
+            7
+          ],
+          [
+            "Balat -> Bolat",
+            6
+          ],
+          [
+            "Balcı -> Balca",
+            5
+          ],
+          [
+            "Volat -> Bolat",
+            3
+          ],
+          [
+            "Aydar -> Aydan",
+            3
+          ],
+          [
+            "Haydan -> Aydan",
+            3
+          ],
+          [
+            "Balcan -> Balca",
+            3
+          ],
+          [
+            "Mela -> Melo",
+            2
+          ],
+          [
+            "Seyf -> Seyfi",
+            2
+          ],
+          [
+            "Leila -> Leyla",
+            2
+          ],
+          [
+            "Polat -> Bolat",
+            2
+          ],
+          [
+            "Pelin -> Selin",
+            2
+          ]
+        ],
+        "unconfirmed": [
+          {
+            "episode": "E01",
+            "minute": 2,
+            "heard": "Belin",
+            "corrected": "Selin",
+            "segment": "Selin dedim",
+            "reference": "tamam nereye dükkana hadi kalk tamam kalktım günaydın günaydın günaydın günaydın dünya güzeli hayaller italya gerçekler petunya bir şey ters gitti çok çok çok ters gitti indirmişler bile hala kardeşim niye içeri taşımadınız bunları bıraktınız buraya ablacığım işimiz çok ağaçları getireceğiz daha ne "
+          },
+          {
+            "episode": "E02",
+            "minute": 86,
+            "heard": "Feri",
+            "corrected": "Ferit",
+            "segment": "Ay Ferit ablacığım sen birazcık rahatlasana ya.",
+            "reference": "edayla ilgili var mı yeni bir gelişme vallahi seni ne biliyorsan ben de onu biliyorum ama ben bu aşka inanıyorum ah melo ne diyeyim ki ben sana bana bak ben akşam serkan bolatı yemeğe çağırdım vallahi mi evet yani ne bileyim işte bir bakalım değil mi bence bu işin içinde zaten bir iş var sen de ante"
+          },
+          {
+            "episode": "E06",
+            "minute": 36,
+            "heard": "Hakan",
+            "corrected": "Haktan",
+            "segment": "Haktan'ı ararız.",
+            "reference": "ben bu işi ne olursa olsun yapacağım inat ettim senden çok küçük yardım istiyorum çok küçük gizli de olsa lütfen aslında ne var biliyor musun serkan ve sen aslında çok ayrı karakterler değilsiniz çok benziyorsunuz vallahi bak evet tamam varım yapacağım sen harika bir insansın o zaman mimarlardan kim"
+          },
+          {
+            "episode": "E06",
+            "minute": 56,
+            "heard": "Aytekin.",
+            "corrected": "Baytekin.",
+            "segment": "Ben Sevda Gülen Suyum, menajeri Berent Baytekin.",
+            "reference": "devam edelim evet nerede kalmıştık efendim merhaba eda hanım ben sevda gülensoyun menajeri berent aytekin telefonunuzu fikret beyden aldım evin tadilatıyla siz ilgileniyormuşsunuz evet evet buyurun konu neydi konum paylaşır mısınız şartları konuşmak tadilatı görmek için olmaz siz gelmeyin biz hazır "
+          },
+          {
+            "episode": "E17",
+            "minute": 11,
+            "heard": "Meluk",
+            "corrected": "Melek",
+            "segment": "Ha şey Melek köyden peynir gözü kızartmıştım.",
+            "reference": "of sen harika bir insansın ayfer abla ellerine sağlık dünyanın en tatlı halası çok açım afiyet olsun bu koku ne bilmem şey melo köyden peynir gö kızarttım ne oldu üstümüze alınacak bir şey yok ayfer abla biz de anlamadık ki kaç gündür durduk yere midesi bulanıyor spordan çıktık duş alıyorduk oradaki"
+          },
+          {
+            "episode": "E30",
+            "minute": 45,
+            "heard": "Sedin",
+            "corrected": "Selin",
+            "segment": "Yani birer hafta Selin ve Leyla'nın evlerinde kalacağım.",
+            "reference": "böyle düşünüyorum tabii boş ver aşkım nedir yani çocuğumuz da olmayıversin dertsiz başımıza dert mi alacağız hadi bitir sonra beraber çıkarız tamam hiç olmasın demedim of tamam geldim kim o ya evde yoklar ya erdem erdem diyorum ya melek hanım iyi akşamlar öncelikle iddiayı kaybettiğini sana hatırlat"
+          }
+        ]
+      },
+      "lyric_words": 1265,
+      "names": {
+        "Serkan": "644/682",
+        "Eda": "528/598",
+        "Selin": "211/238",
+        "Engin": "148/182",
+        "Deniz": "159/179",
+        "Melo": "127/173",
+        "Aydan": "136/161",
+        "Can": "107/123",
+        "Erdem": "101/123",
+        "Efe": "106/120",
+        "Bolat": "100/113",
+        "Ceren": "67/76",
+        "Ferit": "74/76",
+        "Seyfi": "59/75",
+        "Leyla": "71/72",
+        "Pırıl": "39/57",
+        "Fikret": "45/46",
+        "Kemal": "36/38",
+        "Cenk": "36/37",
+        "Kaan": "35/37",
+        "Balca": "33/37",
+        "Sevda": "32/32",
+        "Fifi": "24/31",
+        "Bobby": "16/27",
+        "Emre": "23/26",
+        "Yıldız": "23/24",
+        "Alptekin": "15/21",
+        "Melek": "16/19",
+        "Evren": "11/14",
+        "Sirius": "6/12"
+      },
+      "top_substitutions": [
+        [
+          "evet",
+          "hı",
+          16
+        ],
+        [
+          "şeyi",
+          "şey",
+          14
+        ],
+        [
+          "edayla",
+          "eda",
+          13
+        ],
+        [
+          "bu",
+          "o",
+          10
+        ],
+        [
+          "böyle",
+          "öyle",
+          8
+        ],
+        [
+          "melo",
+          "melih",
+          8
+        ],
+        [
+          "aman",
+          "ama",
+          7
+        ],
+        [
+          "evet",
+          "ha",
+          7
+        ],
+        [
+          "seninle",
+          "sen",
+          6
+        ],
+        [
+          "dadam",
+          "dadan",
+          6
+        ],
+        [
+          "selin",
+          "senin",
+          6
+        ],
+        [
+          "seninle",
+          "senle",
+          6
+        ],
+        [
+          "niye",
+          "ne",
+          6
+        ],
+        [
+          "ne",
+          "ya",
+          6
+        ],
+        [
+          "ver",
+          "boşver",
+          6
+        ]
+      ],
+      "worst_windows": [
+        [
+          "E36@4min",
+          14,
+          14
+        ],
+        [
+          "E30@31min",
+          8,
+          10
+        ],
+        [
+          "E06@100min",
+          46,
+          67
+        ],
+        [
+          "E02@70min",
+          12,
+          18
+        ],
+        [
+          "E06@92min",
+          20,
+          30
+        ],
+        [
+          "E06@124min",
+          8,
+          12
+        ],
+        [
+          "E17@42min",
+          31,
+          47
+        ],
+        [
+          "E36@13min",
+          20,
+          31
+        ]
+      ],
+      "seconds": 136.9,
+      "delta_vs_first": -0.2,
+      "delta_95ci": [
+        -0.16,
+        -0.1
+      ]
+    }
+  ]
+}

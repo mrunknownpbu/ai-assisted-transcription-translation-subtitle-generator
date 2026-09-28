@@ -70,6 +70,7 @@ class CorrectionKind(str, Enum):
     inspecting `original_text` on the affected Word."""
     HALLUCINATION_SUPPRESSED = "hallucination_suppressed"
     NORMALIZATION = "normalization"           # e.g. petunya/Petunia-class fix
+    NAME = "name"                             # Aydın -> Aydan, from the episode's cast (name_correction.py)
 
 
 @dataclass

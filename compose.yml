@@ -67,6 +67,9 @@ services:
       JELLYFIN_URL: ${JELLYFIN_URL:-}
       JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:-}
       SUBTITLE_AI_MEDIA_REFRESH: ${SUBTITLE_AI_MEDIA_REFRESH:-}
+      # Empty = on: fix character names Whisper mishears as a near-identical
+      # name ("Aydın" -> "Aydan"), from the episode's cast (name_correction.py).
+      SUBTITLE_AI_NAME_CORRECTION: ${SUBTITLE_AI_NAME_CORRECTION:-}
       # Optional job-failure webhook (see alerting.py) -- unset by
       # default, matching today's behavior (silent failure until the UI
       # is checked).

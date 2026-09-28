@@ -23,6 +23,7 @@ import auto_glossary
 import cast_enrichment
 import glossary_profile
 import media_servers
+import name_correction
 import gpu
 import pipeline
 import srt_translation
@@ -297,6 +298,26 @@ class Worker(threading.Thread):
             workdir.sweep_stale(self.work_root, self.store, self.failed_work_retention_hours, now=now)
         except Exception:  # noqa: BLE001
             logger.warning("work-dir sweep failed", exc_info=True)
+
+    def _name_correction_context(self, video_path: str) -> dict | None:
+        """Names for name_correction.py: this episode's credited/protected
+        names, every name in the series, and the series folder (for its
+        vocabulary). Read from disk only -- never a network fetch inside a
+        job. None (off) when disabled or nothing is known about the series."""
+        if not name_correction.enabled() or not self.glossary_dir:
+            return None
+        try:
+            tvdb_id = glossary_profile.find_tvdb_id(video_path)
+            if tvdb_id is None:
+                return None
+            here, known = name_correction.episode_names(
+                tvdb_id, glossary_profile.find_episode(video_path), self.glossary_dir,
+                cast_enrichment.load_report(tvdb_id))
+            root = glossary_profile.find_series_root(str(Path(self.media_root) / video_path))
+            return {"names_here": here, "known": known, "series_root": root} if here else None
+        except Exception:  # noqa: BLE001 -- a correction aid must never fail a job
+            logger.warning("name correction context unavailable for %s", video_path, exc_info=True)
+            return None
 
     def _notify_media_servers(self, job_id: str, outputs: list[str]) -> None:
         """Ask Plex/Jellyfin to pick up the files this job just wrote (see
@@ -614,6 +635,7 @@ class Worker(threading.Thread):
             glossary_entities = glossary_profile_obj.entities
             glossary_phrases = glossary_profile_obj.phrases
             extra_hotwords = self._load_auto_hotwords(job["video_path"], glossary_entities)
+            name_context = self._name_correction_context(job["video_path"])
 
             # Evict the API's cached Analyze-sampler before this job's own
             # GPU-heavy work starts. Confirmed by direct reproduction: the
@@ -656,6 +678,7 @@ class Worker(threading.Thread):
                     transcript_cache_dir=cache_dir,
                     translate_remote_url=self.translate_server_url,
                     write_output=True, allow_overwrite=True,   # scratch dir only -- always safe to overwrite
+                    name_correction_context=name_context,
                     on_event=on_event,
                 )
 

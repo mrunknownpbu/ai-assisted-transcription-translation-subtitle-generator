@@ -31,6 +31,7 @@ detected from the job database, or failing that from near-identity.
 Systems:
   cache                 newest cached production transcript per episode
                         (/cache/transcripts; no GPU, instant)
+  <system>+names        the same, then name_correction.py applied to it
   asr:key=val,...       run production ASR with AsrConfig overrides, e.g.
                         asr:model_name=large-v3,beam_size=5,vad_onset=0.3
                         (GPU, ~6 min/episode; saved under --work and reused)
@@ -365,8 +366,16 @@ def main() -> int:
                          windows(dialogue, lambda c: (c.start + c.end) / 2, lambda c: c.text), lyric_times))
 
     results = []
+    import cast_enrichment
+    import glossary_profile
+    import name_correction
+    tvdb_id = glossary_profile.find_tvdb_id(str(season))
+    cast_report = cast_enrichment.load_report(tvdb_id) if tvdb_id is not None else None
+
     for spec in args.system:
-        kind, _, rest = spec.partition(":")
+        post_names = spec.endswith("+names")
+        base_spec = spec[:-len("+names")] if post_names else spec
+        kind, _, rest = base_spec.partition(":")
         overrides = {}
         for kv in filter(None, rest.split(",")):
             k, _, v = kv.partition("=")
@@ -376,6 +385,8 @@ def main() -> int:
         tot = collections.Counter()
         t0 = time.time()
         lyric_words = lyric_hit = 0
+        fixes = collections.Counter()   # "right" / "wrong" name corrections vs the reference
+        wrong_examples: list[dict] = []
         for name, video, ref_path, ref_w, lyric_times in episodes:
             if kind == "cache":
                 data = cached_transcript(video)
@@ -386,6 +397,29 @@ def main() -> int:
                 work = Path(args.work) / hashlib.sha1(rest.encode()).hexdigest()[:10]
                 data = run_asr(video, overrides, work, None)
             segs = kept_segments(data)
+            if post_names:
+                episode = glossary_profile.find_episode(video.name)
+                here, known = name_correction.episode_names(tvdb_id, episode, args.glossary_dir, cast_report)
+                # The episode's own reference is excluded: in production the
+                # episode being transcribed usually has no subtitle.
+                vocab = name_correction.lowercase_vocabulary(
+                    [w for seg in segs for w in seg.words],
+                    name_correction.series_vocabulary(season.parent, args.lang, exclude=ref_path))
+                for seg in segs:
+                    seg.words = name_correction.correct_words(seg.words, here, known, vocab)
+                    for w in seg.words:
+                        if any(c.rule_id == "cast-name-one-edit" for c in w.corrections):
+                            minute = int(((seg.start + seg.end) / 2) // WINDOW)
+                            target = normalise(w.text)[0] if normalise(w.text) else ""
+                            ref_tokens = ref_w.get(minute, []) + ref_w.get(minute - 1, []) + ref_w.get(minute + 1, [])
+                            ok = any(t == target or (t.startswith(target[:len(target) - 0]) and len(t) - len(target) <= 4)
+                                     for t in ref_tokens)
+                            fixes["right" if ok else "wrong"] += 1
+                            if not ok:
+                                wrong_examples.append({"episode": name, "minute": minute, "heard": w.original_text,
+                                                       "corrected": w.text, "segment": segment_text(seg),
+                                                       "reference": " ".join(ref_w.get(minute, []))[:300]})
+                            fixes[f"{w.original_text.strip(chr(39) + ',.!?')} -> {w.text.strip(chr(39) + ',.!?')}"] += 1
             lyric_windows = {int(t // WINDOW) for t, _ in lyric_times}
             # Transcript text inside lyric-only minutes belongs to the lyrics.
             hyp_all = windows(segs, lambda s: (s.start + s.end) / 2, segment_text)
@@ -414,6 +448,9 @@ def main() -> int:
                "extra": round(100 * tot["i"] / n, 1),
                "name_recall": round(100 * sum(agg_hit.values()) / (sum(agg_ref.values()) or 1), 1),
                "lyrics_coverage": round(100 * lyric_hit / lyric_words, 1) if lyric_words else None,
+               "name_corrections": {"right": fixes.pop("right", 0), "wrong": fixes.pop("wrong", 0),
+                                    "most_common": fixes.most_common(15),
+                                    "unconfirmed": wrong_examples} if post_names else None,
                "lyric_words": lyric_words,
                "names": {k: f"{agg_hit[k]}/{v}" for k, v in agg_ref.most_common()},
                "top_substitutions": [[a, b, c] for (a, b), c in agg_subs.most_common(args.top)],
@@ -428,6 +465,10 @@ def main() -> int:
             print(f"   {ep}: WER {v['wer']}%  CER {v['cer']}%")
         print("   names (found/in reference):", ", ".join(f"{k} {v}" for k, v in list(res["names"].items())[:12]))
         print("   top substitutions:", ", ".join(f"{a}->{b} x{c}" for a, b, c in res["top_substitutions"][:10]))
+        if res["name_corrections"]:
+            nc = res["name_corrections"]
+            print(f"   name corrections: {nc['right']} confirmed by the reference, {nc['wrong']} not; "
+                  + ", ".join(f"{k} x{v}" for k, v in nc["most_common"][:10]))
 
     base = results[0] if results else None
     for res in results[1:]:

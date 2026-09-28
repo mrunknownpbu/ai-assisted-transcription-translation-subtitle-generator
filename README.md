@@ -425,6 +425,7 @@ Cleanup problems are logged and never change a job's result.
 | `SUBTITLE_AI_CAST_REFRESH_DAYS` | `30` | How often the idle worker re-checks each series' cast metadata. `0` turns automatic checks off. |
 | `SUBTITLE_AI_SAMPLE_MODEL` | `small` | Whisper model the library's "Analyze" button uses. |
 | `SUBTITLE_AI_VRAM_MARGIN_GB` | `3.2` | Free VRAM the pre-flight check waits for before loading a large model. Must be a number. |
+| `SUBTITLE_AI_NAME_CORRECTION` | on | After transcription, fixes character names Whisper mishears as a near-identical name ("Aydın" → "Aydan"), using the episode's cast. `off` disables it. |
 | `SUBTITLE_AI_ORPHAN_CONTEXT_PADDING` | on | `off`, `0`, `false` or `no` disables the isolated-word grounding pass. |
 | `SUBTITLE_AI_GPU_SHARED` | off | Declares the GPU shared with something else (Tdarr, Jellyfin/Plex transcodes). Restores the contention-safe NLLB sizing (batch 8), per-batch cache release, and freeing NLLB after every job. Leave off on a dedicated card. |
 | `SUBTITLE_AI_NLLB_BATCH_SIZE`, `SUBTITLE_AI_NLLB_NUM_BEAMS` | `32`, `2` (`8`, `2` when shared) | NLLB generation sizing. Batch changes speed and VRAM only; beams change the translations themselves. |
