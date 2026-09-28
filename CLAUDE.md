@@ -15,7 +15,7 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
-Baseline as of 2026-09-28: 1061 passing, 0 failures (plus 89 frontend
+Baseline as of 2026-09-28: 1063 passing, 0 failures (plus 89 frontend
 tests -- `cd frontend && npm test -- --run`; up from 939 after the
 natural-dialogue plan's five steps -- see the segmentation-naturalness,
 turn-detection and ASR-style entries elsewhere in this file). Every
@@ -237,6 +237,21 @@ rediscover most of them one failure at a time:
   to matter in practice, the right lever is turn detection (step 3) and/or
   a readability-only merge pass that never touches BoundaryReason
   semantics -- not loosening the acoustic-gap rule.
+- **Zero-duration source cue: real bug, found by the new source QC on the
+  first real production job after deploying the above (S02E02, 2026-09-28,
+  job `3431732d9c6d41aab31f40022aa692f1`)**: `qc.source_output` (new this
+  session) flagged 3 cues with non-positive duration -- e.g. `"Tamam mı?"`
+  at `3698.31 --> 3698.31`. Root cause: faster-whisper occasionally emits
+  a word with `start == end` (a genuine zero-width timestamp, not a bug
+  in this codebase), and a single-word cue built from exactly that word
+  inherited the zero duration -- invisible before this session, since no
+  QC had ever checked source cues at all. Fixed at the one place every
+  downstream consumer benefits (`asr.segments_from_raw`,
+  `asr.MIN_WORD_DURATION` = 0.01s floor): no `Word` is ever constructed
+  with `end <= start`. `asr.PIPELINE_VERSION` bumped 2.0.0 -> 2.0.1 so
+  the transcript cache key changes and no stale cached transcript (made
+  before this fix) can be silently reused with the old zero-width words
+  still in it.
 - **NLLB decode passes `clean_up_tokenization_spaces=True` explicitly**
   (`translate.py::_generate_one_batch`). This tokenizer's own default
   (transformers 4.48) is False unless overridden, which leaked raw

@@ -70,7 +70,12 @@ from pathlib import Path
 from media import MediaError
 from transcript import CanonicalTranscript, ModelInfo, Segment, Word
 
-PIPELINE_VERSION = "2.0.0"
+PIPELINE_VERSION = "2.0.1"
+
+# A word's real duration is never allowed to be zero -- see
+# segments_from_raw()'s own comment for the real (rare) faster-whisper
+# zero-width-timestamp case this guards.
+MIN_WORD_DURATION = 0.01
 
 
 def hotwords_enabled() -> bool:
@@ -236,7 +241,18 @@ def segments_from_raw(raw_segments: list[dict], language: str = "") -> list[Segm
             # made join_words() always insert a space ("York 'a" instead of
             # "York'a"; see transcript.render_words()).
             text = raw_text.strip()
-            words.append(Word(text=text, original_text=text, start=w["start"], end=w["end"],
+            # faster-whisper occasionally emits a word with start==end (a
+            # zero-width timestamp) -- rare, but real: confirmed on a real
+            # S02E02 production job, 2026-09-28, 3 occurrences in one
+            # episode. Downstream, a single-word cue built from that word
+            # (segmentation_source.build_cues) gets non-positive duration
+            # -- an unwatchable subtitle, and previously invisible (no QC
+            # ever checked source cues at all until this session's
+            # source_output wiring). Fixed at the one place every
+            # downstream consumer benefits: no Word is ever constructed
+            # with end <= start.
+            start, end = w["start"], max(w["end"], w["start"] + MIN_WORD_DURATION)
+            words.append(Word(text=text, original_text=text, start=start, end=end,
                               probability=w.get("probability"),
                               joins_previous=not raw_text.startswith((" ", " "))))
         out.append(Segment(index=i, start=seg["start"], end=seg["end"], words=words,

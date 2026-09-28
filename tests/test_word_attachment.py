@@ -32,6 +32,22 @@ class SegmentsFromRawAttachmentTests(unittest.TestCase):
         seg = segments_from_raw(raw, language="tr")[0]
         self.assertEqual([w.text for w in seg.words], ["York", "'a"])
 
+    def test_zero_width_faster_whisper_timestamp_gets_a_minimum_duration(self):
+        # Real bug found on a live production job (S02E02, 2026-09-28):
+        # faster-whisper occasionally emits a word with start==end, and a
+        # single-word cue built from it (segmentation_source.build_cues)
+        # got non-positive duration -- an unwatchable subtitle, invisible
+        # until this session added QC on source cues at all.
+        raw = [{"start": 5.0, "end": 5.0,
+               "words": [{"word": " Tamam", "start": 5.0, "end": 5.0, "probability": 0.9}]}]
+        seg = segments_from_raw(raw, language="tr")[0]
+        self.assertGreater(seg.words[0].end, seg.words[0].start)
+
+    def test_ordinary_word_duration_is_unaffected(self):
+        raw = [{"start": 0.0, "end": 1.0, "words": [_raw_word(" Tamam", 0.1, 0.4)]}]
+        seg = segments_from_raw(raw, language="tr")[0]
+        self.assertEqual((seg.words[0].start, seg.words[0].end), (0.1, 0.4))
+
 
 def w(text, joins_previous=False):
     return Word(text=text, original_text=text, start=0.0, end=0.1, joins_previous=joins_previous)
