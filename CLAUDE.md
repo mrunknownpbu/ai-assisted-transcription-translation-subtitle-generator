@@ -432,6 +432,23 @@ still protected (e.g. the pun "O yanındaki Melek değil, şeytan", angel vs
 the character Melek). The evidence gate keeps such names few; don't widen
 `name_shaped()` to count sentence-initial capitals as names.
 
+**Known limit: the evidence gate only works for Latin-script source
+languages** (confirmed 2026-09-28, "Hammer Session!" {tvdb-177461}, a
+Japanese drama). `cast_enrichment.name_shaped()` searches for the
+candidate's ROMANIZED name (from TMDB/TVDB/IMDb, e.g. "Tachibana") as a
+literal substring of the source subtitle TEXT -- for a Japanese `.ja.srt`
+(kanji/kana), that string can never appear, so every candidate reports
+`used as a name in 0 lines / 0 episodes` and nothing is ever protected,
+regardless of how real or well-credited the cast is. Confirmed the DATA
+side works fine (`scripts/refresh_cast.py`, no `--dry-run`, pulled 25 real
+named cast members from TMDB/IMDb/TVmaze/the local `.nfo` correctly) --
+this is specifically the evidence-matching step, not an import failure.
+Not fixed this session (would need matching against the actual script the
+candidate's real name is written in, which TMDB/TVDB don't reliably
+supply in kanji) -- flagged here so a future session doesn't waste time
+re-diagnosing "why does cast metadata never protect anything for this
+series" from scratch.
+
 ## ASR initial_prompt style experiment: measured, NOT adopted (2026-09-28)
 
 Natural-dialogue plan step 5 (gated). `AsrConfig.initial_prompt`
