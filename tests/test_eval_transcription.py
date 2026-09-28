@@ -1,6 +1,7 @@
 """scripts/eval_transcription.py's scoring pieces (the ASR-running parts
 are exercised on real episodes -- benchmark-results/)."""
 
+import collections
 import importlib.util
 import json
 import sqlite3
@@ -91,3 +92,61 @@ class LyricTests(unittest.TestCase):
         self.assertTrue(ev.is_lyric('- “Bir yitik düş ülkesi bu”'))
         self.assertTrue(ev.is_lyric("♪ la la ♪"))
         self.assertFalse(ev.is_lyric("Selin, gel buraya."))
+
+
+class SegmentationNaturalnessTests(unittest.TestCase):
+    """--segmentation: our source cues vs. human cues of the same episode."""
+
+    def test_match_points_greedy_nearest_within_tolerance(self):
+        tp, ref_n, hyp_n = ev.match_points([1.0, 5.0, 9.0], [1.3, 5.5, 20.0], tol=0.4)
+        self.assertEqual((tp, ref_n, hyp_n), (1, 3, 3))  # only 1.0<->1.3 (0.3s) is within tolerance
+        self.assertEqual(ev.match_points([1.0], [1.0]), (1, 1, 1))
+        self.assertEqual(ev.match_points([], [1.0]), (0, 0, 1))
+
+    def test_prf(self):
+        self.assertEqual(ev.prf(2, 4, 2), (1.0, 0.5, 2 / 3))
+        self.assertEqual(ev.prf(0, 0, 0), (0.0, 0.0, 0.0))
+
+    def test_is_interjection_does_not_catch_ordinary_words(self):
+        self.assertTrue(ev.is_interjection("aa"))
+        self.assertFalse(ev.is_interjection("tamam"))  # "okay" -- an ordinary word, not an interjection
+        self.assertFalse(ev.is_interjection("aydan"))
+
+    def _lines(self, *rows):
+        from srt import SrtCueLines
+        return [SrtCueLines(start=t, end=t + 1.5, lines=list(ls)) for t, ls in rows]
+
+    def test_dash_turn_points_only_two_speaker_dialogue_cues(self):
+        pts = self.test_lines = self._lines(
+            (0.0, ["- Tamam.", "- Valizin hazır mı?"]),   # a real two-speaker cue -> one turn point
+            (10.0, ["Tek satır bir cümle."]),              # not dialogue-dash shaped
+            (20.0, ["- Sadece bir konuşmacı devam ediyor"]),  # one dash line only, not a turn
+        )
+        out = ev.dash_turn_points(pts)
+        self.assertEqual(out, [0.75])
+
+    def test_segmentation_stats_boundary_and_turn_recall(self):
+        from transcript import Segment, Word
+        ref = self._lines((0.0, ["- Tamam.", "- Valizin hazır mı?"]), (5.0, ["Devam ediyor."]))
+
+        def seg(i, start, end, text):
+            return Segment(index=i, start=start, end=end,
+                           words=[Word(text=text, original_text=text, start=start, end=end)],
+                           avg_logprob=0.0, no_speech_prob=0.0, compression_ratio=0.0)
+
+        # A system that never splits inside the dash cue (no diarization) --
+        # its only boundary is near the ref's cue-to-cue gap, not the turn.
+        sys_cues = [seg(0, 0.0, 1.5, "Tamam. Valizin hazır mı?"), seg(1, 5.0, 6.5, "Devam ediyor.")]
+        stats = ev.segmentation_stats(sys_cues, ref)
+        out = ev.format_segmentation(stats)
+        self.assertEqual(out["turn_recall"], 0.0)   # the turn INSIDE the first cue is never recovered
+        self.assertEqual(out["turn_points"], 1)
+        self.assertGreater(out["boundary_f1"], 0.0)  # the cue-to-cue boundary at ~3.25s is still found
+
+    def test_format_segmentation_handles_no_turn_points(self):
+        out = ev.format_segmentation(collections.Counter(
+            bound_tp=0, bound_ref=0, bound_hyp=0, turn_hit=0, turn_n=0,
+            ref_over=0, ref_n_cues=1, ref_mid=0, sys_over=0, sys_n_cues=1, sys_mid=0,
+            ref_dur=1, sys_dur=1, interj_ref=0, interj_hit=0))
+        self.assertIsNone(out["turn_recall"])
+        self.assertIsNone(out["interjection_recall"])

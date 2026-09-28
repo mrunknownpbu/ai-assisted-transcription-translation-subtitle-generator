@@ -322,6 +322,124 @@ def is_lyric(text: str) -> bool:
     return t[:1] in ('"', "“", "♪", "♫")
 
 
+# --- segmentation naturalness (--segmentation) ---------------------------------
+#
+# Compares our SOURCE cues (segmentation_source.build_cues, rebuilt from the
+# same kept_segments() words each --system already scores) against the
+# episode's human cues: does OUR segmentation look like how a person breaks
+# dialogue into cues? See ENHANCEMENT_DRAFT/the natural-dialogue plan.
+
+INTERJECTIONS = {"aa", "ay", "off", "of", "hadi", "hı", "vay", "oy", "eh", "aman", "yaa", "tüh", "vov", "oha",
+                 "aha", "hah", "hop", "ah", "oh"}
+
+
+def is_interjection(token: str) -> bool:
+    return token in INTERJECTIONS
+
+
+def cue_boundary_times(cues) -> list[float]:
+    """Midpoint of the gap between consecutive cues -- the point a
+    segmentation decided to break, not either cue's own edge (their
+    timestamps can differ slightly from where the silence actually is)."""
+    return [(a.end + b.start) / 2 for a, b in zip(cues, cues[1:])]
+
+
+def match_points(ref: list[float], hyp: list[float], tol: float = 0.4) -> tuple[int, int, int]:
+    """Greedy nearest-match within `tol` seconds. (true_positives, len(ref), len(hyp))."""
+    hyp_sorted = sorted(hyp)
+    used = [False] * len(hyp_sorted)
+    tp = 0
+    for r in sorted(ref):
+        best, best_dist = None, tol + 1e-9
+        for i, h in enumerate(hyp_sorted):
+            if used[i]:
+                continue
+            d = abs(h - r)
+            if d <= tol and d < best_dist:
+                best, best_dist = i, d
+        if best is not None:
+            used[best] = True
+            tp += 1
+    return tp, len(ref), len(hyp_sorted)
+
+
+def prf(tp: int, ref_n: int, hyp_n: int) -> tuple[float, float, float]:
+    p = tp / hyp_n if hyp_n else 0.0
+    r = tp / ref_n if ref_n else 0.0
+    f1 = 2 * p * r / (p + r) if (p + r) else 0.0
+    return p, r, f1
+
+
+def dash_turn_points(ref_lines) -> list[float]:
+    """Human cues written as two-speaker dialogue ('- A' / '- B', one line
+    each): the midpoint is a turn INSIDE that cue's span. Our source
+    segmentation is one-speaker-per-cue by construction (no diarization --
+    transcript.BoundaryReason.UTTERANCE_END is reserved, never emitted), so
+    recall against these points is 0 until a turn detector exists
+    (subtitle_ai/turns.py); this metric measures that gap, not just
+    documents it."""
+    out = []
+    for c in ref_lines:
+        lines = [l.strip() for l in c.lines if l.strip()]
+        if len(lines) == 2 and all(re.match(r"^[-–]\s", l) for l in lines):
+            out.append((c.start + c.end) / 2)
+    return out
+
+
+def segmentation_stats(sys_cues, ref_lines) -> collections.Counter:
+    """Raw counts for one episode, summable across episodes before turning
+    into percentages (so an aggregate is a true pooled rate, not an average
+    of per-episode rates)."""
+    from segmentation_source import _SENTENCE_END
+    ref_bounds = cue_boundary_times(ref_lines)
+    sys_bounds = cue_boundary_times(sys_cues)
+    tp, ref_n, hyp_n = match_points(ref_bounds, sys_bounds)
+    dash_points = dash_turn_points(ref_lines)
+    turn_hit = sum(1 for t in dash_points if any(abs(t - b) <= 0.4 for b in sys_bounds))
+
+    def box_mid(cues, lines_of):
+        over = mid = 0
+        for c in cues:
+            lines = lines_of(c)
+            text = " ".join(lines)
+            if len(lines) > 2 or any(len(l) > 42 for l in lines):
+                over += 1
+            if text.strip() and not _SENTENCE_END.search(text.strip()):
+                mid += 1
+        return over, mid
+
+    ref_over, ref_mid = box_mid(ref_lines, lambda c: c.lines)
+    sys_over, sys_mid = box_mid(sys_cues, lambda c: [c.text])
+    ref_interj = collections.Counter(t for c in ref_lines for t in normalise(" ".join(c.lines)) if is_interjection(t))
+    sys_interj = collections.Counter(t for s in sys_cues for t in normalise(s.text) if is_interjection(t))
+    interj_hit = sum(min(v, sys_interj.get(k, 0)) for k, v in ref_interj.items())
+    return collections.Counter(
+        bound_tp=tp, bound_ref=ref_n, bound_hyp=hyp_n, turn_hit=turn_hit, turn_n=len(dash_points),
+        ref_over=ref_over, ref_n_cues=len(ref_lines), ref_mid=ref_mid,
+        sys_over=sys_over, sys_n_cues=len(sys_cues), sys_mid=sys_mid,
+        ref_dur=round(sum(c.end - c.start for c in ref_lines)), sys_dur=round(sum(c.end - c.start for c in sys_cues)),
+        interj_ref=sum(ref_interj.values()), interj_hit=interj_hit)
+
+
+def format_segmentation(s: dict) -> dict:
+    p, r, f1 = prf(s["bound_tp"], s["bound_ref"], s["bound_hyp"])
+    return {
+        "boundary_precision": round(100 * p, 1), "boundary_recall": round(100 * r, 1),
+        "boundary_f1": round(100 * f1, 1),
+        "turn_recall": round(100 * s["turn_hit"] / s["turn_n"], 1) if s["turn_n"] else None,
+        "turn_points": s["turn_n"],
+        "ref_over_box_pct": round(100 * s["ref_over"] / (s["ref_n_cues"] or 1), 1),
+        "sys_over_box_pct": round(100 * s["sys_over"] / (s["sys_n_cues"] or 1), 1),
+        "ref_mid_sentence_pct": round(100 * s["ref_mid"] / (s["ref_n_cues"] or 1), 1),
+        "sys_mid_sentence_pct": round(100 * s["sys_mid"] / (s["sys_n_cues"] or 1), 1),
+        "ref_mean_duration": round(s["ref_dur"] / (s["ref_n_cues"] or 1), 2),
+        "sys_mean_duration": round(s["sys_dur"] / (s["sys_n_cues"] or 1), 2),
+        "ref_cues": s["ref_n_cues"], "sys_cues": s["sys_n_cues"],
+        "interjection_recall": round(100 * s["interj_hit"] / s["interj_ref"], 1) if s["interj_ref"] else None,
+        "interjection_ref": s["interj_ref"],
+    }
+
+
 def parse_episodes(spec: str) -> list[int]:
     out: list[int] = []
     for part in spec.split(","):
@@ -340,9 +458,13 @@ def main() -> int:
     ap.add_argument("--glossary-dir", default="/glossary")
     ap.add_argument("--json")
     ap.add_argument("--top", type=int, default=15)
+    ap.add_argument("--segmentation", action="store_true",
+                    help="also report cue-boundary/turn/layout/interjection naturalness "
+                         "vs the human cues (segmentation_source.build_cues rebuilt from "
+                         "each system's kept words; no extra GPU work)")
     args = ap.parse_args()
 
-    from srt import parse
+    from srt import parse, parse_lines
     season = Path(args.season)
     names = series_names(season, args.glossary_dir)
     episodes = []
@@ -362,8 +484,10 @@ def main() -> int:
         # so they're scored on their own (lyrics coverage).
         dialogue = [c for c in cues if not is_lyric(c.text)]
         lyric_times = [((c.start + c.end) / 2, c.text) for c in cues if is_lyric(c.text)]
+        ref_lines = [c for c in parse_lines(ref) if not is_lyric(" ".join(c.lines))] if args.segmentation else None
         episodes.append((f"E{number:02d}", video, ref,
-                         windows(dialogue, lambda c: (c.start + c.end) / 2, lambda c: c.text), lyric_times))
+                         windows(dialogue, lambda c: (c.start + c.end) / 2, lambda c: c.text), lyric_times,
+                         ref_lines))
 
     results = []
     import cast_enrichment
@@ -387,7 +511,9 @@ def main() -> int:
         lyric_words = lyric_hit = 0
         fixes = collections.Counter()   # "right" / "wrong" name corrections vs the reference
         wrong_examples: list[dict] = []
-        for name, video, ref_path, ref_w, lyric_times in episodes:
+        per_episode_seg: dict = {}
+        agg_seg: collections.Counter = collections.Counter()
+        for name, video, ref_path, ref_w, lyric_times, ref_lines in episodes:
             if kind == "cache":
                 data = cached_transcript(video)
                 if data is None:
@@ -420,6 +546,12 @@ def main() -> int:
                                                        "corrected": w.text, "segment": segment_text(seg),
                                                        "reference": " ".join(ref_w.get(minute, []))[:300]})
                             fixes[f"{w.original_text.strip(chr(39) + ',.!?')} -> {w.text.strip(chr(39) + ',.!?')}"] += 1
+            if args.segmentation and ref_lines:
+                import segmentation_source
+                sys_cues = segmentation_source.build_cues([w for s in segs for w in s.words], language=args.lang)
+                stats = segmentation_stats(sys_cues, ref_lines)
+                per_episode_seg[name] = format_segmentation(stats)
+                agg_seg.update(stats)
             lyric_windows = {int(t // WINDOW) for t, _ in lyric_times}
             # Transcript text inside lyric-only minutes belongs to the lyrics.
             hyp_all = windows(segs, lambda s: (s.start + s.end) / 2, segment_text)
@@ -457,6 +589,9 @@ def main() -> int:
                "worst_windows": sorted(([f"{e}@{k}min", v[0], v[1]] for (e, k), v in all_windows.items()
                                         if v[1] >= 10), key=lambda x: -x[1] / x[2])[:8],
                "seconds": round(time.time() - t0, 1), "_windows": all_windows}
+        if args.segmentation:
+            res["segmentation"] = format_segmentation(agg_seg) if agg_seg else None
+            res["segmentation_by_episode"] = per_episode_seg
         results.append(res)
         print(f"\n== {spec}: WER {res['wer']}% (wrong {res['subst']}, missed {res['missed']}, "
               f"extra {res['extra']}) | name recall {res['name_recall']}% | lyrics coverage "
@@ -469,6 +604,16 @@ def main() -> int:
             nc = res["name_corrections"]
             print(f"   name corrections: {nc['right']} confirmed by the reference, {nc['wrong']} not; "
                   + ", ".join(f"{k} x{v}" for k, v in nc["most_common"][:10]))
+        if res.get("segmentation"):
+            sg = res["segmentation"]
+            print(f"   segmentation: boundary F1 {sg['boundary_f1']}% (P {sg['boundary_precision']}% / "
+                  f"R {sg['boundary_recall']}%) | turn recall "
+                  f"{sg['turn_recall']}% of {sg['turn_points']} human turn points | "
+                  f"over-box {sg['sys_over_box_pct']}% (human {sg['ref_over_box_pct']}%) | "
+                  f"mid-sentence cues {sg['sys_mid_sentence_pct']}% (human {sg['ref_mid_sentence_pct']}%) | "
+                  f"mean duration {sg['sys_mean_duration']}s (human {sg['ref_mean_duration']}s), "
+                  f"{sg['sys_cues']} cues (human {sg['ref_cues']}) | interjection recall "
+                  f"{sg['interjection_recall']}% of {sg['interjection_ref']}")
 
     base = results[0] if results else None
     for res in results[1:]:

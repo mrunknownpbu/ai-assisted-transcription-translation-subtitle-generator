@@ -181,6 +181,29 @@ rediscover most of them one failure at a time:
   dialogue WER 19.8%, name recall 84.9%, lyrics coverage 10.7% -- the
   top name losses are near-miss confusions (Aydan -> "Aydın" x33,
   Selin -> "Selim", Melo -> "Melih").
+- **`--segmentation` (2026-09-28)**: rebuilds `segmentation_source.build_cues`
+  from each system's own kept words and compares the cues against the
+  human cues of the same episode -- boundary precision/recall/F1 (+-0.4s),
+  turn-change recall (human two-speaker "- A / - B" cues), % cues that
+  overflow 2x42 chars or end mid-sentence, mean cue duration, and
+  interjection recall. `cache` needs no GPU, but only reuses a transcript
+  whose ASR settings match `asr.AsrConfig()` exactly (see `cached_transcript()`);
+  most of the library's cached transcripts predate the `float16` compute-type
+  default (int8, from before 2026-09-27's dedicated-GPU migration) and don't
+  qualify, so the natural-dialogue-plan's intended 7-episode GPU-free
+  baseline is currently thin: only S01E01 had a matching cache (the other
+  6 need re-running ASR to get a like-for-like baseline). Measured 2026-09-28,
+  S01E01 only (`benchmark-results/segmentation-naturalness-baseline-2026-09-28.json`):
+  boundary F1 63.5% (P 60.8% / R 66.4%), turn recall 50.0% of 12 human
+  two-speaker turn points, 23.1% of our cues overflow the display box vs
+  0.0% of human cues, 12.8% of our cues end mid-sentence vs 0.4% human,
+  mean cue duration 1.92s vs human 2.21s (2035 cues vs human 1863),
+  interjection recall 78.7% of 89 -- i.e. interjections mostly survive
+  already; the real gaps are cue count/duration (cues that don't map to a
+  clean sentence or turn) and the total absence of turn-aware splitting
+  (0% turn recall is impossible to improve without a turn detector, so
+  the 50% here is boundaries that happen to land near a turn point by
+  coincidence, not evidence of turn awareness).
 - **NLLB decode passes `clean_up_tokenization_spaces=True` explicitly**
   (`translate.py::_generate_one_batch`). This tokenizer's own default
   (transformers 4.48) is False unless overridden, which leaked raw
