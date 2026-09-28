@@ -70,14 +70,13 @@ from pathlib import Path
 from media import MediaError
 from transcript import CanonicalTranscript, ModelInfo, Segment, Word
 
-PIPELINE_VERSION = "2.0.2"
+PIPELINE_VERSION = "2.0.4"
 
-# A VAD-merged "speech island" this long or longer, holding this little
-# text or less per second, is treated as pathological -- see
+# A stretch of the file this long or longer with no decoded segment at
+# all is treated as suspicious rather than assumed silent -- see
 # recover_vad_merged_segments() below for the real production case that
 # motivates this.
-VAD_MERGE_MIN_DURATION = 12.0
-VAD_MERGE_MAX_DENSITY = 2.5
+GAP_MIN_DURATION = 15.0
 
 # A word's real duration is never allowed to be zero -- see
 # segments_from_raw()'s own comment for the real (rare) faster-whisper
@@ -275,41 +274,61 @@ def segments_from_raw(raw_segments: list[dict], language: str = "") -> list[Segm
     return out
 
 
-def _segment_text_density(seg: dict) -> tuple[float, float]:
-    """(duration, chars-per-second) for a raw faster-whisper segment dict,
-    using the word tokens rather than any already-stripped/joined text."""
-    duration = seg["end"] - seg["start"]
-    text_len = sum(len(w.get("word", "")) for w in seg.get("words", []))
-    density = text_len / duration if duration > 0 else float("inf")
-    return duration, density
+def _find_long_gaps(ordered_segments: list[dict], total_duration: float | None) -> list[tuple[float, float]]:
+    """Stretches of the file, at least GAP_MIN_DURATION long, that no
+    decoded segment covers -- including before the first segment and
+    after the last, up to `total_duration` (skipped when unknown)."""
+    gaps = []
+    prev_end = 0.0
+    for seg in ordered_segments:
+        if seg["start"] - prev_end >= GAP_MIN_DURATION:
+            gaps.append((prev_end, seg["start"]))
+        prev_end = max(prev_end, seg["end"])
+    if total_duration is not None and total_duration - prev_end >= GAP_MIN_DURATION:
+        gaps.append((prev_end, total_duration))
+    return gaps
 
 
 def recover_vad_merged_segments(raw: list[dict], wav_path: str, model, config: "AsrConfig",
-                                language: str | None) -> list[dict]:
-    """faster-whisper's VAD can merge a long stretch of singing with
-    interleaved spoken dialogue into one continuous "speech island" (no
-    internal silence gap ever clears the VAD's min_silence threshold),
-    and then the decoder produces almost nothing for it. Real case:
-    Hammer Session! S01E02 (2026-09-28), a 90-second window of an opening
-    song with dialogue over it produced ZERO segments in production;
-    isolated re-transcription of that exact window with VAD OFF produced
-    4 segments with real text spread across the whole span, while VAD ON
-    on the same isolated window produced one 95s segment holding only 36
-    characters -- the same pathological shape, just short of dropping
-    the window's content entirely. Any segment matching that shape
-    (VAD_MERGE_MIN_DURATION+ seconds, VAD_MERGE_MAX_DENSITY or fewer
-    chars/sec) is re-decoded in isolation with VAD off; the replacement
-    is kept only if it recovers more text than the original held, so a
-    genuinely sparse-but-correct segment (e.g. a long silence with one
-    trailing word) is never made worse."""
-    out = []
-    for seg in raw:
-        duration, density = _segment_text_density(seg)
-        if duration < VAD_MERGE_MIN_DURATION or density >= VAD_MERGE_MAX_DENSITY:
-            out.append(seg)
-            continue
+                                language: str | None, total_duration: float | None = None) -> list[dict]:
+    """faster-whisper's VAD, run over a whole ~20-40 minute episode, can
+    decide a long stretch (e.g. a song bridging every pause between
+    spoken lines) is one continuous "speech island" and hand the decoder
+    an unbroken multi-minute span. Real case: Hammer Session! S01E02
+    (2026-09-28), a 90-second window of an opening song with dialogue
+    over it produced ZERO segments in full-episode production decoding.
+
+    Two wrong fixes were tried and disproved by re-running against this
+    exact case before this one: (1) treating an existing long/sparse
+    segment as the pathological shape -- wrong, there was no segment at
+    all, so nothing matched; (2) re-decoding the isolated gap with VAD
+    kept ON -- still produced nothing, because `word_timestamps=True`
+    (required throughout this pipeline) applies its own alignment pass
+    on top of VAD's segment, and that alignment collapses on an
+    unbroken 90-second span exactly the way the original full-episode
+    decode did: keeps the first ~5 seconds of text, then jumps straight
+    to the next real VAD boundary, silently dropping everything between
+    -- confirmed by decoding the isolated clip both ways side by side.
+    Only VAD OFF on the isolated window, confirmed directly, breaks the
+    span into normal few-second segments and keeps the words in between.
+    Disabling VAD for this retry does trade away VAD's usual protection
+    against hallucinating on a genuinely silent window -- accepted
+    because `hallucination.py` already runs over every segment this
+    pass adds, exactly like any other segment; it is not exempted from
+    the usual quality gate, just no longer gated a second time by VAD.
+
+    Any stretch of the file GAP_MIN_DURATION+ seconds long that no
+    segment covers is re-decoded in isolation with VAD off; whatever
+    comes back (nothing, for a genuinely silent gap) is spliced into the
+    segment list."""
+    ordered = sorted(raw, key=lambda s: s["start"])
+    gaps = _find_long_gaps(ordered, total_duration)
+    if not gaps:
+        return raw
+    recovered = []
+    for gap_start, gap_end in gaps:
         with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
-            _extract_wav_window(wav_path, seg["start"], duration, tmp.name)
+            _extract_wav_window(wav_path, gap_start, gap_end - gap_start, tmp.name)
             retry_iter, _ = model.transcribe(
                 tmp.name, beam_size=config.beam_size, temperature=list(config.temperature),
                 compression_ratio_threshold=config.compression_ratio_threshold,
@@ -318,18 +337,17 @@ def recover_vad_merged_segments(raw: list[dict], wav_path: str, model, config: "
                 condition_on_previous_text=False, vad_filter=False,
                 word_timestamps=config.word_timestamps, language=language,
                 hotwords=config.hotwords or None)
-            retried = [{
-                "start": rseg.start + seg["start"], "end": rseg.end + seg["start"],
+            recovered.extend({
+                "start": rseg.start + gap_start, "end": rseg.end + gap_start,
                 "avg_logprob": rseg.avg_logprob, "no_speech_prob": rseg.no_speech_prob,
                 "compression_ratio": rseg.compression_ratio,
-                "words": [{"word": w.word, "start": w.start + seg["start"],
-                          "end": w.end + seg["start"], "probability": w.probability}
+                "words": [{"word": w.word, "start": w.start + gap_start,
+                          "end": w.end + gap_start, "probability": w.probability}
                          for w in (rseg.words or [])],
-            } for rseg in retry_iter]
-        original_text_len = sum(len(w.get("word", "")) for w in seg.get("words", []))
-        retried_text_len = sum(len(w["word"]) for r in retried for w in r["words"])
-        out.extend(retried if retried_text_len > original_text_len else [seg])
-    return out
+            } for rseg in retry_iter)
+    if not recovered:
+        return raw
+    return sorted(raw + recovered, key=lambda s: s["start"])
 
 
 def _wav_duration_seconds(wav_path: str) -> float:
@@ -533,7 +551,8 @@ def transcribe(wav_path: str, media_path: str, media_hash: str, audio_stream_ind
             if on_progress and raw:
                 on_progress(raw[-1]["end"], total_duration, len(raw))
             if config.vad_merge_recovery and config.vad_filter:
-                raw = recover_vad_merged_segments(raw, wav_path, model, config, effective_language)
+                raw = recover_vad_merged_segments(raw, wav_path, model, config, effective_language,
+                                                  total_duration=total_duration)
             segments = segments_from_raw(raw, language=info.language)
             model_version = getattr(model, "model_size_or_path", config.model_name)
             # Once an explicit language is passed to model.transcribe()

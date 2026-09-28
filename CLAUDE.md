@@ -616,34 +616,57 @@ chunked candidate whenever entity preservation or length-ratio checks
 indicate superior content preservation. Covered by unit tests in
 `tests/test_translate.py` and `tests/test_glossary.py`.
 
-## VAD-merged singing+dialogue: recovered, not just flagged (2026-09-28)
+## VAD dropping whole gaps in full-episode decoding: recovered (2026-09-28)
 
 Real user report, not a hypothesis: Hammer Session! S01E02, 0:20-2:14 (the
 OP), contains both singing AND spoken dialogue. Production transcribed
 NONE of it -- zero segments in that 90-second span, not even suppressed
-ones. Root cause, confirmed by isolating that exact window
-(`ffmpeg -ss -t` clip) and re-transcribing it directly: with VAD on
-(production default), faster-whisper's Silero VAD never sees a silence
-gap long enough to clear `min_silence_duration_ms` across that span (the
-song bridges every pause between spoken lines), so it hands the decoder
-one continuous ~95-second "speech island." A single uninterrupted span
-that long decodes very poorly -- one segment, single-digit characters of
-text for the whole span. With VAD off on the same clip, 4 segments came
-back spread across the same span, each with real content.
+ones. Three attempts before the real fix, each disproved by re-running
+against this exact case (not just re-reasoning about it):
+
+1. **Segment-density recovery** (2.0.2): treated an existing long+sparse
+   segment as the pathological shape and re-decoded it. Wrong -- there
+   was no segment there at all to match, so this never fired; a
+   redeployed re-run left the gap exactly as empty as before.
+2. **Gap-detection + VAD-on retry** (2.0.3): correctly found the *gap*
+   (no segment covers 10.2s-100.1s) but re-decoded it with VAD kept ON.
+   Still produced nothing. Root cause found here: `word_timestamps=True`
+   (required throughout this pipeline) does its own alignment pass on
+   top of whatever VAD hands the decoder, and that alignment collapses
+   on an unbroken multi-minute span -- keeps the first ~5 seconds of
+   text, then jumps straight to the next real VAD boundary, silently
+   dropping everything between. Confirmed by decoding the isolated
+   clip both ways side by side: `word_timestamps=True` + VAD on =
+   1 segment (0.0-5.2s) then a 90-second silent jump; `word_timestamps=False`
+   + VAD on = 1 segment spanning the WHOLE clip with real text throughout
+   (word alignment is exactly the thing that was breaking).
+3. **Gap-detection + VAD-off retry** (2.0.4, shipped): re-decoding the
+   isolated gap with VAD off keeps `word_timestamps=True` from ever
+   seeing one giant span in the first place -- confirmed directly,
+   13 normal few-second segments with real text across the whole
+   90-second gap, word timestamps intact.
 
 Fix (`asr.recover_vad_merged_segments`, called from `asr.transcribe`
-whenever `vad_filter` is on): any decoded segment >= `VAD_MERGE_MIN_DURATION`
-(12s) with <= `VAD_MERGE_MAX_DENSITY` (2.5) characters/second of text is
-re-decoded in isolation with VAD off (`condition_on_previous_text=False`,
-same as the main pass); the replacement is kept only if it holds MORE
-text than the original, so a legitimately sparse-but-correct segment
-(long silence, one trailing word) is never made worse. This is a
-correctness recovery, not a style change -- normal dense dialogue never
-matches the shape (measured: a real 20-second monologue segment runs
-tens of chars/second, an order of magnitude above the threshold) and is
-never touched. Part of the transcript cache key
-(`AsrConfig.vad_merge_recovery`, `_model_info`), and `PIPELINE_VERSION`
-bumped to `2.0.2` to invalidate every cached transcript made before this
-existed -- cached transcripts hide this bug identically to the
-zero-duration-word bug above; they must be regenerated, not reused.
-Unit tests: `tests/test_vad_merge_recovery.py`.
+whenever `vad_filter` is on): after the main decode, any stretch of the
+file `GAP_MIN_DURATION` (15s) or longer that no decoded segment covers
+(mid-file, or trailing to `total_duration`) is re-decoded in isolation
+with `_extract_wav_window` + a fresh `model.transcribe()` call, VAD off,
+`condition_on_previous_text=False`. Disabling VAD for this retry does
+give up VAD's own protection against hallucinating on a genuinely silent
+window (a real instrumental-only stretch, a scene transition) --
+accepted because `hallucination.py` still runs over every segment this
+pass adds, exactly like any other segment; it is not exempted from the
+usual quality gate, just no longer gated a second time by VAD before
+reaching it. Part of the transcript cache key (`AsrConfig.vad_merge_recovery`,
+`_model_info`); `PIPELINE_VERSION` bumped three times across the three
+attempts (2.0.2, 2.0.3, 2.0.4) -- each wrong fix's own cache entries had
+to be invalidated too, not just the pre-fix ones, or a same-cache-key
+retest silently serves the stale broken transcript back and looks like a
+successful fresh re-run (this is what caught attempt 1 being wrong).
+Cached transcripts hide this bug identically to the zero-duration-word
+bug above; they must be regenerated, not reused. Unit tests:
+`tests/test_vad_merge_recovery.py`. Lesson: "measure first" means
+measure the FIX against the real failing case before declaring it done
+and moving to the next step, not just the plausible mechanism -- and
+remember to bump the cache key every time the fix's own logic changes,
+not just once per feature.

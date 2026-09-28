@@ -36,6 +36,10 @@ srt-output/
 dev-sandbox/
 dev-scratch/
 
+# Ad-hoc pre-overwrite safety copies of real library subtitle files (see
+# CLAUDE.md's "Data durability" section) - ops artifacts, not shipped code
+backups/
+
 # Media fixtures (defensive, in case new ones land outside the dirs above)
 *.mkv
 *.mp4
