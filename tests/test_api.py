@@ -27,7 +27,14 @@ class ApiTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        app = api.create_app(Path(self.tmp.name) / "jobs.db")
+        self.media_root = Path(self.tmp.name) / "media"
+        for relative in ("Show/S01E01.mkv", "Show/S01E02.mkv",
+                         "Show {tvdb-111}/S01E01.mkv"):
+            video = self.media_root / relative
+            video.parent.mkdir(parents=True, exist_ok=True)
+            video.write_bytes(b"test video")
+        (self.media_root / "Show" / "notes.txt").write_text("not a video", encoding="utf-8")
+        app = api.create_app(Path(self.tmp.name) / "jobs.db", str(self.media_root))
         self.client = TestClient(app)
 
 
@@ -137,6 +144,13 @@ class CreateJobTests(ApiTestCase):
     def test_rejects_path_traversal(self):
         r = self.client.post("/api/jobs", json={"video_path": "../../etc/passwd", "source_lang": "tr"})
         self.assertEqual(r.status_code, 400)
+
+    def test_rejects_missing_or_non_video_media(self):
+        missing = self.client.post("/api/jobs", json={"video_path": "Show/missing.mkv"})
+        not_video = self.client.post("/api/jobs", json={"video_path": "Show/notes.txt"})
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(not_video.status_code, 400)
+        self.assertEqual(not_video.json()["detail"], "video_path is not a supported video")
 
     def test_rejects_invalid_language_code(self):
         r = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv", "source_lang": "TR"})
@@ -545,7 +559,11 @@ class DeleteJobWorkDirTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.work_root = Path(self.tmp.name) / "work"
         self.work_root.mkdir()
-        app = api.create_app(Path(self.tmp.name) / "jobs.db", work_root=str(self.work_root))
+        self.media_root = Path(self.tmp.name) / "media"
+        (self.media_root / "Show").mkdir(parents=True)
+        (self.media_root / "Show" / "S01E01.mkv").write_bytes(b"test video")
+        app = api.create_app(Path(self.tmp.name) / "jobs.db", str(self.media_root),
+                             work_root=str(self.work_root))
         self.client = TestClient(app)
 
     def _failed_job_with_work_dir(self):
@@ -579,7 +597,7 @@ class DeleteJobWorkDirTests(unittest.TestCase):
         self.assertEqual(self.client.delete(f"/api/jobs/{job_id}").status_code, 200)
 
     def test_delete_without_configured_work_root_still_works(self):
-        app = api.create_app(Path(self.tmp.name) / "jobs2.db")
+        app = api.create_app(Path(self.tmp.name) / "jobs2.db", str(self.media_root))
         client = TestClient(app)
         created = client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"}).json()["job"]
         client.post(f"/api/jobs/{created['id']}/cancel")
@@ -600,6 +618,13 @@ class ConfiguredMediaRootTests(MediaRootApiTestCase):
     def test_still_rejects_traversal_against_the_configured_root(self):
         r = self.client.post("/api/jobs", json={"video_path": "../../etc/passwd", "source_lang": "tr"})
         self.assertEqual(r.status_code, 400)
+
+    def test_normalizes_video_path_before_duplicate_check(self):
+        first = self.client.post("/api/jobs", json={"video_path": "./Show/S01E01.mkv"})
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(first.json()["job"]["video_path"], "Show/S01E01.mkv")
+        duplicate = self.client.post("/api/jobs", json={"video_path": "Show/../Show/S01E01.mkv"})
+        self.assertEqual(duplicate.status_code, 409)
 
 
 class StaticFileTests(unittest.TestCase):
@@ -883,7 +908,13 @@ class SeriesApiTestCase(unittest.TestCase):
         self.glossary_dir.mkdir()
         (self.glossary_dir / "test-series-tr-en.yaml").write_text(SERIES_GLOSSARY_YAML, encoding="utf-8")
         self.suggestions_dir = Path(self.tmp.name) / "suggestions"
-        app = api.create_app(Path(self.tmp.name) / "jobs.db",
+        self.media_root = Path(self.tmp.name) / "media"
+        for relative in ("Show {tvdb-111}/S01E01.mkv", "Show {tvdb-111}/S01E02.mkv",
+                         "Untagged/S01E01.mkv"):
+            video = self.media_root / relative
+            video.parent.mkdir(parents=True, exist_ok=True)
+            video.write_bytes(b"test video")
+        app = api.create_app(Path(self.tmp.name) / "jobs.db", str(self.media_root),
                              glossary_dir=str(self.glossary_dir),
                              glossary_suggestions_dir=str(self.suggestions_dir))
         self.client = TestClient(app)

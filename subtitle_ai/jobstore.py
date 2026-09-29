@@ -13,6 +13,7 @@ never see a COMPLETED job's timer still climbing.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -256,6 +257,7 @@ class JobStore:
         the language itself is AUTO or MANUAL."""
         job_id = uuid.uuid4().hex
         now = time.time()
+        video_path = os.path.normpath(video_path)
         source_lang = source_lang or "auto"
         source_language_mode = "MANUAL" if source_lang != "auto" else "AUTO"
         stream_selection_mode = "MANUAL" if audio_stream_index is not None else "AUTO"

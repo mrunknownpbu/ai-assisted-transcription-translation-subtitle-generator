@@ -445,8 +445,15 @@ def audio_stream_recommendation(path: str = Query(...)) -> dict:
 
 @app.post("/api/jobs", status_code=201)
 def create_job(request: JobRequest) -> dict:
+    media_root = Path(get_media_root()).resolve()
     try:
-        resolve_output_path(get_media_root(), request.video_path, TARGET_LANG)  # validates the path shape early
+        video = resolve_media_path(media_root, request.video_path, must_exist=True)
+    except OutputSafetyError as exc:
+        raise HTTPException(status_code=400, detail=f"video_path: {exc}") from exc
+    if not video.is_file() or video.suffix.lower() not in VIDEO_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="video_path is not a supported video")
+    try:
+        resolve_output_path(media_root, video, TARGET_LANG)
     except OutputSafetyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     # Real gap this closes (production-readiness audit, 2026-09-21): the
@@ -461,7 +468,7 @@ def create_job(request: JobRequest) -> dict:
         raise HTTPException(status_code=400,
                             detail=f"unsupported source_lang: {request.source_lang!r}")
     try:
-        job = get_store().create(request.video_path, request.source_lang,
+        job = get_store().create(str(video.relative_to(media_root)), request.source_lang,
                                  target_lang=TARGET_LANG,
                                  audio_stream_index=request.audio_stream_index,
                                  overwrite_original=request.overwrite_original,

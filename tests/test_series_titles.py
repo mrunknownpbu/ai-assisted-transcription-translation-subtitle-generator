@@ -45,11 +45,29 @@ class SeriesListApiTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.media_root = Path(self.tmp.name) / "media"
+        video_paths = (
+            "Happy Show (2025) {tvdb-222}/Season 01/S01E01.mkv",
+            "Folder Name {tvdb-111}/S01E01.mkv",
+            "Untagged/S01E01.mkv",
+            "Solo {tvdb-333}/S01E01.mkv",
+            "A {tvdb-1}/S01E01.mkv",
+            "B {tvdb-2}/S01E01.mkv",
+            "B {tvdb-2}/S01E02.mkv",
+            "Show {tvdb-444}/S01E01.mkv",
+            "Show {tvdb-444}/S01E02.mkv",
+            "x/S01E01.mkv",
+        )
+        for relative in video_paths:
+            video = self.media_root / relative
+            video.parent.mkdir(parents=True, exist_ok=True)
+            video.write_bytes(b"test video")
         self.glossary_dir = Path(self.tmp.name) / "glossary"
         self.glossary_dir.mkdir()
         (self.glossary_dir / "titled.yaml").write_text(
             "tvdb_id: 111\ntitle: Curated Title\nentities: []\n", encoding="utf-8")
-        app = api.create_app(Path(self.tmp.name) / "jobs.db", glossary_dir=str(self.glossary_dir))
+        app = api.create_app(Path(self.tmp.name) / "jobs.db", str(self.media_root),
+                             glossary_dir=str(self.glossary_dir))
         self.client = TestClient(app)
 
     def _post_and_finish(self, video_path):
@@ -82,7 +100,7 @@ class SeriesListApiTests(unittest.TestCase):
         self.assertIsNone(self._entry(None)["title"])
 
     def test_series_with_no_glossary_dir_configured_still_gets_a_title(self):
-        app = api.create_app(Path(self.tmp.name) / "other.db")
+        app = api.create_app(Path(self.tmp.name) / "other.db", str(self.media_root))
         client = TestClient(app)
         client.post("/api/jobs", json={"video_path": "Solo {tvdb-333}/S01E01.mkv"})
         entry = next(s for s in client.get("/api/series").json()["series"] if s["tvdb_id"] == 333)

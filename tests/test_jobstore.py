@@ -485,6 +485,12 @@ class DuplicateJobPreventionTests(JobStoreTestCase):
         with self.assertRaises(JobStoreError):
             self.store.create("Show/S01E01.mkv", "tr")
 
+    def test_duplicate_lexical_path_alias_is_refused(self):
+        first = self.store.create("Show/S01E01.mkv", "tr")
+        self.assertEqual(first["video_path"], "Show/S01E01.mkv")
+        with self.assertRaises(JobStoreError):
+            self.store.create("./Show/../Show/S01E01.mkv", "tr")
+
     def test_allowed_again_once_terminal(self):
         job = self.store.create("Show/S01E01.mkv", "tr")
         claimed = self.store.claim()
