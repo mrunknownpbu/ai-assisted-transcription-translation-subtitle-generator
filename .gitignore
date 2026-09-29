@@ -56,3 +56,6 @@ frontend/dist/
 # Editor/OS cruft
 .DS_Store
 *.swp
+
+# Test tooling cache
+.pytest_cache/

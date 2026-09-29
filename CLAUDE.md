@@ -31,7 +31,7 @@ current host (myphy-ai), not just in CI or inside Docker: 0 skips once
 the image -- CI's own setup installs `ffmpeg` as a separate step for the
 same reason (see `.github/workflows/test.yml`). (History: 708 after
 fixing `test_glossary_profile.py`'s stale `"Eda Yıldız"` canonical
-assertion 2026-09-22 -- see `IMPROVEMENT_PLAN.md` section 1.1 -- then 727
+assertion 2026-09-22 -- see `docs/IMPROVEMENT_PLAN.md` section 1.1 -- then 727
 after the lightweight-sampler-model tests (2.1), 737 after VRAM
 pre-flight (2.2), 757 after orphan-context-padding (3.2), 756 after
 removing `tvdb_client.characters()`'s dead-code test (3.3), 768 after the
@@ -40,7 +40,7 @@ SRT-editor tests (4.1/4.2), then 830 (2026-09-25) before the run that took
 it to 876: WebVTT-as-`.srt` source support, the Series page's folder-name
 title fallback and episodes-vs-jobs count fix, `.vtt` uploads, the Jobs
 page Refresh-button fix, and `SUBTITLE_AI_COMPUTE_TYPE`; then 939 after
-ENHANCEMENT_DRAFT.md's round (2026-09-28). Update this line rather than
+docs/ENHANCEMENT_DRAFT.md's round (2026-09-28). Update this line rather than
 leaving it to drift the next time the count moves.)
 
 Frontend: `cd frontend && npx tsc --noEmit && npm test -- --run`.
@@ -287,7 +287,7 @@ rediscover most of them one failure at a time:
   `auto_glossary` mining of those Title Case files also polluted the
   suggestion list with ordinary words ("Anladım", "Buyurun").
 - **Orphan single-word cue near a real acoustic gap: soft-context
-  grounding, not a segmentation change** (2026-09-23, IMPROVEMENT_PLAN.md
+  grounding, not a segmentation change** (2026-09-23, docs/IMPROVEMENT_PLAN.md
   3.2). Real example, S01E01's closing song: a large internal word-
   timestamp gap inside one Whisper segment split "Her" from "şey olur,
   her şey biter", and `translate.build_context_spans()`'s

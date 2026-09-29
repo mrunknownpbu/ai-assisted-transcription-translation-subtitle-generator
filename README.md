@@ -532,4 +532,6 @@ Deploying (`scripts/deploy.sh`) builds the image, redeploys the main app,
 ships the same image to the translate-server host, and health-checks both;
 set `SKIP_REMOTE=1` for changes that don't touch `translate.py` or
 `translate_server.py`. `CLAUDE.md` holds deploy and operations notes;
-`IMPROVEMENT_PLAN.md` tracks the roadmap and what has shipped.
+`docs/IMPROVEMENT_PLAN.md` and `docs/ENHANCEMENT_DRAFT.md` are completed,
+frozen planning rounds; `CLAUDE.md` is the live, continuously-updated log of
+what has shipped since.
