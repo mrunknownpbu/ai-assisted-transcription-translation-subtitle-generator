@@ -433,6 +433,7 @@ Cleanup problems are logged and never change a job's result.
 | `SUBTITLE_AI_NLLB_BACKEND` | `ct2` | `ct2` runs a CTranslate2 conversion of the same model: about 3x faster than `hf` (transformers), with the same measured quality against human subtitles. Convert once with `scripts/convert_nllb_ct2.py`; without the converted model the app logs a warning and uses `hf`. |
 | `TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS` | `120` | Remote translate-server only: idle seconds before its NLLB model is unloaded (see "Remote translate-server"). |
 | `TRANSLATE_SERVER_DEFAULT_LANG` | `tr` | Remote translate-server only: source language warmed at boot so the first request doesn't pay model-load latency. |
+| `TRANSLATE_SERVER_API_KEY` | unset | Required on both hosts when remote translation is enabled; sent as `X-API-Key` to protect `/translate`. |
 | `SUBTITLE_AI_TURN_DETECTION` | off | `heuristic` or `voice` turn on speaker-turn detection (`subtitle_ai/turns.py`). Off by default -- see CLAUDE.md for why neither cleared the bar yet. |
 | `SUBTITLE_AI_ASR_STYLE` | off | `natural` feeds Whisper a short natural-dialogue sample as `initial_prompt`, an experiment to recover dropped interjections. Gated on measured results (CLAUDE.md); off until then. |
 
@@ -492,8 +493,13 @@ time, and unloads the model after `TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS`
 (default `120`) with no activity so a shared GPU is freed between jobs.
 It never unloads while a request is running or queued, and applies the same
 VRAM pre-flight check before loading the model (that GPU is typically shared
-with a media server's hardware transcoding). An unsupported `src_lang`
-returns HTTP 422; `GET /health` reports `model_loaded`.
+with a media server's hardware transcoding). Set the same
+`TRANSLATE_SERVER_API_KEY` in the main app's and remote server's `.env`;
+`POST /translate` requires it and rejects request bodies over 1 MiB, more
+than 128 sentences, or sentences over 4096 characters. If the key is
+unset, the server returns 503 and the main app falls back to local
+translation. An unsupported `src_lang` returns HTTP 422; `GET /health`
+remains open for deployment health checks and reports `model_loaded`.
 
 ## Development
 

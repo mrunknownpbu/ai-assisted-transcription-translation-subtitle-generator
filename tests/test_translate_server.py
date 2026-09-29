@@ -6,8 +6,10 @@ place to re-test NLLB itself."""
 import threading
 import time
 import unittest
+import asyncio
 from unittest.mock import patch
 
+from httpx import ASGITransport, AsyncClient
 from fastapi.testclient import TestClient
 
 import translate_server
@@ -22,9 +24,21 @@ def _reset_state():
         config=translate_server.TranslationConfig())
 
 
-class TranslateServerTests(unittest.TestCase):
+class TranslateServerTestCase(unittest.TestCase):
     def setUp(self):
         _reset_state()
+        app = translate_server.app
+        original_overrides = app.dependency_overrides.copy()
+        app.dependency_overrides[translate_server.require_translate_api_key] = lambda: None
+
+        def restore_overrides():
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(original_overrides)
+
+        self.addCleanup(restore_overrides)
+
+
+class TranslateServerTests(TranslateServerTestCase):
 
     def test_health_reports_device_and_loaded_default_language(self):
         with patch("translate_server.load_model", return_value=(object(), object(), 0)):
@@ -44,6 +58,57 @@ class TranslateServerTests(unittest.TestCase):
         self.assertEqual(resp.json(), {"translations": ["Hello", "World"]})
         mock_batch.assert_called_once()
         self.assertEqual(mock_batch.call_args[0][3], ["Merhaba", "Dunya"])
+
+    def test_translate_requires_configured_api_key(self):
+        translate_server.app.dependency_overrides.pop(translate_server.require_translate_api_key)
+        with patch.dict("os.environ", {"TRANSLATE_SERVER_API_KEY": "secret123"}), \
+             patch("translate_server.load_model", return_value=(object(), object(), 0)), \
+             patch("translate_server.translate_batch", return_value=["Hello"]):
+            with TestClient(translate_server.app) as client:
+                missing = client.post("/translate", json={"sentences": ["Merhaba"], "src_lang": "tr"})
+                wrong = client.post("/translate", json={"sentences": ["Merhaba"], "src_lang": "tr"},
+                                    headers={"X-API-Key": "wrong"})
+                valid = client.post("/translate", json={"sentences": ["Merhaba"], "src_lang": "tr"},
+                                    headers={"X-API-Key": "secret123"})
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(wrong.status_code, 401)
+        self.assertEqual(valid.status_code, 200)
+
+    def test_translate_fails_closed_when_server_key_is_unconfigured(self):
+        translate_server.app.dependency_overrides.pop(translate_server.require_translate_api_key)
+        with patch.dict("os.environ", {}, clear=True), \
+             patch("translate_server.load_model", return_value=(object(), object(), 0)), \
+             TestClient(translate_server.app) as client:
+            response = client.post("/translate", json={"sentences": ["Merhaba"], "src_lang": "tr"})
+        self.assertEqual(response.status_code, 503)
+
+    def test_translate_rejects_oversized_body_and_sentence_batches(self):
+        oversized = b'{"sentences":["' + b"x" * translate_server.MAX_TRANSLATE_REQUEST_BYTES + b'"],"src_lang":"tr"}'
+        with patch("translate_server.load_model", return_value=(object(), object(), 0)), \
+             TestClient(translate_server.app) as client:
+            response = client.post("/translate", content=oversized,
+                                   headers={"Content-Type": "application/json"})
+            too_many = client.post("/translate", json={
+                "sentences": ["x"] * (translate_server.MAX_TRANSLATE_SENTENCES + 1), "src_lang": "tr"})
+            too_long = client.post("/translate", json={
+                "sentences": ["x" * (translate_server.MAX_TRANSLATE_SENTENCE_CHARS + 1)], "src_lang": "tr"})
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(too_many.status_code, 422)
+        self.assertEqual(too_long.status_code, 422)
+
+    def test_translate_streaming_body_is_capped_without_content_length(self):
+        async def oversized_chunks():
+            yield b'{"sentences":["' + b"x" * 600_000
+            yield b"x" * 500_000 + b'"],"src_lang":"tr"}'
+
+        async def send_request():
+            async with AsyncClient(transport=ASGITransport(app=translate_server.app),
+                                   base_url="http://test") as client:
+                return await client.post("/translate", content=oversized_chunks(),
+                                         headers={"Content-Type": "application/json"})
+
+        response = asyncio.run(send_request())
+        self.assertEqual(response.status_code, 413, response.text)
 
     def test_default_language_is_not_reloaded_on_first_matching_request(self):
         with patch("translate_server.load_model", return_value=(object(), object(), 0)) as mock_load, \
@@ -105,14 +170,11 @@ def _load(code):
         return translate_server._load_for(code)
 
 
-class IdleUnloadTests(unittest.TestCase):
+class IdleUnloadTests(TranslateServerTestCase):
     """Real motivation (2026-09-20): this GPU is shared with Jellyfin/Plex's
     own hardware transcoding on the same host -- a model kept loaded
     forever would permanently eat into their VRAM headroom even during
     long stretches with no translation job running."""
-
-    def setUp(self):
-        _reset_state()
 
     def test_nothing_loaded_does_not_unload(self):
         self.assertFalse(translate_server._unload_if_idle())

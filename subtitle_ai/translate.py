@@ -50,7 +50,10 @@ def remote_translate_batch(url: str, sentences: list[str], src_lang: str,
         with httpx.Client(timeout=REMOTE_TIMEOUT_SECONDS) as client:
             for i in range(0, len(sentences), batch_size):
                 chunk = sentences[i:i + batch_size]
-                resp = client.post(f"{url}/translate", json={"sentences": chunk, "src_lang": src_lang})
+                key = os.environ.get("TRANSLATE_SERVER_API_KEY")
+                headers = {"X-API-Key": key} if key else {}
+                resp = client.post(f"{url}/translate", json={"sentences": chunk, "src_lang": src_lang},
+                                   headers=headers)
                 resp.raise_for_status()
                 translations = resp.json()["translations"]
                 if (not isinstance(translations, list)

@@ -38,6 +38,7 @@ services:
       # a new host defaults to local-only rather than silently trying an
       # old deployment's remote server.
       TRANSLATE_SERVER_URL: ${TRANSLATE_SERVER_URL:-}
+      TRANSLATE_SERVER_API_KEY: ${TRANSLATE_SERVER_API_KEY:-}
       # Optional TheTVDB API v4 credentials (see tvdb_client.py) -- metadata
       # enrichment only (series title, per-episode characters), never a runtime
       # dependency for translation itself. Left unset by default: every

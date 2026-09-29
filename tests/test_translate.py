@@ -291,6 +291,14 @@ class RemoteTranslateBatchTests(unittest.TestCase):
         self.assertEqual(result, ["Hello", "World"])
         self.assertEqual(progress, [(2, 2)])
 
+    def test_configured_server_key_is_sent_as_header(self):
+        responses = [_http_response(200, {"translations": ["Hello"]})]
+        with patch.dict("os.environ", {"TRANSLATE_SERVER_API_KEY": "secret123"}), \
+             patch("httpx.Client", return_value=_mock_httpx_client(responses)) as mock_client_cls:
+            remote_translate_batch("http://media:8091", ["Merhaba"], "tr", batch_size=8)
+        client = mock_client_cls.return_value.__enter__.return_value
+        self.assertEqual(client.post.call_args.kwargs["headers"], {"X-API-Key": "secret123"})
+
     def test_chunks_by_batch_size(self):
         responses = [_http_response(200, {"translations": ["a"]}),
                     _http_response(200, {"translations": ["b"]})]

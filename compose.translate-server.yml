@@ -46,6 +46,9 @@ services:
       # (see translate.NLLB_LANG for valid codes). Blank/unrecognised falls
       # back to "tr" -- a blank must not silently disable the warm-up.
       TRANSLATE_SERVER_DEFAULT_LANG: ${TRANSLATE_SERVER_DEFAULT_LANG:-}
+      # Required to authorize /translate; use the same value on the main
+      # app so its remote client can send X-API-Key.
+      TRANSLATE_SERVER_API_KEY: ${TRANSLATE_SERVER_API_KEY:-}
     ports:
       - "8091:8091"
     volumes:

@@ -24,6 +24,7 @@ running. See _unload_if_idle()'s docstring for the mitigation.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import threading
@@ -31,8 +32,9 @@ import time
 from contextlib import asynccontextmanager
 
 import torch
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator
 
 from gpu import free_gpu
 from translate import NLLB_LANG, TranslationConfig, load_model, load_tokenizer, translate_batch
@@ -90,6 +92,76 @@ _state: dict = {"config": None, "model": None, "bos": None, "tokenizers": {},
                 "last_used": None, "active_requests": 0}
 _lock = threading.Lock()
 _infer_lock = threading.Lock()
+
+MAX_TRANSLATE_REQUEST_BYTES = 1024 * 1024
+MAX_TRANSLATE_SENTENCES = 128
+MAX_TRANSLATE_SENTENCE_CHARS = 4096
+
+
+class TranslateRequestSizeLimit:
+    def __init__(self, app, max_bytes: int = MAX_TRANSLATE_REQUEST_BYTES):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if (scope["type"] != "http" or scope["method"] != "POST"
+                or scope["path"] != "/translate"):
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        raw_length = headers.get(b"content-length")
+        if raw_length is not None:
+            try:
+                content_length = int(raw_length)
+            except ValueError:
+                response = JSONResponse({"detail": "invalid Content-Length"}, status_code=400)
+                await response(scope, receive, send)
+                return
+            if content_length < 0 or content_length > self.max_bytes:
+                response = JSONResponse({"detail": "translation request body exceeds the size limit"},
+                                        status_code=413)
+                await response(scope, receive, send)
+                return
+
+        messages = []
+        received = 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    response = JSONResponse(
+                        {"detail": "translation request body exceeds the size limit"},
+                        status_code=413)
+                    await response(scope, receive, send)
+                    return
+                if not message.get("more_body", False):
+                    break
+            elif message["type"] == "http.disconnect":
+                break
+
+        index = 0
+
+        async def replay_receive():
+            nonlocal index
+            if index < len(messages):
+                message = messages[index]
+                index += 1
+                return message
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+
+def require_translate_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    expected = os.environ.get("TRANSLATE_SERVER_API_KEY", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="translate-server API key is not configured")
+    provided = (x_api_key or "").encode("utf-8")
+    if not hmac.compare_digest(provided, expected.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="missing or invalid X-API-Key")
 
 
 def _load_for(nllb_code: str):
@@ -183,15 +255,25 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Subtitle AI Translate Server", docs_url=None, redoc_url=None, lifespan=_lifespan)
+app.add_middleware(TranslateRequestSizeLimit)
 
 
 class TranslateRequest(BaseModel):
-    sentences: list[str]
-    src_lang: str  # subtitle-ai's own 2-3 letter code, e.g. "tr" -- resolved via NLLB_LANG
+    sentences: list[str] = Field(min_length=1, max_length=MAX_TRANSLATE_SENTENCES)
+    src_lang: str = Field(min_length=2, max_length=3)
+
+    @field_validator("sentences")
+    @classmethod
+    def _validate_sentence_sizes(cls, value: list[str]) -> list[str]:
+        if any(not sentence.strip() or len(sentence) > MAX_TRANSLATE_SENTENCE_CHARS
+               for sentence in value):
+            raise ValueError("sentences must be non-empty and within the per-sentence size limit")
+        return value
 
 
 @app.post("/translate")
-def translate(request: TranslateRequest) -> dict:
+def translate(request: TranslateRequest,
+              _: None = Depends(require_translate_api_key)) -> dict:
     nllb_code = NLLB_LANG.get(request.src_lang)
     if nllb_code is None:
         raise HTTPException(status_code=422, detail=f"unsupported src_lang: {request.src_lang!r}")
