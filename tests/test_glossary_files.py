@@ -4,7 +4,9 @@ promotion's yaml.safe_dump() rewrite deleted ~50 lines of evidence comments
 from the live love-is-in-the-air.yaml, and the edit sat uncommitted for six
 days in the glossary's own git repo."""
 
+import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -98,6 +100,21 @@ class RoundTripTests(unittest.TestCase):
         self.assertFalse(errors, errors)
         self.assertIn(self.path.read_text(encoding="utf-8"), contents)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])
+
+    def test_atomic_write_preserves_mode_and_syncs_file_and_directory(self):
+        self.path.chmod(0o640)
+        synced_directory_flags = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd):
+            synced_directory_flags.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+            real_fsync(fd)
+
+        with patch("glossary_files.os.fsync", side_effect=record_fsync):
+            glossary_files.write_text_atomic(self.path, "updated\n")
+
+        self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o640)
+        self.assertEqual(synced_directory_flags, [False, True])
 
     def test_unicode_is_written_literally(self):
         data = glossary_files.load(self.path)
