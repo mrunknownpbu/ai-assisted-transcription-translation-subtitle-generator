@@ -765,3 +765,44 @@ guard). Gap-coverage/chrF on S01E01 barely moved after this fix (13.4%
 wrongly-covering hallucinated segment turns that span into an honest gap
 rather than removing a gap, noise-level movement either way, not a
 regression.
+
+**Problem 2 fixed (2026-09-29): English span distribution merges display
+groups instead of cutting a sentence at the word level.** Root cause,
+found by the Master code review session: `_pack_pieces_by_weight` was
+built for "N sentences over N groups" and "fewer groups than sentences";
+when a translation span covered MORE display groups than NLLB returned
+sentences, it fell back to cutting a sentence at the word level so every
+group got a slice -- the literal cause of "Hey, can" / "you" / "read it?"
+(S01E01 1881.2-1895.6s, ~14s of Japanese with no real pause, cut into 3
+groups by `segmentation_source.MAX_DURATION` that `merge_groups()`
+couldn't rejoin since its own envelope check caps at 7s, all inside one
+translation span; NLLB returned one sentence for it). A second,
+compounding bug: `_group_weight` used `len(text.split())` for a weight,
+which is 1 for any unspaced-language (Japanese) cue regardless of its
+real length (`transcript.NO_SPACE_LANGUAGES`) -- every group weighed the
+same, so the word-level cut had no signal to work from either.
+
+Fix: `_distribute_span_text` now returns runs `(first, stop, text)` over
+group positions instead of one piece per group; when there are fewer
+sentences than groups, `_merge_groups_into_sentences` picks run
+boundaries by matching cumulative group weight against cumulative
+sentence-character fraction, and adjacent groups in a run are merged into
+ONE display window -- always safe, since every group in a run is already
+inside the same translation span (`build_context_spans` breaks a span at
+`REAL_ACOUSTIC_GAP`/`UTTERANCE_END`, never crossed here). `_group_weight`
+now counts characters for `NO_SPACE_LANGUAGES`, words otherwise. Verified
+against the real case (cache-hit re-run, no GPU needed -- this only
+touches the translation-distribution stage): S01E01 1881.2-1895.6s is now
+one cue, "Hey, can you read it?". Season-wide-relevant metrics on S01E01
+(`scripts/eval_against_human_en_reference.py`): English
+`mid_sentence_end_rate` 0.13 -> 0.092, chrF vs the human reference 22.59
+-> 24.34; gap-coverage unchanged (13.8%, expected -- this fix targets
+fragmentation, not the separate missing-content problem above). Unit
+tests: `tests/test_pipeline_fragmentation.py` (real end-to-end case
+through `pipeline.run()`), `tests/test_pipeline_span_distribution.py`
+(`_distribute_span_text`, `_merge_groups_into_sentences`, `_group_weight`).
+The source-side `mid_sentence_end_rate=0.873` from the baseline above is
+unaffected by this fix (it only touches English distribution) and is
+still unexplained -- possibly partly an artifact of `fragmentation()`'s
+English-oriented sentence-ending regex against Japanese punctuation, not
+yet checked.
