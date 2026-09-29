@@ -252,6 +252,23 @@ def health() -> dict:
     return result
 
 
+def _sibling_subtitle_paths(root: Path, video: Path,
+                            names: set[str] | None = None) -> list[tuple[str, str]]:
+    if names is None:
+        names = {entry.name for entry in video.parent.iterdir()}
+    result = []
+    for name in sorted(names):
+        if not (name.startswith(video.stem + ".") and name.lower().endswith(".srt")):
+            continue
+        try:
+            candidate = resolve_media_path(root, video.parent / name, must_exist=True)
+        except OutputSafetyError:
+            continue
+        if candidate.is_file():
+            result.append((name, str(candidate.relative_to(root))))
+    return result
+
+
 @app.get("/api/browse")
 def browse(path: str = Query(""), file_type: str = Query("video", pattern=r"^(video|srt)$")) -> dict:
     """file_type="video" (the default, unchanged from before this param
@@ -301,18 +318,12 @@ def browse(path: str = Query(""), file_type: str = Query("video", pattern=r"^(vi
             # pattern and silently matches nothing.
             names = sibling_names(resolved.parent)
             stem = resolved.stem
+            sibling_subtitles = _sibling_subtitle_paths(root, resolved, names)
             sources = []
-            for name in sorted(names):
-                if not (name.startswith(stem + ".") and name.lower().endswith(".srt")):
-                    continue
+            for name, subtitle_path in sibling_subtitles:
                 if name.lower().endswith(_ENGLISH_SUBTITLE_SUFFIXES):
                     continue  # the translation target itself / protected en.* variants
-                try:
-                    candidate = resolve_media_path(root, resolved.parent / name, must_exist=True)
-                except OutputSafetyError:
-                    continue  # a symlink escaping the root is never listed
-                if candidate.is_file():
-                    sources.append(str(candidate.relative_to(root)))
+                sources.append(subtitle_path)
             entries.append({"name": entry.name, "path": rel, "type": "video",
                             "size": resolved.stat().st_size,
                             "has_english_subtitle": f"{stem}.en.srt" in names,
@@ -353,13 +364,7 @@ def media_metadata(path: str = Query(...)) -> dict:
     if not file.is_file() or file.suffix.lower() not in VIDEO_EXTENSIONS:
         raise HTTPException(status_code=400, detail="not a supported video")
     root = Path(get_media_root()).resolve()
-    existing = []
-    for candidate in file.parent.glob(f"{file.stem}.*.srt"):
-        try:
-            resolved = resolve_media_path(root, candidate, must_exist=True)
-        except OutputSafetyError:
-            continue
-        existing.append(str(resolved.relative_to(root)))
+    existing = sorted(path for _, path in _sibling_subtitle_paths(root, file))
     metadata = _probe_metadata(file)
     metadata.update(path=str(file.relative_to(root)), filename=file.name,
                     size=file.stat().st_size, existing_subtitles=sorted(existing))

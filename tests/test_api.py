@@ -865,6 +865,18 @@ class MediaMetadataTests(MediaRootApiTestCase):
         self.assertIn("Show/S01E01.en.srt", subs)
         self.assertIn("Show/S01E01.tr.srt", subs)
 
+    def test_existing_subtitles_detected_for_bracketed_video_filename(self):
+        (self.root / "Show" / "[Grp] Ep 01.mkv").write_bytes(b"x")
+        for suffix in ("en", "tr"):
+            (self.root / "Show" / f"[Grp] Ep 01.{suffix}.srt").write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\nHi\n", encoding="utf-8")
+        with patch("media.subprocess.run") as run:
+            run.return_value.stdout = '{"format": {"duration": "1"}, "streams": []}'
+            r = self.client.get("/api/media", params={"path": "Show/[Grp] Ep 01.mkv"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["existing_subtitles"],
+                         ["Show/[Grp] Ep 01.en.srt", "Show/[Grp] Ep 01.tr.srt"])
+
     def test_valid_video_returns_metadata_shape(self):
         with patch("media.subprocess.run") as run:
             run.return_value.stdout = ('{"format": {"duration": "3600"}, "streams": '
