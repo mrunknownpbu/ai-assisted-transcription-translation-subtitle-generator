@@ -123,18 +123,13 @@ _static_dir: Path = STATIC_DIR
 
 
 def _on_job_changed(job_id: str) -> None:
-    """Fires after every committed job-row mutation (see JobStore's
-    on_change docstring). Two independent effects, neither allowed to
-    break the other: push the GUI update (existing behavior), and --
-    real gap closed by the production-readiness audit, 2026-09-21 -- fire
-    the optional failure webhook (alerting.py) the moment a job's status
-    actually becomes "failed". Safe against double-firing: finish() is
-    the only path that ever sets a terminal status, and it's called
-    exactly once per job's terminal transition."""
+    """Push a GUI update after every committed job-row mutation."""
     _event_bus.publish({"type": "job_changed", "job_id": job_id})
-    job = _store.get(job_id) if _store else None
-    if job and job["status"] == "failed":
-        alerting.notify_job_failed(job)
+
+
+def _on_job_failed(job: dict) -> None:
+    """Send the failure webhook for one committed transition into failed."""
+    alerting.notify_job_failed(job)
 
 
 def register_worker(worker) -> None:
@@ -154,7 +149,7 @@ def create_app(db_path: str | Path, media_root: str = "/data", *,
                work_root: str | None = None,
                static_dir: str | Path | None = None) -> FastAPI:
     global _store, _media_root, _glossary_dir, _glossary_suggestions_dir, _srt_upload_dir, _work_root, _static_dir, _worker
-    _store = JobStore(db_path, on_change=_on_job_changed)
+    _store = JobStore(db_path, on_change=_on_job_changed, on_failure_transition=_on_job_failed)
     # Reset, not left over from a previous create_app() call in the same
     # process -- real risk this avoids: two tests in the same session
     # creating separate apps, where the second would otherwise silently

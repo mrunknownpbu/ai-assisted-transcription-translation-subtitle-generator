@@ -163,6 +163,16 @@ class FailureWebhookWiringTests(ApiTestCase):
             api.get_store().finish(job["id"], "completed")
         mock_notify.assert_not_called()
 
+    def test_later_updates_to_failed_job_do_not_repeat_notification(self):
+        job = api.get_store().create("Show/S01E01.mkv", "tr")
+        store = api.get_store()
+        with patch("api.alerting.notify_job_failed") as mock_notify:
+            store.finish(job["id"], "failed", error="boom")
+            store.append_log(job["id"], "additional diagnostic")
+            store.update(job["id"], error="revised diagnostic")
+            store.finish(job["id"], "failed", error="still failed")
+        mock_notify.assert_called_once()
+
 
 class CreateJobTests(ApiTestCase):
     def test_creates_queued_job(self):

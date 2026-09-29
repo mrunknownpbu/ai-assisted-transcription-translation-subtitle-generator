@@ -99,7 +99,7 @@ class JobStoreError(Exception):
 
 
 class JobStore:
-    def __init__(self, db_path: str | Path, *, on_change=None):
+    def __init__(self, db_path: str | Path, *, on_change=None, on_failure_transition=None):
         # on_change(job_id: str), if given, fires after every commit that
         # mutates a job row (create/update/claim -- finish/append_log/
         # request_cancel/retry all funnel through create()/update(), so a
@@ -108,10 +108,13 @@ class JobStore:
         # optional callable, not an import of events.EventBus, so this
         # module stays decoupled from the GUI push mechanism entirely --
         # main.py wires the real EventBus.publish in.
+        # on_failure_transition(job), if given, fires only when a status
+        # mutation changes a row into failed, with the committed job snapshot.
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._on_change = on_change
+        self._on_failure_transition = on_failure_transition
         with self._connect() as conn:
             conn.executescript(SCHEMA)
             self._migrate(conn)
@@ -497,9 +500,18 @@ class JobStore:
             if key in fields and not isinstance(fields[key], str):
                 fields[key] = json.dumps(fields[key])
         assignments = ", ".join(f"{k}=?" for k in fields)
+        failure_transition = None
         with self._immediate() as conn:
+            previous = (conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+                        if fields.get("status") == "failed" else None)
             conn.execute(f"UPDATE jobs SET {assignments} WHERE id=?", (*fields.values(), job_id))
+            if previous and previous["status"] != "failed":
+                row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+                if row:
+                    failure_transition = self._row_to_dict(row)
         self._notify(job_id)
+        if failure_transition is not None and self._on_failure_transition:
+            self._on_failure_transition(failure_transition)
 
     def append_log(self, job_id: str, message: str) -> None:
         job = self.get(job_id)
