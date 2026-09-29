@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -55,6 +56,62 @@ class WorkerTestCase(unittest.TestCase):
         (self.media_root / "Show" / "S01E01.mkv").touch()
         self.store = JobStore(Path(self.tmp.name) / "jobs.db")
         self.worker = Worker(self.store, str(self.media_root), str(self.work_root))
+
+
+class WorkerLoopResilienceTests(WorkerTestCase):
+    def setUp(self):
+        super().setUp()
+        self.worker.poll_interval = 0
+
+    def test_claim_error_does_not_kill_worker_loop(self):
+        calls = 0
+
+        def claim():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise sqlite3.OperationalError("database is locked")
+            self.worker._stop_event.set()
+            return None
+
+        with patch.object(self.worker, "_maybe_sweep_work_root"), \
+             patch.object(self.worker, "_maybe_refresh_cast"), \
+             patch.object(self.store, "claim", side_effect=claim), \
+             self.assertLogs("worker", level="ERROR") as logs:
+            self.worker.run()
+        self.assertEqual(calls, 2)
+        self.assertIn("worker failed to claim a job", "\n".join(logs.output))
+
+    def test_finish_error_while_handling_job_failure_does_not_kill_worker(self):
+        calls = 0
+
+        def claim():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {"id": "job-1"}
+            self.worker._stop_event.set()
+            return None
+
+        def fail_while_finishing(job_id, *args, **kwargs):
+            raise sqlite3.OperationalError("database is locked")
+
+        def process_with_finish_error(job):
+            try:
+                raise RuntimeError("pipeline failed")
+            except RuntimeError:
+                self.store.finish(job["id"], "failed", error="pipeline failed")
+
+        with patch.object(self.worker, "_maybe_sweep_work_root"), \
+             patch.object(self.worker, "_maybe_refresh_cast"), \
+             patch.object(self.store, "claim", side_effect=claim), \
+             patch.object(self.store, "finish", side_effect=fail_while_finishing) as finish, \
+             patch.object(self.worker, "_process", side_effect=process_with_finish_error), \
+             self.assertLogs("worker", level="ERROR") as logs:
+            self.worker.run()
+        self.assertEqual(calls, 2)
+        self.assertEqual(finish.call_count, 2)
+        self.assertIn("worker could not record escaped failure", "\n".join(logs.output))
 
 
 class SuccessfulJobTests(WorkerTestCase):
@@ -1066,4 +1123,3 @@ class ProgressThrottlingTests(WorkerTestCase):
         events = [("SRT_TRANSLATION_PROGRESS", {"done": d, "total": 7}) for d in range(1, 8)]
         row, _ = self._run(events)
         self.assertAlmostEqual(row["progress"], 90)
-

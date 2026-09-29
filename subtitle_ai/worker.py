@@ -402,13 +402,34 @@ class Worker(threading.Thread):
         logger.info("worker thread started")
         while not self._stop_event.is_set():
             self.last_heartbeat = time.time()
-            self._maybe_sweep_work_root()
-            job = self.store.claim()
-            if not job:
-                self._maybe_refresh_cast()
+            try:
+                self._maybe_sweep_work_root()
+            except Exception:
+                logger.exception("worker failed to sweep its work root")
+            try:
+                job = self.store.claim()
+            except Exception:
+                logger.exception("worker failed to claim a job")
                 self._stop_event.wait(self.poll_interval)
                 continue
-            self._process(job)
+            if not job:
+                try:
+                    self._maybe_refresh_cast()
+                except Exception:
+                    logger.exception("worker failed during idle cast refresh")
+                self._stop_event.wait(self.poll_interval)
+                continue
+            try:
+                self._process(job)
+            except Exception as exc:
+                job_id = job.get("id", "<unknown>")
+                logger.exception("job %s escaped worker error handling", job_id)
+                try:
+                    self.store.finish(job_id, "failed", error=str(exc)[:500],
+                                      error_category="WORKER_ERROR")
+                except Exception:
+                    logger.exception("worker could not record escaped failure for job %s", job_id)
+                self._stop_event.wait(self.poll_interval)
         logger.info("worker thread stopped")
 
     def _build_on_event(self, job_id: str, job_type: str = "video"):
