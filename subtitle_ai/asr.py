@@ -70,15 +70,21 @@ from pathlib import Path
 from media import MediaError
 from transcript import CanonicalTranscript, ModelInfo, Segment, Word
 
-PIPELINE_VERSION = "2.0.5"
+PIPELINE_VERSION = "2.0.7"
 
 # A stretch of the file this long or longer with no decoded segment at
-# all -- or an existing segment this long holding SPARSE_MAX_DENSITY
-# chars/sec of text or less -- is treated as suspicious rather than
-# assumed silent/correct; see recover_vad_merged_segments() below for
-# the real production cases that motivate this.
+# all, an existing segment this long holding SPARSE_MAX_DENSITY chars/sec
+# or less, or a 10-15s segment holding SHORT_SPARSE_MAX_DENSITY chars/sec
+# or less, is suspicious rather than assumed silent/correct. Long
+# high-compression-ratio segments are retried too; see
+# recover_vad_merged_segments() below for the real production cases.
 GAP_MIN_DURATION = 15.0
 SPARSE_MAX_DENSITY = 2.5
+SHORT_SPARSE_MIN_DURATION = 10.0
+SHORT_SPARSE_MAX_DENSITY = 1.0
+# At this ratio hallucination.py's graduated score reaches its .75
+# suppression threshold without needing another signal.
+LOOP_RECOVERY_MIN_COMPRESSION_RATIO = 7.4
 
 # A word's real duration is never allowed to be zero -- see
 # segments_from_raw()'s own comment for the real (rare) faster-whisper
@@ -296,18 +302,23 @@ def _segment_text_len(seg: dict) -> int:
 
 
 def _is_long_and_sparse(seg: dict) -> bool:
-    """The word_timestamps-collapse pathology can also leave ONE segment
-    nominally covering a long span instead of no segment at all -- see
-    recover_vad_merged_segments()'s docstring. Real case: Hammer Session!
-    S01E01 (2026-09-29), a single 11.6-50.5s (38.9s) segment holding only
-    ~14 characters of Japanese text where a human subtitle has a full
-    line of dialogue. `_find_long_gaps` alone never sees this shape --
-    there IS a segment there, it is just almost empty."""
+    """The word_timestamps-collapse pathology can leave one segment
+    nominally covering a span instead of no segment at all. Long spans
+    use SPARSE_MAX_DENSITY; 10-15s spans use a stricter threshold because
+    measured S01E01 gaps were hidden inside those shorter sparse spans."""
     duration = seg["end"] - seg["start"]
-    if duration < GAP_MIN_DURATION:
+    if duration < SHORT_SPARSE_MIN_DURATION:
         return False
     density = _segment_text_len(seg) / duration if duration > 0 else float("inf")
+    if duration < GAP_MIN_DURATION:
+        return density <= SHORT_SPARSE_MAX_DENSITY
     return density <= SPARSE_MAX_DENSITY
+
+
+def _is_long_repetition_loop(seg: dict) -> bool:
+    duration = seg["end"] - seg["start"]
+    return (duration >= SHORT_SPARSE_MIN_DURATION
+            and seg.get("compression_ratio", 0.0) >= LOOP_RECOVERY_MIN_COMPRESSION_RATIO)
 
 
 def _retry_span(wav_path: str, span_start: float, span_end: float, model, config: "AsrConfig",
@@ -359,26 +370,44 @@ def recover_vad_merged_segments(raw: list[dict], wav_path: str, model, config: "
     exactly like any other segment; it is not exempted from the usual
     quality gate, just no longer gated a second time by VAD.
 
-    Every GAP_MIN_DURATION+ second gap, and every existing segment of
-    that duration or longer scoring SPARSE_MAX_DENSITY chars/sec or
-    below, is re-decoded in isolation with VAD off. A gap's retry result
-    is always spliced in (even empty, for a genuinely silent gap); a
+    Every GAP_MIN_DURATION+ second gap, every existing segment of that
+    duration or longer scoring SPARSE_MAX_DENSITY chars/sec or below,
+    and a 10-15s segment scoring at most 1 char/sec, is re-decoded in
+    isolation with VAD off. The short/sparser threshold was added after
+    S01E01 showed 10-12s alignment-collapse cases hiding dialogue inside
+    human-reference gaps. A segment of at least 10s with a compression
+    ratio of 7.4 or higher is also retried: the isolated decode replaces
+    that loop only when it returns nonempty text and every recovered
+    segment is below the configured compression-ratio threshold. This
+    allows a VAD-off retry to recover real dialogue hidden by a repeated
+    hallucination without accepting another loop. A gap's retry result is
+    always spliced in (even empty, for a genuinely silent gap); an ordinary
     sparse segment's retry replaces it only if it recovers MORE text
     than the original held, so a legitimately sparse-but-correct segment
     (a long pause, one trailing word) is never made worse."""
     ordered = sorted(raw, key=lambda s: s["start"])
     gap_spans = [(start, end, None) for start, end in _find_long_gaps(ordered, total_duration)]
-    sparse_segments = [s for s in ordered if _is_long_and_sparse(s)]
+    loop_segments = [s for s in ordered if _is_long_repetition_loop(s)]
+    loop_ids = {id(s) for s in loop_segments}
+    sparse_segments = [s for s in ordered if id(s) not in loop_ids and _is_long_and_sparse(s)]
     sparse_spans = [(s["start"], s["end"], s) for s in sparse_segments]
-    spans = gap_spans + sparse_spans
+    loop_spans = [(s["start"], s["end"], s) for s in loop_segments]
+    spans = gap_spans + sparse_spans + loop_spans
     if not spans:
         return raw
-    sparse_ids = {id(s) for s in sparse_segments}
-    out = [s for s in ordered if id(s) not in sparse_ids]
+    retry_ids = {id(s) for s in sparse_segments + loop_segments}
+    out = [s for s in ordered if id(s) not in retry_ids]
     for span_start, span_end, original in spans:
         retried = _retry_span(wav_path, span_start, span_end, model, config, language)
         if original is None:
             out.extend(retried)
+        elif id(original) in loop_ids:
+            clean_retry = bool(retried) and all(
+                _segment_text_len(s) > 0
+                and s.get("compression_ratio", float("inf")) < config.compression_ratio_threshold
+                for s in retried
+            )
+            out.extend(retried if clean_retry else [original])
         else:
             retried_len = sum(_segment_text_len(r) for r in retried)
             out.extend(retried if retried_len > _segment_text_len(original) else [original])

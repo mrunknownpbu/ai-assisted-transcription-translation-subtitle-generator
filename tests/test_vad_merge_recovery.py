@@ -23,7 +23,10 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from asr import AsrConfig, GAP_MIN_DURATION, SPARSE_MAX_DENSITY, recover_vad_merged_segments
+from asr import (
+    AsrConfig, GAP_MIN_DURATION, SHORT_SPARSE_MAX_DENSITY,
+    SHORT_SPARSE_MIN_DURATION, SPARSE_MAX_DENSITY, recover_vad_merged_segments,
+)
 
 
 def _raw_segment(start, end, text):
@@ -38,9 +41,10 @@ class _RetryModel:
     "words per recovered segment" list per expected call, popped in
     order (last one reused if there are more calls than responses)."""
 
-    def __init__(self, call_responses):
+    def __init__(self, call_responses, compression_ratio=1.5):
         self.calls = []
         self._responses = list(call_responses)
+        self._compression_ratio = compression_ratio
 
     def transcribe(self, wav_path, **kwargs):
         self.calls.append(kwargs)
@@ -51,16 +55,17 @@ class _RetryModel:
                 self.word, self.start, self.end, self.probability = word, start, end, 0.9
 
         class _Seg:
-            def __init__(self, start, end, words):
+            def __init__(self, start, end, words, compression_ratio):
                 self.start, self.end = start, end
                 self.words = words
-                self.avg_logprob, self.no_speech_prob, self.compression_ratio = -0.3, 0.2, 1.5
+                self.avg_logprob, self.no_speech_prob = -0.3, 0.2
+                self.compression_ratio = compression_ratio
 
         segs = []
         t = 0.0
         for words in words_per_segment:
             ws = [_W(" " + w, t + i, t + i + 0.5) for i, w in enumerate(words)]
-            segs.append(_Seg(t, t + len(words) + 0.5, ws))
+            segs.append(_Seg(t, t + len(words) + 0.5, ws, self._compression_ratio))
             t += len(words) + 1.0
         return iter(segs), object()
 
@@ -85,7 +90,7 @@ class GapRecoveryTests(unittest.TestCase):
     def test_real_bug_shape_zero_segments_across_a_long_gap_is_recovered(self):
         # The confirmed real production shape (S01E02): nothing at all
         # between 10.2s and 100.1s, not one sparse segment.
-        raw = [_raw_segment(0.0, 10.2, "a"), _raw_segment(100.1, 105.0, "b")]
+        raw = [_raw_segment(0.0, 10.2, "a b c d e f g h i j"), _raw_segment(100.1, 105.0, "b")]
         model = _RetryModel([[["ichi", "ni", "san"], ["shi", "go"]]])
         with patch("asr._extract_wav_window"):
             out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
@@ -105,7 +110,7 @@ class GapRecoveryTests(unittest.TestCase):
         self.assertTrue(any(10.2 <= s["start"] < 100.1 for s in out[1:3]))
 
     def test_genuinely_silent_gap_recovers_nothing_and_stays_a_gap(self):
-        raw = [_raw_segment(0.0, 10.2, "a"), _raw_segment(100.1, 105.0, "b")]
+        raw = [_raw_segment(0.0, 10.2, "a b c d e f g h i j"), _raw_segment(100.1, 105.0, "b")]
         model = _RetryModel([[]])  # isolated re-decode finds nothing either
         with patch("asr._extract_wav_window"):
             out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
@@ -134,6 +139,51 @@ class GapRecoveryTests(unittest.TestCase):
 class SparseSegmentRecoveryTests(unittest.TestCase):
     def test_short_segment_is_never_touched_regardless_of_density(self):
         raw = [_raw_segment(0.0, 5.0, "a")]  # below GAP_MIN_DURATION
+        model = _RetryModel([])
+        with patch("asr._extract_wav_window"):
+            out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
+        self.assertEqual(out, raw)
+        self.assertEqual(model.calls, [])
+
+    def test_high_ratio_loop_is_replaced_by_a_clean_isolated_retry(self):
+        loop_text = "ウニイクラチュウトロ" * 14
+        original = _raw_segment(10.2, 48.2, loop_text)
+        original["compression_ratio"] = 14.87
+        raw = [_raw_segment(0.0, 10.2, "a b c d e f g h i j"), original]
+        model = _RetryModel([[["recovered", "dialogue"], ["more", "speech"]]])
+        with patch("asr._extract_wav_window"):
+            out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
+        self.assertEqual(len(model.calls), 1)
+        self.assertFalse(model.calls[0]["vad_filter"])
+        self.assertNotIn(original, out)
+        self.assertGreater(len(out), len(raw))
+        self.assertTrue(all(s["compression_ratio"] < 2.4 for s in out[1:]))
+
+    def test_high_ratio_loop_is_kept_when_retry_is_still_repetitive(self):
+        original = _raw_segment(10.2, 48.2, "ウニイクラチュウトロ" * 14)
+        original["compression_ratio"] = 14.87
+        raw = [_raw_segment(0.0, 10.2, "a b c d e f g h i j"), original]
+        model = _RetryModel([[["ウニイクラチュウトロ" * 14]]], compression_ratio=14.87)
+        with patch("asr._extract_wav_window"):
+            out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
+        self.assertEqual(out, raw)
+        self.assertEqual(len(model.calls), 1)
+
+    def test_short_sparse_alignment_collapse_is_retried(self):
+        duration = SHORT_SPARSE_MIN_DURATION + 2
+        text = "x" * int(duration * SHORT_SPARSE_MAX_DENSITY * 0.5)
+        raw = [_raw_segment(0.0, duration, text)]
+        model = _RetryModel([[["recovered", "dialogue"]]])
+        with patch("asr._extract_wav_window"):
+            out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
+        self.assertEqual(len(model.calls), 1)
+        self.assertFalse(model.calls[0]["vad_filter"])
+        self.assertNotEqual(out, raw)
+
+    def test_short_sparse_recovery_does_not_retry_dense_segment(self):
+        duration = SHORT_SPARSE_MIN_DURATION + 2
+        text = "x" * int(duration * SHORT_SPARSE_MAX_DENSITY * 1.5)
+        raw = [_raw_segment(0.0, duration, text)]
         model = _RetryModel([])
         with patch("asr._extract_wav_window"):
             out = recover_vad_merged_segments(raw, "job.wav", model, AsrConfig(), "ja")
