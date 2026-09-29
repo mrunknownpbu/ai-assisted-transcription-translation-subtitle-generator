@@ -263,6 +263,125 @@ class MalayMiningTests(unittest.TestCase):
         self.assertNotIn("AISYAH", [c.canonical for c in candidates])
 
 
+class KoreanMiningTests(unittest.TestCase):
+    """Word-spaced, but no capitalization AND no distinct-script signal --
+    see auto_glossary.py's module docstring for the real cross-series
+    measurement STOPWORDS_KO was built from (2026-09-29, "Confidence
+    Queen" tvdb-444735 + "Not Others" tvdb-428265, extracted from these
+    series' own embedded Korean subtitle streams)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_mines_recurring_name_across_episodes(self):
+        lines = ["제임스가 왔다", "제임스는 어디", "제임스를 봤어"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ko")
+        candidates = mine_series_entities(self.root, "ko")
+        self.assertIn("제임스", [c.canonical for c in candidates])
+
+    def test_particle_suffixed_inflections_merge_into_base_form(self):
+        # 은/는/이/가/을/를 etc. attach directly with no space -- Korean's
+        # agglutinative equivalent of Turkish's apostrophe suffixes.
+        lines = ["전태수는 갔다", "전태수가 왔다", "전태수를 봤다"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ko")
+        candidates = mine_series_entities(self.root, "ko")
+        self.assertIn("전태수", [c.canonical for c in candidates])
+
+    def test_stopword_pronouns_and_connectives_excluded(self):
+        # Real measured cross-series overlap: these recur in ANY Korean
+        # dialogue regardless of show, so they can never be names.
+        lines = ["아니 진짜 우리", "아니 진짜 그래", "우리 그래 이거"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ko")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "ko")]
+        self.assertNotIn("아니", candidates)
+        self.assertNotIn("진짜", candidates)
+        self.assertNotIn("우리", candidates)
+
+    def test_stopword_kinship_honorific_excluded(self):
+        # Hand-curated supplement, same category as STOPWORDS_TR's
+        # Anne/Baba/Bey entries -- direct-address terms, not names.
+        lines = ["회장님 오셨어요", "회장이 말했다", "회장은 없다"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ko")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "ko")]
+        self.assertNotIn("회장", candidates)
+
+    def test_single_syllable_too_short_to_qualify(self):
+        lines = ["그 가 나", "그 가 나", "그 가 나"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ko")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "ko")]
+        self.assertNotIn("그", candidates)
+
+
+class ChineseMiningTests(unittest.TestCase):
+    """No word spacing AND no capitalization-equivalent marker -- see
+    auto_glossary.py's module docstring for the real cross-series
+    measurement STOPWORDS_ZH was built from (2026-09-29, "Pull Strings"
+    tvdb-467966 + "A Familiar Stranger" tvdb-425354, extracted from these
+    series' own embedded Chinese subtitle streams)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_mines_recurring_name_across_episodes(self):
+        lines = ["长庚来了", "长庚说话", "看到长庚"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="zh")
+        candidates = mine_series_entities(self.root, "zh")
+        self.assertIn("长庚", [c.canonical for c in candidates])
+
+    def test_stopword_function_words_excluded(self):
+        # Real measured cross-series overlap: recurs in ANY Chinese
+        # dialogue regardless of show, so can never be a name.
+        lines = ["什么我们知道", "什么我们知道", "什么我们知道"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="zh")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "zh")]
+        self.assertNotIn("什么", candidates)
+        self.assertNotIn("我们", candidates)
+
+    def test_real_three_character_term_absorbs_its_own_substrings(self):
+        # Real motivating case: "先元剑" (a named sword) independently
+        # clears the threshold as a whole term AND its 2-character
+        # sub-fragments ("先元", "元剑") also independently clear it
+        # (every occurrence of the sword's name also IS an occurrence of
+        # each fragment) -- only the longest, most informative candidate
+        # should survive for a human reviewer.
+        lines = ["先元剑在手", "先元剑出鞘", "先元剑归位"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="zh")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "zh")]
+        self.assertIn("先元剑", candidates)
+        self.assertNotIn("先元", candidates)
+        self.assertNotIn("元剑", candidates)
+
+    def test_fragment_with_independent_occurrences_survives_collapse(self):
+        # A sub-fragment that ALSO recurs independently, outside the
+        # longer term, is real evidence of its own and must not be
+        # silently absorbed just because it also happens to appear
+        # inside the longer term sometimes.
+        lines = ["先元剑现身", "先元来了", "先元又来了"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="zh")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "zh")]
+        self.assertIn("先元", candidates)
+
+    def test_single_character_too_short_to_qualify(self):
+        lines = ["他 来 了", "他 来 了", "他 来 了"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="zh")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "zh")]
+        self.assertNotIn("他", candidates)
+
+
 class UnregisteredLanguageTests(unittest.TestCase):
     """ko/zh/th have no orthographic mining strategy yet (see module
     docstring) -- mine_series_entities() must degrade to [], never raise,
@@ -274,10 +393,12 @@ class UnregisteredLanguageTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
 
     def test_unregistered_language_returns_empty(self):
-        lines = ["안녕하세요", "안녕하세요", "안녕하세요"]
+        # th, not ko/zh -- both are registered now (see KoreanMiningTests,
+        # ChineseMiningTests).
+        lines = ["สวัสดีครับ", "สวัสดีครับ", "สวัสดีครับ"]
         for i in range(1, 4):
-            _write_pair(self.root, f"S01E0{i}", lines, lang="ko")
-        self.assertEqual(mine_series_entities(self.root, "ko"), [])
+            _write_pair(self.root, f"S01E0{i}", lines, lang="th")
+        self.assertEqual(mine_series_entities(self.root, "th"), [])
 
 
 class AutoLanguageDetectionTests(unittest.TestCase):

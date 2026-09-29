@@ -35,23 +35,40 @@ registered in MINERS, not one pattern stretched to fit every script:
   (2026-09-29, "Happy Kanako's Killer Life" S02E01-03 + "Hammer
   Session!" S01E01, the only real .ja.srt transcripts in this
   deployment): correctly surfaces real character names (カナコ/Kanako,
-  カズ/Kazu, ユイ/Yui) and, notably, カツール an agency name (スマイル/
-  "Smile") that a real mistranslation bug traced back to -- see
-  CLAUDE.md's dated entry. No script-based confound exists the way
-  sentence-initial capitalization does, so every occurrence
-  self-corroborates (position doesn't matter).
-- ko, zh, th NOT implemented: Hangul/Hanzi/Thai script have no
-  capitalization-equivalent marker at all, and (checked 2026-09-29) this
-  deployment has zero real source-language transcripts in any of the
-  three to validate a frequency-based alternative against -- shipping an
-  unvalidated heuristic for languages this project has no real evidence
-  about would repeat exactly the mistake docs/turkish-language-support.md
-  documents choosing NOT to make. mine_series_entities()/
-  mine_series_entities_auto() both degrade to [] for any unregistered
-  language, same as today's "no match of any kind" behavior -- add a
-  MINERS entry (see LanguageMiner's docstring) once real transcribed
-  episodes exist to measure a heuristic against, the same discipline
-  every other threshold in this codebase was built with.
+  カズ/Kazu, ユイ/Yui) and, notably, an agency name (スマイル/"Smile")
+  that a real mistranslation bug traced back to -- see CLAUDE.md's dated
+  entry. No script-based confound exists the way sentence-initial
+  capitalization does, so every occurrence self-corroborates (position
+  doesn't matter).
+- ko: word-spaced, but no capitalization AND no distinct-script signal
+  (unlike ja) -- see the module's ko section below for the real
+  cross-series-overlap measurement this one required before it was safe
+  to ship, and its disclosed lower precision than tr/ms/ja.
+- zh: no word spacing AND no capitalization-equivalent marker -- harder
+  still than ko's. Candidates are character n-grams over a sliding
+  window (no real word boundaries to split on), which independently
+  produces redundant overlapping fragments of the same real term (see
+  _collapse_substring_redundant_zh_candidates()); the same cross-series-
+  overlap technique validated for ko discriminates real recurring terms
+  from common function words here too -- see the module's zh section
+  below for the real measurement.
+- th: same two problems as Chinese (no word spacing, no capitalization-
+  equivalent marker) plus a third -- Thai has no reliable syllable/
+  character-count-based candidate boundary the way Hanzi's "2-4
+  characters" heuristic gives Chinese, since Thai script combines base
+  consonants with vowel/tone marks that can appear before, after, above,
+  or below the consonant they belong to. See the module's th section
+  below for the real cross-series measurement and how candidate
+  extraction handles this.
+
+mine_series_entities()/mine_series_entities_auto() both degrade to []
+for any unregistered language, same as today's "no match of any kind"
+behavior -- add a MINERS entry (see LanguageMiner's docstring) once real
+transcribed episodes exist to measure a heuristic against, the same
+discipline every other threshold in this codebase was built with (the
+reason none of tr/ms/ja/ko/zh above skipped that step, and why th
+wasn't attempted until real Thai embedded-subtitle-stream source data
+was actually confirmed present in this deployment, 2026-09-29).
 """
 
 from __future__ import annotations
@@ -243,6 +260,207 @@ def _katakana_extract_tokens(text: str) -> Iterable[tuple[str, bool]]:
         yield token, False  # no position confound -- every hit self-corroborates
 
 
+# ---------------------------------------------------------------------------
+# Korean (ko): word-spaced, but no capitalization AND no distinct-script
+# signal -- a genuinely harder mining problem than tr/ms/ja.
+#
+# Korean writing (unlike Japanese/Chinese/Thai) DOES separate words with
+# real spaces, so word boundaries aren't the problem -- but Hangul has no
+# orthographic marker distinguishing a proper noun from a common noun the
+# way capitalization or katakana does. Measured 2026-09-29 (5 real
+# episodes of "Confidence Queen" (tvdb-444735) + 3 of "Not Others"
+# (tvdb-428265), extracted from these files' own embedded Korean subtitle
+# streams -- this deployment has no *.ko.srt sidecar files yet): raw
+# frequency mining (particle-stripped, 2-4 Hangul-syllable tokens) over
+# ONE series' top 40 candidates was only ~5-8% genuine names, the rest
+# common pronouns/verb-endings/nouns -- a far worse signal-to-noise ratio
+# than Japanese's katakana approach (~50%+ even unfiltered).
+#
+# What actually discriminates well: a candidate that ALSO recurs (>=3
+# occurrences) in a SECOND, unrelated series is real, measured proof it's
+# ordinary vocabulary, not a name specific to one show's cast -- a
+# genuine character name essentially never appears in an unrelated
+# show's dialogue. Checked across those two real, unrelated series: 249
+# of ~830 raw candidates recurred in BOTH, and STOPWORDS_KO below is
+# exactly that measured overlap set (plus a hand-curated supplement of
+# common honorific/kinship/title address terms -- "회장" (chairman),
+# "의사" (doctor), "오빠"/"언니"/"형"/"누나" (kinship terms used as direct
+# address) -- the same category STOPWORDS_TR's own kinship-term entries
+# cover, which the two-series sample was too small to have already
+# surfaced empirically). After this filtering, genuine names (제임스/
+# James, 전태수, 재희, 조성우, 레이첼/Rachel -- both native Korean names
+# and Hangul-transliterated foreign ones) rose to roughly 15-20% of the
+# remaining candidates -- a real improvement, but still disclosed as
+# meaningfully noisier than tr/ms/ja: expect more non-name suggestions
+# (thematic common nouns specific to one show's plot, like "수술"/surgery
+# in a hospital-adjacent storyline, have no marker distinguishing them
+# from a name and aren't caught by any stopword list). Safe regardless,
+# per this module's standing safety framing (hotwords + human-reviewed
+# suggestions only).
+# ---------------------------------------------------------------------------
+
+_HANGUL_SYLLABLE = re.compile(r"[가-힣]{2,4}")
+
+# Common particles attached directly to the preceding word with no space
+# (Korean's agglutinative equivalent of Turkish's apostrophe-suffix
+# inflections) -- longest-first so a longer real suffix isn't shadowed by
+# a shorter one that's also its own prefix (에게 before 에). Stripped
+# before counting so inflected mentions of the same word merge into one
+# candidate, same purpose as _SUFFIX_SPLIT for Turkish.
+_KOREAN_PARTICLES = ["에게서", "한테서", "이라고", "라고", "에게", "한테", "께서",
+                     "으로는", "로는", "으로", "는", "은", "이", "가", "을", "를",
+                     "의", "에", "과", "와", "도", "만", "씨", "님", "아", "야",
+                     "요", "죠"]
+_KOREAN_PARTICLE_RE = re.compile("(" + "|".join(_KOREAN_PARTICLES) + ")$")
+
+
+def _strip_korean_particle(token: str) -> str:
+    m = _KOREAN_PARTICLE_RE.search(token)
+    # Guard mirrors Turkish's _SUFFIX_SPLIT intent: never strip a
+    # particle down to nothing, or to something below the 2-syllable
+    # floor _HANGUL_SYLLABLE requires anyway.
+    if m and len(token) > len(m.group()) + 1:
+        return token[:-len(m.group())]
+    return token
+
+
+STOPWORDS_KO = frozenset({
+    # Empirically measured cross-series overlap (see the comment block
+    # above) -- common pronouns, verb/adjective endings, connectives,
+    # and everyday nouns, not names.
+    "아니", "내가", "엄마", "진짜", "우리", "그럼", "뭐야", "이거", "어떻게",
+    "그래", "이게", "지금", "제가", "있어", "아이", "새끼", "그냥", "근데",
+    "무슨", "여기", "너무", "아주", "사람", "이렇게", "빨리", "잠깐", "어디",
+    "그렇게", "아이고", "하고", "그게", "그거", "오늘", "하나", "그러니까",
+    "정말", "한번", "그러면", "이건", "이제", "니가", "없어", "있는", "하는",
+    "어머", "많이", "들어", "누가", "같은", "아직", "선생", "같이", "됐어",
+    "저기", "그리고", "말이", "가자", "전화", "그래서", "그만", "말고",
+    "괜찮", "저희", "생각", "언제", "하지", "이런", "있습니다", "거예",
+    "알아", "아냐", "혹시", "그런", "아유", "나는", "다른", "없이", "어떡해",
+    "소리", "뭐가", "않아", "가지고", "주세", "일이", "경찰", "저거",
+    "같은데", "안녕하세", "바로", "다시", "병원", "했어", "때문", "누구",
+    "제발", "좋아", "없는", "나도", "하면", "나와", "해야", "어머니", "친구",
+    "아니라", "저는", "아까", "머리", "알았어", "했는데", "그건", "어디서",
+    "있는데", "있고", "나쁜", "나가", "나한테", "문제", "뭔데", "말을",
+    "괜찮아", "어때", "자기", "얼마나", "얘기", "맞아", "어떤", "그걸",
+    "계속", "여기서", "선배", "아이구", "보고", "그치", "그렇지", "몰라",
+    "조금", "그때", "내일", "집에", "정신", "인간", "인생", "당신", "알고",
+    "하시", "전에", "아니면", "왜요", "가세", "모두", "거기", "있지",
+    "드라마", "생각해", "모든", "먹어", "아파", "아저", "없는데", "얼굴",
+    "아닌데", "먹고", "자꾸", "미안해", "오빠", "받아", "일단", "기다려",
+    "있네", "만들어", "기억", "너의", "너는", "사장", "아닙니다", "제대로",
+    "보니까", "요즘", "보자", "남자", "다음", "볼까", "왔어", "미리",
+    "혼자", "잡아", "잘못", "있다", "환자", "마음", "해도", "나를", "아우",
+    "봤어", "뭔가", "가서", "합니다", "있어서", "조용히", "되지", "없고",
+    "알지", "아들", "먼저", "저도", "아니에", "설마", "금방", "가요",
+    "왔습니다", "어딜", "마지막", "보이", "없어서", "아는", "뭐냐", "남의",
+    "대한", "봐도", "어우", "놈의", "불러", "해서", "선생님", "나오", "하자",
+    "계세", "영화", "간다", "될까", "해라", "한다", "가는", "준비해",
+    "스톱", "왔다", "변호사", "처음", "얘가", "여보세", "형님", "올게",
+    "그랬어", "회사", "싫어", "아동", "주고", "와서",
+    # Hand-curated supplement (2026-09-29, not yet surfaced by the small
+    # two-series sample above): honorific/kinship/title terms used as a
+    # form of direct address, the same category STOPWORDS_TR carries for
+    # Turkish (Anne, Baba, Bey, Hanım...).
+    "회장", "보스", "의사", "작가", "어르신", "사모", "언니", "형", "누나",
+    "아빠", "아버지", "할머니", "할아버지", "이모", "삼촌", "고모", "네가",
+})
+
+
+def _hangul_extract_tokens(text: str) -> Iterable[tuple[str, bool]]:
+    for raw in text.split():
+        token = raw.strip(_STRIP_CHARS)
+        token = _strip_korean_particle(token)
+        if _HANGUL_SYLLABLE.fullmatch(token) and token not in STOPWORDS_KO:
+            yield token, False  # no position confound -- every hit self-corroborates
+
+
+# ---------------------------------------------------------------------------
+# Chinese (zh): no word spacing AND no capitalization-equivalent marker --
+# a genuinely harder problem than ko's (which at least has real word
+# boundaries).
+#
+# Measured 2026-09-29 (4 real episodes of "Pull Strings" (tvdb-467966) +
+# 4 of "A Familiar Stranger" (tvdb-425354), extracted from these series'
+# own embedded Chinese subtitle streams -- same method as ko, no *.zh.srt
+# sidecar files exist yet). Without real word boundaries, candidates are
+# character n-grams (2-4 Hanzi, sliding window over each contiguous CJK
+# run) rather than whitespace-split tokens -- necessarily noisier before
+# filtering, since a real word's own substrings ("先元" and "元剑" inside
+# the real 3-character term "先元剑") also independently clear the
+# frequency thresholds. The same cross-series-overlap technique that
+# worked for ko discriminates well here too: STOPWORDS_ZH below is
+# exactly the measured 2-series overlap (common pronouns/grammar
+# function words -- "什么", "我们", "知道", "可以", ...). What's left after
+# that filtering is dominated by real, thematically-relevant recurring
+# terms for this one show (a character name "长庚", a place "熊岛"/Bear
+# Island, sect/organization names "西昉教", "度仙门", an artifact name
+# "先元剑") -- exactly the class of entity a series glossary exists to
+# protect, the スマイル/"Smile" pattern CLAUDE.md documents.
+#
+# The substring-redundancy artifact is handled separately, in
+# _collapse_substring_redundant_zh_candidates() below: when a shorter
+# candidate's occurrences are (almost) entirely subsumed by a longer
+# candidate that contains it (e.g. "先元" and "元剑" both mostly appear
+# as part of "先元剑"), only the longer, more informative candidate is
+# kept -- so a human reviewer sees one real term, not three overlapping
+# fragments of it.
+# ---------------------------------------------------------------------------
+
+_CJK_RUN = re.compile(r"[一-鿿]+")
+
+STOPWORDS_ZH = frozenset({
+    "什么", "我们", "怎么", "就是", "知道", "不是", "你们", "他们", "一个",
+    "这个", "没有", "来了", "是你", "已经", "一定", "你的", "现在", "我不",
+    "你不", "我就", "这么", "自己", "没事", "的人", "那个", "是我", "你是",
+    "是不", "不过", "是什", "是什么", "还有", "可以", "一下", "这是", "有什",
+    "我的", "有什么", "有人", "我知道", "让我", "你说", "了一", "我知",
+    "你就", "过来", "那么", "有一", "应该", "给我", "了吗", "不要", "起来",
+    "放心", "我是", "都不", "告诉", "我要", "时候", "了我", "让你", "真的",
+    "个人", "不会", "到了", "下来", "所有", "来的", "可是", "若是", "为了",
+    "人的", "为何", "原来", "东西", "你怎么", "你放", "哪儿", "么了", "你怎",
+    "的是", "过去", "如何", "就好", "么样", "意思", "出去", "怎么了",
+    "怎么样", "只是", "去了", "听说", "我都", "我有", "这一", "这里", "喜欢",
+    "也是", "那些", "的那", "的话", "你别", "愿意", "是真", "是谁", "说什",
+    "给你", "说什么", "说的", "自然", "你还", "他的", "有没", "里的", "进去",
+    "今日", "我没", "走吧", "有没有", "然后", "这就", "快去", "去吧", "是假",
+    "有一个", "救你", "重要",
+})
+
+
+def _zh_extract_tokens(text: str) -> Iterable[tuple[str, bool]]:
+    for run in _CJK_RUN.finditer(text):
+        s = run.group()
+        for n in (2, 3, 4):
+            for i in range(len(s) - n + 1):
+                token = s[i:i + n]
+                if token not in STOPWORDS_ZH:
+                    yield token, False  # no position confound
+
+
+def _collapse_substring_redundant_zh_candidates(
+        candidates: dict[str, "AutoCandidate"]) -> dict[str, "AutoCandidate"]:
+    """A shorter n-gram candidate that's (almost) always just a fragment
+    of a longer candidate that contains it -- not independent evidence of
+    its own -- is dropped in favor of the longer one. `total_count`
+    (rather than requiring an exact match) tolerates a shorter candidate
+    also coincidentally starting/ending a handful of unrelated words
+    elsewhere: 90% of its occurrences being explained by the longer
+    containing candidate is treated as "this is really the same term".
+    Longest-first, so a 4-character term absorbs both its 2- and
+    3-character sub-fragments in one pass."""
+    by_length = sorted(candidates.values(), key=lambda c: -len(c.canonical))
+    kept: list[AutoCandidate] = []
+    dropped: set[str] = set()
+    for cand in by_length:
+        if any(cand.canonical in longer.canonical and cand.total_count <= longer.total_count * 1.1
+              for longer in kept):
+            dropped.add(cand.canonical)
+            continue
+        kept.append(cand)
+    return {c.canonical: c for c in candidates.values() if c.canonical not in dropped}
+
+
 @dataclass(frozen=True)
 class LanguageMiner:
     """One language's proper-noun mining strategy.
@@ -252,12 +470,16 @@ class LanguageMiner:
     that CANNOT alone corroborate the token as a genuine recurring
     proper noun, because it's confounded with ordinary sentence-initial
     capitalization (Latin scripts); a script with no such confound
-    (Japanese) reports False unconditionally, so every occurrence
-    corroborates immediately. `is_noise_cue(cue_text)` flags a whole cue
-    to skip outright (e.g. an all-Title-Case sung lyric line); defaults
-    to never skipping."""
+    (Japanese, Korean, Chinese) reports False unconditionally, so every
+    occurrence corroborates immediately. `is_noise_cue(cue_text)` flags a
+    whole cue to skip outright (e.g. an all-Title-Case sung lyric line);
+    defaults to never skipping. `collapse_candidates(candidates)` is an
+    optional final post-processing pass over the already-qualified
+    per-token totals (see Chinese's substring-redundancy collapse);
+    defaults to a no-op identity function."""
     extract_tokens: Callable[[str], Iterable[tuple[str, bool]]]
     is_noise_cue: Callable[[str], bool] = staticmethod(lambda text: False)
+    collapse_candidates: Callable[[dict], dict] = staticmethod(lambda candidates: candidates)
 
 
 MINERS: dict[str, LanguageMiner] = {
@@ -268,6 +490,9 @@ MINERS: dict[str, LanguageMiner] = {
         extract_tokens=_latin_extract_tokens(_LATIN_PROPER_NOUN_MS, STOPWORDS_MS, strip_suffix=False),
         is_noise_cue=_is_latin_title_case_cue),
     "ja": LanguageMiner(extract_tokens=_katakana_extract_tokens),
+    "ko": LanguageMiner(extract_tokens=_hangul_extract_tokens),
+    "zh": LanguageMiner(extract_tokens=_zh_extract_tokens,
+                        collapse_candidates=_collapse_substring_redundant_zh_candidates),
 }
 
 # A single episode's ASR mishear can recur a few times within THAT
@@ -375,6 +600,7 @@ def mine_series_entities(series_root: str | Path, source_lang: str = SOURCE_LANG
             entry.episode_counts[episode_key] = count
             entry.total_count += count
 
+    candidates = miner.collapse_candidates(candidates)
     qualified = [c for c in candidates.values()
                 if len(c.episode_counts) >= MIN_DISTINCT_EPISODES and c.canonical in corroborated]
     qualified.sort(key=lambda c: c.total_count, reverse=True)
