@@ -38,11 +38,12 @@ from text_segmentation import ENGLISH, TURKISH, SplitLexicon, _boundary_score, w
 from transcript import NO_SPACE_LANGUAGES, BoundaryReason, Segment, Word, render_words
 
 MAX_CUE_CHARS = 84            # ~2 lines x 42 chars
+MAX_JAPANESE_CUE_CHARS = 42
 MAX_LINE_CHARS = 42
 MAX_DURATION = 7.0
 MAX_GAP = 0.8                 # silence between words that forces a break
 
-_SENTENCE_END = re.compile(r"[.!?…]['\"»)\]]*$")
+_SENTENCE_END = re.compile(r"[.!?…。？！]['\"»)\]」』）】]*$")
 
 # Per-language tie-break word lists for the clause-boundary search (see
 # text_segmentation.SplitLexicon) -- unknown languages get an empty
@@ -120,6 +121,7 @@ def build_cues(words: list[Word], language: str = "",
     live = [w for w in words if w.text.strip()]
     lexicon = _lexicon_for(language)
     unspaced = language in NO_SPACE_LANGUAGES
+    max_cue_chars = MAX_JAPANESE_CUE_CHARS if language == "ja" else MAX_CUE_CHARS
 
     # Pass 1: acoustic-only groups (plus any forced speaker-turn breaks).
     groups: list[tuple[list[Word], BoundaryReason | None]] = []
@@ -161,7 +163,7 @@ def build_cues(words: list[Word], language: str = "",
 
         for si, sentence in enumerate(sentences):
             sentence_reason = group_reason if si == 0 else BoundaryReason.SENTENCE_END
-            sub_pieces = _split_long_words(sentence, language, lexicon, MAX_CUE_CHARS)
+            sub_pieces = _split_long_words(sentence, language, lexicon, max_cue_chars)
             for pi, sub in enumerate(sub_pieces):
                 reason = sentence_reason if pi == 0 else BoundaryReason.DISPLAY_SPLIT
                 text = render_words(sub, language)

@@ -30,7 +30,8 @@ MIN_DURATION = 1.0
 MAX_DURATION = 7.0
 TARGET_CPS = 17.0
 
-_SENTENCE_END = re.compile(r"[.!?…]['\"»)\]]*(?:\s|$)")
+_SENTENCE_END = re.compile(
+    r"[.!?…]['\"»)\]」』）】]*(?:\s|$)|[。？！]['\"»)\]」』）】]*")
 _CLAUSE_END = re.compile(r"[,;:]['\"»)\]]*$")
 # English-only (this module only ever processes already-translated,
 # target=English text, never source-language text) -- title abbreviations

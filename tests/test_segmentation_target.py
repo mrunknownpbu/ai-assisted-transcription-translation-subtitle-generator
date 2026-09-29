@@ -9,6 +9,10 @@ class SplitSentencesTests(unittest.TestCase):
         self.assertEqual(split_sentences("Eda, Eda, my daughter, wake up! I woke up."),
                          ["Eda, Eda, my daughter, wake up!", "I woke up."])
 
+    def test_splits_japanese_sentence_marks_without_spaces_and_keeps_closers(self):
+        self.assertEqual(split_sentences("「こんにちは。」次です！本当？』"),
+                         ["「こんにちは。」", "次です！", "本当？』"])
+
     def test_single_sentence_no_split(self):
         self.assertEqual(split_sentences("Hello world"), ["Hello world"])
 

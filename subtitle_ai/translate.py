@@ -83,7 +83,7 @@ NLLB_LANG = {
 MAX_SPAN_CUES = 6
 MAX_SPAN_CHARS = 300
 MAX_SPAN_GAP = 2.5
-_SENTENCE_END = re.compile(r"[.!?…]['\"»)\]]*$")
+_SENTENCE_END = re.compile(r"[.!?…。？！]['\"»)\]」』）】]*$")
 
 # Phase 2 scoping (see the Alptekin "Moon Flood" investigation, 2026-09-21):
 # a fixed word-count chunk size used ONLY as a bounded, content-preserving

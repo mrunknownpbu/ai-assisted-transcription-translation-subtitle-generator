@@ -20,9 +20,10 @@ MAX_LINE_CHARS = 42
 MAX_LINES = 2
 MAX_CUE_CHARS = MAX_LINE_CHARS * MAX_LINES
 
-_SENTENCE_END = re.compile(r"[.!?…]['\"»)\]]*(?:\s|$)")
-_CLAUSE_END = re.compile(r"[,;:]['\"»)\]]*$")
-_STRIP_PUNCT = ".,!?;:\"'()[]…"
+_SENTENCE_END = re.compile(
+    r"[.!?…]['\"»)\]」』）】]*(?:\s|$)|[。？！]['\"»)\]」』）】]*")
+_CLAUSE_END = re.compile(r"[,;:、]['\"»)\]」』）】]*$")
+_STRIP_PUNCT = ".,!?;:\"'()[]…、。？！「」『』（）【】"
 
 
 @dataclass(frozen=True)

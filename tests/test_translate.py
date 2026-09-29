@@ -35,6 +35,11 @@ class BuildContextSpansTests(unittest.TestCase):
         spans = build_context_spans(cues)
         self.assertEqual(spans, [[0], [1]])
 
+    def test_japanese_sentence_end_and_closer_close_a_span(self):
+        cues = [cue(0, 0.0, 1.0, "こんにちは。」"), cue(1, 1.1, 2.0, "次です！")]
+        spans = build_context_spans(cues)
+        self.assertEqual(spans, [[0], [1]])
+
     def test_large_gap_without_provenance_still_forces_a_break(self):
         cues = [cue(0, 0.0, 1.0, "Tamam kalktim"), cue(1, 10.0, 11.0, "Gunaydin dunya")]
         spans = build_context_spans(cues)

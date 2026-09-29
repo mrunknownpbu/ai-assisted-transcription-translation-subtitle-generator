@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from segmentation_source import MAX_CUE_CHARS, MAX_LINE_CHARS, build_cues
+from segmentation_source import (MAX_CUE_CHARS, MAX_JAPANESE_CUE_CHARS, MAX_LINE_CHARS,
+                                 build_cues)
 from transcript import BoundaryReason, Word
 
 
@@ -34,13 +35,19 @@ class BuildCuesLanguageTests(unittest.TestCase):
         # text -- splitting cues earlier than MAX_CUE_CHARS actually allows.
         # Build a word list whose real (unspaced) length is under the cap
         # but whose naively-spaced length would exceed it.
-        n = MAX_CUE_CHARS  # each word is 1 char, so n words = n chars unspaced
+        n = MAX_JAPANESE_CUE_CHARS  # each word is 1 char; exact language-specific cap
         # Interval kept well under MAX_DURATION (7.0s) for the full run, so
         # only the character-length path is under test here, not timing.
         words = [_word("あ", i * 0.05, i * 0.05 + 0.04) for i in range(n)]
         cues = build_cues(words, language="ja")
         self.assertEqual(len(cues), 1, "unspaced length is exactly at the cap; must not split")
         self.assertEqual(len(cues[0].text), n)
+
+    def test_japanese_sentence_splits_to_display_length(self):
+        words = [_word("あ", i * 0.05, i * 0.05 + 0.04) for i in range(MAX_JAPANESE_CUE_CHARS + 1)]
+        cues = build_cues(words, language="ja")
+        self.assertGreater(len(cues), 1)
+        self.assertTrue(all(len(cue.text) <= MAX_JAPANESE_CUE_CHARS for cue in cues))
 
     def test_default_language_keeps_prior_space_delimited_behavior(self):
         words = [_word("a", 0.0, 0.1), _word("b", 0.1, 0.2)]
@@ -64,6 +71,13 @@ class SentenceSplitTests(unittest.TestCase):
         cues = build_cues(words, language="tr")
         self.assertEqual([c.text for c in cues], ["Tamam.", "Gidelim hadi."])
         self.assertEqual(cues[1].boundary_before, BoundaryReason.SENTENCE_END)
+
+    def test_japanese_sentence_marks_split_without_spaces_and_keep_closers(self):
+        words = _sentence(["「こんにちは。」", "次です！", "本当？』"], start=0.0, step=0.2)
+        cues = build_cues(words, language="ja")
+        self.assertEqual([c.text for c in cues], ["「こんにちは。」", "次です！", "本当？』"])
+        self.assertEqual(cues[1].boundary_before, BoundaryReason.SENTENCE_END)
+        self.assertEqual(cues[2].boundary_before, BoundaryReason.SENTENCE_END)
 
     def test_title_abbreviation_period_does_not_split_the_sentence(self):
         words = _sentence(["Dr.", "Serkan", "geldi."], start=0.0, step=0.2)
@@ -96,7 +110,7 @@ class SentenceSplitTests(unittest.TestCase):
             self.assertEqual(" ".join(c.lines), c.text)
 
     def test_unspaced_language_never_attempts_line_wrap(self):
-        words = [_word("あ", i * 0.05, i * 0.05 + 0.04) for i in range(MAX_CUE_CHARS)]
+        words = [_word("あ", i * 0.05, i * 0.05 + 0.04) for i in range(MAX_JAPANESE_CUE_CHARS)]
         cues = build_cues(words, language="ja")
         self.assertEqual(cues[0].lines, [cues[0].text])
 

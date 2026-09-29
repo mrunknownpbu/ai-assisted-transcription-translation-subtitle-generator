@@ -806,3 +806,41 @@ unaffected by this fix (it only touches English distribution) and is
 still unexplained -- possibly partly an artifact of `fragmentation()`'s
 English-oriented sentence-ending regex against Japanese punctuation, not
 yet checked.
+
+**Japanese sentence punctuation and cue sizing fixed (2026-09-29).**
+Measured before editing the real Hammer Session! S01E01 `.ja.srt` and
+matching cached transcript: both contained 20 `。` marks and zero `？` or
+`！`; the human-reference eval regex already recognizes these marks, but
+all four pipeline sentence-end regexes did not. The existing 84-character
+source cue cap also left 26/598 Japanese cues over 42 characters (max 63).
+The pipeline now recognizes `。？！` and Japanese quote closers in
+`segmentation_source`, `text_segmentation`, `segmentation_target`, and
+`translate`; `text_segmentation` also treats `、` as a clause boundary.
+Japanese source cues use a 42-character cap; other languages keep 84.
+This is post-ASR, so no pipeline/cache-version bump was needed.
+
+Verified via a real POST `/api/jobs` rerun of S01E01 with
+`source_lang=ja`, audio stream 1 (the initial AUTO attempt misidentified
+the audio as Korean and was discarded; its generated `.ko.srt` was
+removed and the backed-up `.en.srt` restored before the correct run).
+The final job completed with the Japanese ASR cache hit, writing `.ja.srt`
+and `.en.srt`; pre-run copies of both outputs remain under
+`/cache/verification-backups/20260929-japanese-sentence-boundaries/` and
+the intermediate pre-cap outputs under
+`/cache/verification-backups/20260929-japanese-sentence-boundaries-after-punctuation/`.
+On S01E01, source cues changed 598 -> 628; source cues per human cue
+1.087 -> 1.117, split-human-cue rate 6.6% -> 8.9%, and mid-sentence-end
+rate 0.873 -> 0.872. Japanese cues over 42 characters dropped 26 -> 0
+(max 63 -> 42). English cues changed 608 -> 610; English
+mid-sentence-end rate stayed 0.092, and chrF improved 24.34 -> 24.61
+(352 -> 353 scored pairs). Gap coverage was unchanged: 104/756 (13.8%).
+No human Japanese reference exists for Hammer Session, so a Japanese
+boundary-F1 score is not available; the separate Turkish LIITA E01
+`eval_transcription.py --segmentation` check remained 61.9% before and
+after.
+
+The separate translation-span ownership measurement also now has a real
+positive reproduction: after this change, Hammer Session! S01E01 has
+0 orphan spans out of 526, while Love Is In The Air S01E01 has 73 out of
+2119. This is the next independent fix; do not fold it into the Japanese
+segmentation change.

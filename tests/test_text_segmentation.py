@@ -18,6 +18,10 @@ class EnglishDefaultMatchesSegmentationTargetTests(unittest.TestCase):
         self.assertEqual(split_sentences("Eda, Eda, my daughter, wake up! I woke up."),
                          ["Eda, Eda, my daughter, wake up!", "I woke up."])
 
+    def test_splits_japanese_sentence_marks_without_spaces_and_keeps_closers(self):
+        self.assertEqual(split_sentences("「こんにちは。」次です！本当？』"),
+                         ["「こんにちは。」", "次です！", "本当？』"])
+
     def test_title_abbreviation_period_is_not_a_sentence_end(self):
         self.assertEqual(split_sentences("I saw Dr. Smith today. He left."),
                          ["I saw Dr. Smith today.", "He left."])
@@ -64,6 +68,10 @@ class TurkishLexiconTests(unittest.TestCase):
         # must not be penalised as a line-ender just by being present.
         from text_segmentation import _boundary_score
         self.assertEqual(_boundary_score("bir", "ev", TURKISH), 0.0)
+
+    def test_japanese_comma_is_a_clause_boundary(self):
+        from text_segmentation import SplitLexicon, _boundary_score
+        self.assertEqual(_boundary_score("前半、", "後半", SplitLexicon()), 2.0)
 
     def test_single_unspaced_token_longer_than_max_returns_it_unsplit(self):
         # Real production crash this fixes (2026-09-28, Hammer Session!
