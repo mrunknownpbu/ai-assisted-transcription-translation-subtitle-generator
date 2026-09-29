@@ -315,6 +315,12 @@ class RemoteTranslateBatchTests(unittest.TestCase):
             with self.assertRaises(RemoteTranslationError):
                 remote_translate_batch("http://media:8091", ["Merhaba"], "tr", batch_size=8)
 
+    def test_mismatched_translation_count_raises_remote_translation_error(self):
+        response = _http_response(200, {"translations": ["Only one"]})
+        with patch("httpx.Client", return_value=_mock_httpx_client([response])):
+            with self.assertRaisesRegex(RemoteTranslationError, "invalid translation count"):
+                remote_translate_batch("http://media:8091", ["one", "two"], "tr", batch_size=8)
+
     def test_empty_sentences_makes_no_http_call(self):
         with patch("httpx.Client") as mock_client_cls:
             result = remote_translate_batch("http://media:8091", [], "tr", batch_size=8)
@@ -348,6 +354,21 @@ class TranslateSpansRemoteTests(unittest.TestCase):
         mock_load.assert_called_once()
         mock_batch.assert_called_once()
         self.assertEqual(result, ["Hello, how are you"])
+
+    def test_remote_chunk_retry_failure_falls_back_to_local(self):
+        run_on = RunOnChunkRetryTests.RUN_ON
+        cues = [cue(0, 0.0, 10.0, run_on)]
+        spans = [[0]]
+        with patch("translate.remote_translate_batch",
+                   side_effect=[["Remote primary"], RemoteTranslationError("retry unavailable")]) as mock_remote, \
+             patch("translate.load_model", return_value=(object(), object(), 0)) as mock_load, \
+             patch("translate.translate_batch",
+                   side_effect=[["Local primary translation."], ["Chunk one.", "Chunk two.", "Chunk three."]]) as mock_batch:
+            result = translate_spans(cues, spans, "tr", remote_url="http://media:8091")
+        self.assertEqual(mock_remote.call_count, 2)
+        mock_load.assert_called_once()
+        self.assertEqual(mock_batch.call_count, 2)
+        self.assertEqual(result, ["Local primary translation."])
 
     def test_no_remote_url_never_calls_remote(self):
         cues = [cue(0, 0.0, 1.0, "Merhaba")]

@@ -125,7 +125,8 @@ class GpuMemoryReleaseTests(unittest.TestCase):
     def test_free_gpu_called_after_each_cuda_batch_when_shared(self):
         sentences = [f"s{i}" for i in range(25)]
         with patch.dict("os.environ", {"SUBTITLE_AI_GPU_SHARED": "1"}), \
-             patch.object(translate, "_generate_one_batch", return_value=["t"]), \
+             patch.object(translate, "_generate_one_batch",
+                          side_effect=lambda *args: ["t"] * len(args[3])), \
              patch("gpu.free_gpu") as mock_free:
             translate_batch(None, None, 0, sentences, "cuda", TranslationConfig(), batch_size=10)
         self.assertEqual(mock_free.call_count, 3)  # 10 + 10 + 5
@@ -133,7 +134,8 @@ class GpuMemoryReleaseTests(unittest.TestCase):
     def test_free_gpu_not_called_per_batch_on_dedicated_gpu(self):
         sentences = [f"s{i}" for i in range(25)]
         with patch.dict("os.environ", {"SUBTITLE_AI_GPU_SHARED": ""}), \
-             patch.object(translate, "_generate_one_batch", return_value=["t"]), \
+             patch.object(translate, "_generate_one_batch",
+                          side_effect=lambda *args: ["t"] * len(args[3])), \
              patch("gpu.free_gpu") as mock_free:
             translate_batch(None, None, 0, sentences, "cuda", TranslationConfig(), batch_size=10)
         mock_free.assert_not_called()
@@ -141,7 +143,8 @@ class GpuMemoryReleaseTests(unittest.TestCase):
     def test_free_gpu_not_called_for_cpu_translation(self):
         sentences = ["a", "b"]
         with patch.dict("os.environ", {"SUBTITLE_AI_GPU_SHARED": "1"}), \
-             patch.object(translate, "_generate_one_batch", return_value=["t"]), \
+             patch.object(translate, "_generate_one_batch",
+                          side_effect=lambda *args: ["t"] * len(args[3])), \
              patch("gpu.free_gpu") as mock_free:
             translate_batch(None, None, 0, sentences, "cpu", TranslationConfig(batch_size=10))
         mock_free.assert_not_called()
@@ -328,4 +331,3 @@ class Ct2BackendTests(unittest.TestCase):
             translate._generate_one_batch(model, MagicMock(), 256047, ["a"], "cpu", self.config())
         ct2.assert_not_called()
         model.generate.assert_called_once()
-

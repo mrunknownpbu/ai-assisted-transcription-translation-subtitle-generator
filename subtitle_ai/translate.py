@@ -52,10 +52,15 @@ def remote_translate_batch(url: str, sentences: list[str], src_lang: str,
                 chunk = sentences[i:i + batch_size]
                 resp = client.post(f"{url}/translate", json={"sentences": chunk, "src_lang": src_lang})
                 resp.raise_for_status()
-                out.extend(resp.json()["translations"])
+                translations = resp.json()["translations"]
+                if (not isinstance(translations, list)
+                        or len(translations) != len(chunk)
+                        or any(not isinstance(text, str) for text in translations)):
+                    raise ValueError("remote translate-server returned an invalid translation count or shape")
+                out.extend(translations)
                 if on_progress:
                     on_progress(len(out), len(sentences))
-    except (httpx.HTTPError, KeyError, ValueError) as exc:
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         raise RemoteTranslationError(f"remote translate-server at {url!r} failed: {exc}") from exc
     return out
 
@@ -169,7 +174,7 @@ def _apply_chunk_retry(translations: list[str], run_on_positions: dict[int, str]
         chunk_payload.extend(_chunk(run_on_positions[pos]))
         spans.append((start, len(chunk_payload)))
     chunk_translations = translate_fn(chunk_payload)
-    for pos, (start, end) in zip(positions, spans):
+    for pos, (start, end) in zip(positions, spans, strict=True):
         candidate_b = " ".join(chunk_translations[start:end])
         source_protected = payload[pos]
         if glossary_map:
@@ -620,7 +625,7 @@ def translate_batch(model, tok, bos: int, sentences: list[str], device: str,
     for start in range(0, len(order), batch_size):
         idx = order[start:start + batch_size]
         for i, text in zip(idx, _generate_one_batch(model, tok, bos, [sentences[i] for i in idx],
-                                                    device, config)):
+                                                    device, config), strict=True):
             out[i] = text
         done += len(idx)
         if per_chunk_free:
@@ -926,7 +931,7 @@ def _translate_sentences(sentences: list[str], src_lang: str,
     nllb_idx: list[int] = []
     payload: list[str] = []
     run_on_positions: dict[int, str] = {}
-    for orig, i, p in zip(remaining_sentences, remaining_idx, protected):
+    for orig, i, p in zip(remaining_sentences, remaining_idx, protected, strict=True):
         bare = bare_entity_translation(p, glossary_map) if glossary_map else None
         if bare is not None:
             resolved[i] = bare
@@ -946,12 +951,12 @@ def _translate_sentences(sentences: list[str], src_lang: str,
         try:
             translations = remote_translate_batch(remote_url, payload, src_lang,
                                                   batch_size=config.batch_size, on_progress=on_progress)
-            remote_succeeded = True
             if run_on_positions:
                 translations = _apply_chunk_retry(
                     translations, run_on_positions, payload, glossary_map,
                     lambda texts: remote_translate_batch(remote_url, texts, src_lang,
                                                          batch_size=config.batch_size))
+            remote_succeeded = True
         except RemoteTranslationError:
             translations = []  # fall through to the local path below
 
@@ -986,11 +991,12 @@ def _translate_sentences(sentences: list[str], src_lang: str,
                         from gpu import free_gpu
                         free_gpu(config.device)
     if glossary_map:
-        translations = [repair_corrupted_placeholders(t, p) for t, p in zip(translations, payload)]
+        translations = [repair_corrupted_placeholders(t, p)
+                        for t, p in zip(translations, payload, strict=True)]
         translations = [restore(t, glossary_map) for t in translations]
 
     result: list[str | None] = [None] * len(sentences)
-    for i, t in zip(nllb_idx, translations):
+    for i, t in zip(nllb_idx, translations, strict=True):
         result[i] = t
     for i, t in resolved.items():
         result[i] = t
