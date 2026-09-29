@@ -43,6 +43,19 @@ _SIGNATURES_PATH = Path(__file__).parent / "hallucination_signatures.json"
 
 # Faster-whisper's own default for flagging a decode as degenerate/looping.
 COMPRESSION_RATIO_THRESHOLD = 2.4
+# How far above COMPRESSION_RATIO_THRESHOLD a ratio must climb to reach
+# full severity (1.0) on its own -- see compression_ratio_score()'s
+# docstring. Measured (scripts/hallucination_signal_distribution.py,
+# 2026-09-29) over every cached transcript in the library (33 transcripts,
+# 50815 segments): p99.9 compression_ratio is 2.12, comfortably under the
+# threshold itself, and exactly ONE segment in the whole library ever
+# crosses 2.4 at all -- the real Hammer Session! S01E01 3124.7-3150.1s
+# repetition loop (51.46, "ー" repeated ~80 times, real human subtitle has
+# actual dialogue there). With this span, that segment alone reaches
+# suppression on this signal alone; nothing else in the measured library
+# is within reach of it (a ratio would need to be 7.4+ to hit
+# SUPPRESSION_THRESHOLD unaided, and nothing observed gets past 2.12).
+COMPRESSION_RATIO_SPAN = 10.0
 NO_SPEECH_CONTRADICTION_THRESHOLD = 0.6   # decoder itself doubts speech is here
 LOW_LOGPROB_THRESHOLD = -1.0
 
@@ -79,6 +92,23 @@ class HallucinationFinding:
     score: float
     reasons: list[str] = field(default_factory=list)
     suppress: bool = False
+
+
+def compression_ratio_score(ratio: float) -> float:
+    """Graduated, not a step: 0.5 at the threshold itself (unchanged
+    from before -- a borderline ratio is still only weak evidence on its
+    own), rising to 1.0 as it climbs COMPRESSION_RATIO_SPAN past the
+    threshold. A step function scored a ratio of 2.5 the same as 51 --
+    the real motivating miss (Hammer Session! S01E01, 2026-09-29): a
+    25.4s segment decoded as one character repeated ~80 times,
+    compression_ratio=51.46, scored only 0.5 (capped) and was not
+    suppressed, because no other signal happened to fire (a repetition
+    loop's decoder is typically confident: low no_speech_prob, high
+    avg_logprob). See COMPRESSION_RATIO_SPAN's docstring for the real
+    measured distribution this span was chosen against."""
+    if ratio < COMPRESSION_RATIO_THRESHOLD:
+        return 0.0
+    return min(1.0, 0.5 + 0.5 * (ratio - COMPRESSION_RATIO_THRESHOLD) / COMPRESSION_RATIO_SPAN)
 
 
 def _recurrence_score(segment: Segment, all_segments: list[Segment], episode_duration: float) -> float:
@@ -130,8 +160,10 @@ def score_segment(segment: Segment, all_segments: list[Segment], episode_duratio
         score = max(score, 0.4)
 
     if segment.compression_ratio >= COMPRESSION_RATIO_THRESHOLD:
-        reasons.append(f"compression_ratio={segment.compression_ratio:.2f} (degenerate/repetitive text)")
-        score = max(score, 0.5)
+        cr_score = compression_ratio_score(segment.compression_ratio)
+        reasons.append(f"compression_ratio={segment.compression_ratio:.2f} (degenerate/repetitive text, "
+                       f"score={cr_score:.2f})")
+        score = max(score, cr_score)
 
     if segment.avg_logprob <= LOW_LOGPROB_THRESHOLD:
         reasons.append(f"avg_logprob={segment.avg_logprob:.2f} (low decoder confidence)")

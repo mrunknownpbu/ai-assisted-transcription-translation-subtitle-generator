@@ -731,5 +731,37 @@ S01E01 human-reference comparison, not yet fixed.**
    short-cue and mid-sentence-end rates, mean duration/chars), so a split
    made in `segmentation_source.build_cues` can be told apart from one
    added by the English span distribution in `pipeline.py`; `--worst N`
-   prints the lowest-chrF pairs. Baseline numbers not yet taken -- run it
-   on S01E01 before changing either stage.
+   prints the lowest-chrF pairs. Baseline (S01E01, taken 2026-09-29 after
+   the fix below): source cues 1.087 per human cue (6.6% of human cues
+   split), mid-sentence-end rate 0.873 (this counts Japanese source cues
+   against an English sentence-ending regex -- likely inflated by
+   Japanese punctuation conventions, not yet checked); English cues 1.114
+   per human cue (9.3% split), mid-sentence-end rate 0.13. Not yet
+   changed -- this is a baseline to measure a fix against, not a
+   conclusion about which stage (source segmentation vs. English span
+   distribution) is more responsible.
+
+**Problem 1 fixed (2026-09-29): compression_ratio is now graduated.**
+`scripts/hallucination_signal_distribution.py` measured the real
+distribution across the WHOLE library (33 transcripts, 50815 segments):
+p99.9 compression_ratio is 2.12 (comfortably under the 2.4 threshold
+itself), and exactly ONE segment in the entire library ever crosses 2.4
+at all -- the case above. Zero real risk of a graduated score newly
+suppressing legitimate content, based on actual evidence rather than a
+guess. `hallucination.compression_ratio_score(ratio)` replaces the step
+(`score = max(score, 0.5)` for any ratio >= threshold) with
+`min(1.0, 0.5 + 0.5 * (ratio - 2.4) / COMPRESSION_RATIO_SPAN)`,
+`COMPRESSION_RATIO_SPAN = 10.0` -- chosen so nothing observed between 2.4
+and 7.4 (a ratio would need to reach 7.4 to hit `SUPPRESSION_THRESHOLD`
+on this signal alone) exists in the measured library, while the real
+51.46 case reaches the 1.0 cap outright. Verified on a real (cache-hit,
+no GPU needed -- hallucination.detect() runs fresh every pipeline run
+regardless of ASR cache) re-run of S01E01: the repetition-loop cue at
+3124.7-3150.1s is gone from `.ja.srt`. Unit tests:
+`tests/test_hallucination.py` (`CompressionRatioScoreTests`, the real
+case, and a borderline-ratio-alone-still-doesn't-suppress regression
+guard). Gap-coverage/chrF on S01E01 barely moved after this fix (13.4%
+-> 13.8% uncovered, chrF 22.43 -> 22.59) -- expected: suppressing one
+wrongly-covering hallucinated segment turns that span into an honest gap
+rather than removing a gap, noise-level movement either way, not a
+regression.

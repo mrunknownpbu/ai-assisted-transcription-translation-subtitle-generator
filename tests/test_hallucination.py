@@ -10,6 +10,7 @@ catches it via that registry, not that the string is special-cased in code.
 
 import unittest
 
+import hallucination
 from hallucination import detect, load_signatures, score_segment
 from transcript import Segment, Word
 
@@ -98,6 +99,48 @@ class AcousticEvidenceTests(unittest.TestCase):
                            no_speech_prob=0.02, compression_ratio=1.2)
         finding = score_segment(seg, [seg], 100.0, load_signatures(), "tr")
         self.assertEqual(finding.score, 0.0)
+
+    def test_extreme_repetition_loop_is_suppressed_on_compression_ratio_alone(self):
+        # Real motivating miss (Hammer Session! S01E01, 2026-09-29): a
+        # 25.4s segment decoded as "ー" repeated ~80 times,
+        # compression_ratio=51.46, no_speech_prob=0.32 (below the 0.6
+        # contradiction threshold) and avg_logprob=-0.053 (a confident
+        # decode -- typical of a repetition loop) -- no OTHER signal
+        # fired, and the old step-function scoring capped this at 0.5,
+        # under SUPPRESSION_THRESHOLD. Measured across the whole library
+        # (scripts/hallucination_signal_distribution.py, 33 transcripts,
+        # 50815 segments): this is the ONLY segment that ever crosses
+        # 2.4 at all, so this must now suppress on its own.
+        seg = make_segment(0, 3124.7, 3150.1, "ー" * 80,
+                           avg_logprob=-0.053, no_speech_prob=0.32, compression_ratio=51.46)
+        finding = score_segment(seg, [seg], 3600.0, load_signatures(), "ja")
+        self.assertTrue(finding.suppress)
+
+    def test_borderline_compression_ratio_alone_still_does_not_suppress(self):
+        # Just over the threshold must remain weak evidence, same as
+        # before -- only a real, severe outlier should suppress alone.
+        seg = make_segment(0, 0.0, 2.0, "tekrar tekrar tekrar tekrar",
+                           avg_logprob=-0.1, no_speech_prob=0.02, compression_ratio=2.5)
+        finding = score_segment(seg, [seg], 100.0, load_signatures(), "tr")
+        self.assertFalse(finding.suppress)
+        self.assertAlmostEqual(finding.score, 0.505, places=2)
+
+
+class CompressionRatioScoreTests(unittest.TestCase):
+    def test_below_threshold_scores_zero(self):
+        self.assertEqual(hallucination.compression_ratio_score(2.0), 0.0)
+
+    def test_at_threshold_scores_half(self):
+        self.assertEqual(hallucination.compression_ratio_score(2.4), 0.5)
+
+    def test_far_above_threshold_caps_at_one(self):
+        self.assertEqual(hallucination.compression_ratio_score(51.46), 1.0)
+
+    def test_monotonically_increasing_between_threshold_and_cap(self):
+        a = hallucination.compression_ratio_score(3.0)
+        b = hallucination.compression_ratio_score(6.0)
+        self.assertLess(a, b)
+        self.assertLess(b, 1.0)
 
 
 class RecurrenceTests(unittest.TestCase):
