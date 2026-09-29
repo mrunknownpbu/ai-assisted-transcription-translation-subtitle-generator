@@ -1,6 +1,8 @@
 import asyncio
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import api
 import audio_streams
+import gpu
 import srt
 from media import MediaError
 
@@ -924,6 +927,35 @@ class AudioStreamEndpointTests(MediaRootApiTestCase):
              patch("api.audio_streams.recommend_stream", side_effect=MediaError("no audio stream found")):
             r = self.client.get("/api/audio-streams", params={"path": "Show/S01E01.mkv"})
         self.assertEqual(r.status_code, 422)
+
+    def test_gpu_contention_returns_retryable_503_without_waiting(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def holder():
+            with gpu.gpu_lock():
+                entered.set()
+                release.wait(timeout=5)
+
+        with patch.object(gpu, "_LOCK_PATH", str(Path(self.tmp.name) / "gpu.lock")):
+            thread = threading.Thread(target=holder)
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(timeout=2))
+                started = time.monotonic()
+                with patch("api.get_stream_sampler") as get_sampler, \
+                     patch("api.audio_streams.recommend_stream") as recommend:
+                    response = self.client.get("/api/audio-streams",
+                                               params={"path": "Show/S01E01.mkv"})
+                self.assertLess(time.monotonic() - started, 0.5)
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(response.headers["retry-after"], "1")
+                get_sampler.assert_not_called()
+                recommend.assert_not_called()
+            finally:
+                release.set()
+                thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
 
 
 class SeriesApiTestCase(unittest.TestCase):

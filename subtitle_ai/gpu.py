@@ -46,6 +46,7 @@ import logging
 import os
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -312,14 +313,17 @@ _fh = None
 
 
 @contextmanager
-def gpu_lock():
+def gpu_lock(timeout: float | None = None):
     """Hold for the full lifetime of a GPU model -- from creation through
     free_gpu() -- never just around the load call. Releasing early would
     let a second process's load land in the gap and still collide with
     the first model's still-resident memory. Reentrant for the thread
     that already holds it (see module docstring); still blocks every
-    other thread/process until the outermost call releases."""
+    other thread/process until the outermost call releases. A timeout
+    bounds contention for callers such as interactive API requests."""
     global _holder_thread, _depth, _fh
+    if timeout is not None and timeout < 0:
+        raise ValueError("GPU lock timeout must be non-negative")
     tid = threading.get_ident()
     with _state_lock:
         reentering = _holder_thread == tid
@@ -337,7 +341,23 @@ def gpu_lock():
     path = Path(_LOCK_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     fh = open(path, "w")
-    fcntl.flock(fh, fcntl.LOCK_EX)
+    try:
+        if timeout is None:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        else:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError as exc:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise GpuLockTimeout("GPU lock is held by another thread or process") from exc
+                    time.sleep(min(0.01, remaining))
+    except BaseException:
+        fh.close()
+        raise
     with _state_lock:
         _holder_thread = tid
         _depth = 1
@@ -354,3 +374,7 @@ def gpu_lock():
         if release:
             fcntl.flock(fh, fcntl.LOCK_UN)
             fh.close()
+
+
+class GpuLockTimeout(TimeoutError):
+    """Raised when a bounded GPU lock acquisition cannot proceed."""

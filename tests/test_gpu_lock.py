@@ -8,9 +8,11 @@ Analyze click to slip into. These tests exercise the real gpu.py module
 with lightweight timed "work" standing in for real model load/inference,
 proving the actual locking behavior rather than mocking it away.
 """
+import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 import gpu
 
@@ -46,6 +48,31 @@ class ReentrancyTests(unittest.TestCase):
 
 
 class CrossThreadExclusionTests(unittest.TestCase):
+    def test_contended_lock_can_fail_immediately(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def holder():
+            with gpu.gpu_lock():
+                entered.set()
+                release.wait(timeout=5)
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+                gpu, "_LOCK_PATH", f"{tmp}/gpu.lock"):
+            thread = threading.Thread(target=holder)
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(timeout=2))
+                started = time.monotonic()
+                with self.assertRaises(gpu.GpuLockTimeout):
+                    with gpu.gpu_lock(timeout=0):
+                        pass
+                self.assertLess(time.monotonic() - started, 0.2)
+            finally:
+                release.set()
+                thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
     def test_different_threads_still_serialize_even_through_nested_calls(self):
         """Reentrancy must be thread-scoped, not a global bypass -- a
         naive depth counter with no thread-identity check would let a

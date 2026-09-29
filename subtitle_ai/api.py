@@ -25,6 +25,7 @@ import alerting
 import audio_streams
 import glossary_files
 import glossary_profile
+import gpu
 import media
 import srt
 import translate
@@ -417,7 +418,11 @@ def audio_stream_recommendation(path: str = Query(...)) -> dict:
         raise HTTPException(status_code=400, detail="not a supported video")
     work_dir = Path(tempfile.mkdtemp(prefix="stream-sample-"))
     try:
-        recommendation = audio_streams.recommend_stream(file, work_dir, sampler=get_stream_sampler())
+        with gpu.gpu_lock(timeout=0):
+            recommendation = audio_streams.recommend_stream(file, work_dir, sampler=get_stream_sampler())
+    except gpu.GpuLockTimeout as exc:
+        raise HTTPException(status_code=503, detail="GPU is busy; retry the analysis shortly",
+                            headers={"Retry-After": "1"}) from exc
     except media.MediaError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
