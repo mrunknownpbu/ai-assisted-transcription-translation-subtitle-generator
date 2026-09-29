@@ -887,8 +887,10 @@ class SrtCueEdit(BaseModel):
     @field_validator("lines")
     @classmethod
     def _non_empty(cls, value: list[str]) -> list[str]:
-        if not value or not any(line.strip() for line in value):
-            raise ValueError("cue text cannot be empty")
+        if not value or any(not line.strip() for line in value):
+            raise ValueError("cue lines cannot be empty")
+        if any("\n" in line or "\r" in line or "-->" in line for line in value):
+            raise ValueError("cue lines cannot contain line breaks or SRT timing markers")
         return value
 
 
@@ -910,6 +912,8 @@ def update_job_srt(job_id: str, request: SrtEditRequest) -> dict:
     job = get_store().get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
+    if job["status"] != "completed":
+        raise HTTPException(status_code=409, detail="only completed jobs can be edited")
     try:
         target = _job_target_srt_path(job)
     except OutputSafetyError as exc:

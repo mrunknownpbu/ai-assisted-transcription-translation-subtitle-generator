@@ -1122,6 +1122,38 @@ class JobSrtEditorTests(MediaRootApiTestCase):
         r = self.client.put(f"/api/jobs/{job_id}/srt", json={"edits": [{"index": 0, "lines": ["   "]}]})
         self.assertEqual(r.status_code, 422)
 
+    def test_put_rejects_blank_line_in_text(self):
+        job_id = self._completed_video_job()
+        target = self._write_target_srt(self.SAMPLE)
+        r = self.client.put(f"/api/jobs/{job_id}/srt",
+                            json={"edits": [{"index": 0, "lines": ["before", "", "after"]}]})
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(target.read_text(encoding="utf-8"), self.SAMPLE)
+
+    def test_put_rejects_embedded_line_breaks_and_srt_timing_markers(self):
+        job_id = self._completed_video_job()
+        target = self._write_target_srt(self.SAMPLE)
+        malicious_lines = [
+            ["before\n\n2\n00:00:03,000 --> 00:00:04,000\nInjected"],
+            ["-->"],
+        ]
+        for lines in malicious_lines:
+            with self.subTest(lines=lines):
+                r = self.client.put(f"/api/jobs/{job_id}/srt",
+                                    json={"edits": [{"index": 0, "lines": lines}]})
+                self.assertEqual(r.status_code, 422)
+                self.assertEqual(target.read_text(encoding="utf-8"), self.SAMPLE)
+
+    def test_put_rejects_running_retry_without_modifying_srt(self):
+        original_job_id = self._completed_video_job()
+        retry = self.client.post(f"/api/jobs/{original_job_id}/retry", json={}).json()["job"]
+        target = self._write_target_srt(self.SAMPLE)
+        self.assertEqual(api.get_store().claim()["id"], retry["id"])
+        r = self.client.put(f"/api/jobs/{retry['id']}/srt",
+                            json={"edits": [{"index": 0, "lines": ["Edited during retry"]}]})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(target.read_text(encoding="utf-8"), self.SAMPLE)
+
     def test_put_out_of_range_edit_leaves_the_file_untouched(self):
         # Real risk: validating edits one at a time while applying them
         # as it goes would let an earlier valid edit land on disk before
