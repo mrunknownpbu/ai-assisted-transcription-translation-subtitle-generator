@@ -145,6 +145,41 @@ class ApiKeyGuardTests(ApiTestCase):
         self.assertEqual(r.status_code, 200)
 
 
+class CrossSiteMutationTests(ApiTestCase):
+    def test_cross_origin_cancel_is_rejected_without_changing_the_job(self):
+        job = api.get_store().create("Show/S01E01.mkv", "tr")
+        headers = {"Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site",
+                   "Content-Type": "application/x-www-form-urlencoded"}
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": ""}):
+            response = self.client.post(f"/api/jobs/{job['id']}/cancel", headers=headers, content=b"")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(api.get_store().get(job["id"])["status"], "queued")
+
+    def test_cross_site_retry_without_origin_is_rejected(self):
+        job = api.get_store().create("Show/S01E01.mkv", "tr")
+        claimed = api.get_store().claim()
+        api.get_store().finish(claimed["id"], "failed", error="test failure")
+        headers = {"Sec-Fetch-Site": "cross-site", "Content-Type": "application/x-www-form-urlencoded"}
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": ""}):
+            response = self.client.post(f"/api/jobs/{job['id']}/retry", headers=headers, content=b"")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(api.get_store().list()[1], 1)
+
+    def test_same_origin_and_headerless_api_requests_remain_usable(self):
+        same_origin_job = api.get_store().create("Show/S01E01.mkv", "tr")
+        headers = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": ""}):
+            same_origin = self.client.post(f"/api/jobs/{same_origin_job['id']}/cancel", headers=headers)
+        self.assertEqual(same_origin.status_code, 200)
+        self.assertEqual(same_origin.json()["status"], "cancelled")
+
+        api_job = api.get_store().create("Show/S01E02.mkv", "tr")
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": ""}):
+            headerless = self.client.post(f"/api/jobs/{api_job['id']}/cancel")
+        self.assertEqual(headerless.status_code, 200)
+        self.assertEqual(headerless.json()["status"], "cancelled")
+
+
 class FailureWebhookWiringTests(ApiTestCase):
     """Real gap this closes (production-readiness audit, 2026-09-21): a
     job failure was previously invisible until someone opened the UI."""

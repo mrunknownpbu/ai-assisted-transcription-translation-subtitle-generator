@@ -15,9 +15,10 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -61,14 +62,36 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="Subtitle AI v2", docs_url=None, redoc_url=None, lifespan=_lifespan)
 
 
-def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+def _origin_tuple(value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(value)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return None
+    if (scheme not in {"http", "https"} or not hostname or parsed.username or parsed.password
+            or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
+        return None
+    return scheme, hostname.lower(), port if port is not None else (443 if scheme == "https" else 80)
+
+
+def require_api_key(request: Request, x_api_key: str | None = Header(default=None)) -> None:
     """Protect endpoints that queue work, mutate job state, or consume GPU."""
     expected = os.environ.get("SUBTITLE_AI_API_KEY")
-    if not expected:
+    if expected:
+        provided_bytes = (x_api_key or "").encode("utf-8")
+        if not hmac.compare_digest(provided_bytes, expected.encode("utf-8")):
+            raise HTTPException(status_code=401, detail="missing or invalid X-API-Key")
         return
-    provided_bytes = (x_api_key or "").encode("utf-8")
-    if not hmac.compare_digest(provided_bytes, expected.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="missing or invalid X-API-Key")
+
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        fetch_site = request.headers.get("sec-fetch-site")
+        if fetch_site and fetch_site.lower() not in {"same-origin", "none"}:
+            raise HTTPException(status_code=403, detail="cross-origin requests require an API key")
+        origin = request.headers.get("origin")
+        if origin and _origin_tuple(origin) != _origin_tuple(str(request.base_url)):
+            raise HTTPException(status_code=403, detail="cross-origin requests require an API key")
 
 
 def get_store() -> JobStore:
