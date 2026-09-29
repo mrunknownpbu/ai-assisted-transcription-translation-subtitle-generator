@@ -29,12 +29,14 @@ class SourceGroup:
     end: float
 
 
-def merge_groups(source_cues: list[Segment]) -> list[SourceGroup]:
+def merge_groups(source_cues: list[Segment],
+                 force_break_before: frozenset[int] = frozenset()) -> list[SourceGroup]:
     """Partition source cues into translation units: consecutive cues
     merge only when the boundary between them is provably display-only
     (MERGEABLE_BOUNDARIES) and the merged envelope still fits
-    MAX_MERGE_DURATION. Absence of boundary provenance (no
-    boundary_before recorded) degrades to one cue per group -- the safe,
+    MAX_MERGE_DURATION. `force_break_before` marks caller-owned hard
+    boundaries that groups must not cross. Absence of boundary provenance
+    (no boundary_before recorded) degrades to one cue per group -- the safe,
     historical 1:1 default."""
     if not source_cues:
         return []
@@ -43,7 +45,8 @@ def merge_groups(source_cues: list[Segment]) -> list[SourceGroup]:
     for i in range(1, len(source_cues)):
         reason = source_cues[i].boundary_before
         envelope = source_cues[i].end - source_cues[cur[0]].start
-        if reason in MERGEABLE_BOUNDARIES and envelope <= MAX_MERGE_DURATION:
+        if (i not in force_break_before and reason in MERGEABLE_BOUNDARIES
+                and envelope <= MAX_MERGE_DURATION):
             cur.append(i)
         else:
             groups.append(SourceGroup(cur, source_cues[cur[0]].start, source_cues[cur[-1]].end))

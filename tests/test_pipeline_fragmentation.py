@@ -18,7 +18,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pipeline
-from transcript import CanonicalTranscript, ModelInfo, Segment, Word
+from transcript import BoundaryReason, CanonicalTranscript, ModelInfo, Segment, Word
 
 
 def _japanese_transcript(duration: float, word_len: float = 0.8) -> CanonicalTranscript:
@@ -79,6 +79,30 @@ class OneSentenceOverSeveralGroupsTests(unittest.TestCase):
         texts = [c.text for c in srt.parse(result.target_srt_path)]
         self.assertEqual(" ".join(texts), "What!? You want to fight me?")
         self.assertTrue(all(t.endswith(("?", "!")) for t in texts))
+        self.assertEqual(result.qc.segmentation.flagged, 0)
+
+    def test_translation_is_preserved_across_context_span_boundary(self):
+        cues = [
+            Segment(index=0, start=0.0, end=3.0,
+                    words=[Word(text="第一。", original_text="第一。", start=0.0, end=3.0)],
+                    avg_logprob=0.0, no_speech_prob=0.0, compression_ratio=0.0, language="ja"),
+            Segment(index=1, start=3.1, end=6.9,
+                    words=[Word(text="第二", original_text="第二", start=3.1, end=6.9)],
+                    avg_logprob=0.0, no_speech_prob=0.0, compression_ratio=0.0,
+                    boundary_before=BoundaryReason.MAX_DURATION, language="ja"),
+        ]
+        transcript = _japanese_transcript(1.0)
+        with patch.object(pipeline, "asr_transcribe", return_value=transcript), \
+             patch.object(pipeline.segmentation_source, "build_cues", return_value=cues), \
+             patch.object(pipeline.translate, "translate_spans",
+                          return_value=["First sentence.", "Second sentence."]):
+            result = pipeline.run(
+                video_path=str(self.video), media_root=self.tmp.name,
+                work_dir=str(Path(self.tmp.name) / "work"), source_lang="ja",
+                audio_stream_index=0, write_output=True, allow_overwrite=True)
+        import srt
+        texts = [cue.text for cue in srt.parse(result.target_srt_path)]
+        self.assertEqual(texts, ["First sentence.", "Second sentence."])
         self.assertEqual(result.qc.segmentation.flagged, 0)
 
 

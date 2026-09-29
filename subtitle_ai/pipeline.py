@@ -462,7 +462,8 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     if entity_recovered:
         _emit(on_event, events, "ENTITY_RECOVERY_APPLIED", sentences=entity_recovered)
 
-    groups = merge_groups(source_cues)
+    span_starts = frozenset(span[0] for span in spans[1:])
+    groups = merge_groups(source_cues, force_break_before=span_starts)
     span_of_group: list[int] = []
     for gi, group in enumerate(groups):
         owning_span = next((si for si, span in enumerate(spans) if group.indices[0] in span), 0)

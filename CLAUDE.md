@@ -844,3 +844,35 @@ positive reproduction: after this change, Hammer Session! S01E01 has
 0 orphan spans out of 526, while Love Is In The Air S01E01 has 73 out of
 2119. This is the next independent fix; do not fold it into the Japanese
 segmentation change.
+
+**Problem 2 fixed (2026-09-29): display groups now stop at translation
+span boundaries.** The measured LIITA S01E01 baseline had 73 spans with
+no owning display group out of 2119, and 74 groups crossed a span
+boundary. Seventy-three crossings followed a sentence-ended one-cue span
+whose next cue had a mergeable `MAX_DURATION` boundary; one followed a
+`MAX_SPAN_CHARS` break. `pipeline.run()` now passes the starts of all
+subsequent context spans to `projection.merge_groups()` as forced group
+breaks. Unit and end-to-end tests cover the case where a sentence-ending
+span is followed by a mergeable display boundary and verify both
+translations reach the target SRT.
+
+Verified on the real LIITA S01E01 through POST `/api/jobs` with
+`source_lang=tr`, audio stream 1. The job completed in 446s. The original
+human `.tr.srt` was kept (SHA-256 unchanged); only `.en.srt` was replaced.
+The old transcript cache was pipeline 2.0.0, so this job did a fresh ASR
+run and produced a 2.0.5 cache entry. On that same new transcript, the
+previous unbounded `merge_groups()` behavior would leave 74/2167 spans
+orphaned across 77 crossing groups; the fix leaves 0/2167 orphaned and
+zero groups crossing spans. The original cached-data baseline remains
+73/2119. Hammer Session! S01E01 remains at 0/526.
+
+The `.en.srt` timing-pair comparison against the LIITA human `.en.hi.srt`
+changed from 54.38 chrF over 1755 pairs (2306 output cues) to 44.73 over
+1410 pairs (2362 cues); the cached-ASR WER changed 16.7% -> 16.9%, and
+segmentation boundary F1 changed 61.9% -> 61.6%. These before/after
+translation metrics are not an apples-to-apples attribution to this fix:
+the production run necessarily regenerated ASR because the old cache
+predated pipeline 2.0.5. Preserve this as a measured comparison, not a
+claim that the grouping change caused the chrF movement. Backups of the
+pre-run human `.tr.srt` and `.en.srt` are in
+`/cache/verification-backups/20260929-orphaned-translation-spans/`.

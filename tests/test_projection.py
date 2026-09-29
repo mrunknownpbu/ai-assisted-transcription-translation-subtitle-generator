@@ -49,6 +49,12 @@ class MergeGroupsTests(unittest.TestCase):
         groups = merge_groups(cues)
         self.assertEqual([g.indices for g in groups], [[0, 1, 2]])
 
+    def test_forced_context_span_boundary_prevents_display_group_merge(self):
+        cues = [source_cue(0, 0.0, 3.0, "a"),
+                source_cue(1, 3.1, 6.9, "b", boundary=BoundaryReason.MAX_DURATION)]
+        groups = merge_groups(cues, force_break_before=frozenset({1}))
+        self.assertEqual([g.indices for g in groups], [[0], [1]])
+
 
 class ValidateCoverageTests(unittest.TestCase):
     def test_plain_1_to_1_valid(self):
