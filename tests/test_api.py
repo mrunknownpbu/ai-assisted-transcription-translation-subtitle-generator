@@ -146,6 +146,27 @@ class ApiKeyGuardTests(ApiTestCase):
 
 
 class CrossSiteMutationTests(ApiTestCase):
+    def test_https_same_origin_uses_asgi_scheme_and_host(self):
+        job = api.get_store().create("Show/S01E01.mkv", "tr")
+        client = TestClient(api.app, base_url="https://subtitles.example")
+        headers = {"Origin": "https://subtitles.example", "Sec-Fetch-Site": "same-origin"}
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": ""}):
+            response = client.post(f"/api/jobs/{job['id']}/cancel", headers=headers)
+        self.assertEqual(response.status_code, 200)
+
+    def test_forwarded_headers_alone_do_not_change_origin_comparison(self):
+        job = api.get_store().create("Show/S01E01.mkv", "tr")
+        headers = {
+            "Origin": "https://testserver",
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "testserver",
+            "Sec-Fetch-Site": "same-origin",
+        }
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": ""}):
+            response = self.client.post(f"/api/jobs/{job['id']}/cancel", headers=headers)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(api.get_store().get(job["id"])["status"], "queued")
+
     def test_cross_origin_cancel_is_rejected_without_changing_the_job(self):
         job = api.get_store().create("Show/S01E01.mkv", "tr")
         headers = {"Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site",

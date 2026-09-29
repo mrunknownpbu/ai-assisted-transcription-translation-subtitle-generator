@@ -437,6 +437,18 @@ Cleanup problems are logged and never change a job's result.
 | `SUBTITLE_AI_TURN_DETECTION` | off | `heuristic` or `voice` turn on speaker-turn detection (`subtitle_ai/turns.py`). Off by default -- see CLAUDE.md for why neither cleared the bar yet. |
 | `SUBTITLE_AI_ASR_STYLE` | off | `natural` feeds Whisper a short natural-dialogue sample as `initial_prompt`, an experiment to recover dropped interjections. Gated on measured results (CLAUDE.md); off until then. |
 
+**TLS-terminating reverse proxies.** When the app is behind a proxy,
+the no-API-key Origin check compares the request's `Origin` to the
+scheme and host in the ASGI request scope. The app does not use
+`X-Forwarded-Proto` or `X-Forwarded-Host` directly. Configure Uvicorn to
+trust forwarded scheme headers only from the actual proxy addresses
+(for example, set `--forwarded-allow-ips` to the proxy IPs rather than
+`*`), and have the proxy overwrite forwarded headers and pass the
+external `Host` through. Otherwise legitimate HTTPS requests may be
+rejected, or trusting untrusted forwarded headers could make origin
+checks spoofable. The bundled Compose deployment exposes the app
+directly and does not configure a reverse proxy.
+
 All of these are forwarded from `.env` (see `.env.example`): by `compose.yml`
 for the main app, and by `compose.translate-server.yml` for the remote host
 (`TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS`, `TRANSLATE_SERVER_DEFAULT_LANG`, plus
