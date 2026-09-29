@@ -526,25 +526,35 @@ class JobStore:
         return self.get(job_id)
 
     def delete(self, job_id: str) -> None:
-        job = self.get(job_id)
-        if not job:
-            raise JobStoreError("job not found")
-        if job["status"] not in TERMINAL_STATUSES:
-            raise JobStoreError(f"cannot delete an active job (status={job['status']})")
         with self._immediate() as conn:
+            job = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not job:
+                raise JobStoreError("job not found")
+            if job["status"] not in TERMINAL_STATUSES:
+                raise JobStoreError(f"cannot delete an active job (status={job['status']})")
             conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
         self._notify(job_id)
 
     def request_cancel(self, job_id: str) -> dict:
-        job = self.get(job_id)
-        if not job:
-            raise JobStoreError("job not found")
-        if job["status"] in TERMINAL_STATUSES:
-            raise JobStoreError(f"cannot cancel a terminal job (status={job['status']})")
-        if job["status"] == "queued":
-            # Never claimed -- cancel immediately, no worker to signal.
-            return self.finish(job_id, "cancelled")
-        self.update(job_id, cancel_requested=1)
+        with self._immediate() as conn:
+            job = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not job:
+                raise JobStoreError("job not found")
+            if job["status"] in TERMINAL_STATUSES:
+                raise JobStoreError(f"cannot cancel a terminal job (status={job['status']})")
+            now = time.time()
+            if job["status"] == "queued":
+                # Atomically cancel before claim() can select this row.
+                conn.execute(
+                    "UPDATE jobs SET status='cancelled', stage='CANCELLED', progress=100, "
+                    "finished_at=?, error=NULL, error_category=NULL, updated_at=? WHERE id=?",
+                    (now, now, job_id))
+            elif job["status"] == "running":
+                conn.execute("UPDATE jobs SET cancel_requested=1, updated_at=? WHERE id=?",
+                             (now, job_id))
+            else:
+                raise JobStoreError(f"cannot cancel a job (status={job['status']})")
+        self._notify(job_id)
         return self.get(job_id)
 
     def is_cancel_requested(self, job_id: str) -> bool:

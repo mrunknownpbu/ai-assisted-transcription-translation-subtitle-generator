@@ -334,6 +334,44 @@ class CancelTests(JobStoreTestCase):
         self.assertEqual(result["status"], "cancelled")
         self.assertIsNotNone(result["finished_at"])
 
+    def test_cancel_and_claim_cannot_use_a_stale_queued_status(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        cancel_committed = threading.Event()
+        release_cancel = threading.Event()
+        original_get = self.store.get
+        first_cancel_get = [True]
+
+        def pause_after_cancel(job_id):
+            result = original_get(job_id)
+            if threading.current_thread().name == "canceller" and first_cancel_get[0]:
+                first_cancel_get[0] = False
+                cancel_committed.set()
+                release_cancel.wait(timeout=5)
+            return result
+
+        self.store.get = pause_after_cancel
+        result = []
+        errors = []
+
+        def cancel():
+            try:
+                result.append(self.store.request_cancel(job["id"]))
+            except Exception as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=cancel, name="canceller")
+        thread.start()
+        try:
+            self.assertTrue(cancel_committed.wait(timeout=2))
+            self.assertIsNone(self.store.claim())
+        finally:
+            release_cancel.set()
+            thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(errors, errors)
+        self.assertEqual(result[0]["status"], "cancelled")
+        self.assertEqual(original_get(job["id"])["status"], "cancelled")
+
     def test_cancel_running_job_sets_flag_not_status(self):
         job = self.store.create("Show/S01E01.mkv", "tr")
         claimed = self.store.claim()
@@ -348,6 +386,19 @@ class CancelTests(JobStoreTestCase):
         self.store.finish(claimed["id"], "completed")
         with self.assertRaises(JobStoreError):
             self.store.request_cancel(claimed["id"])
+
+    def test_delete_checks_terminal_status_and_removal_atomically(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        with self.assertRaisesRegex(JobStoreError, "cannot delete an active job"):
+            self.store.delete(job["id"])
+        claimed = self.store.claim()
+        with self.assertRaisesRegex(JobStoreError, "cannot delete an active job"):
+            self.store.delete(claimed["id"])
+        self.store.finish(claimed["id"], "completed")
+        self.store.delete(claimed["id"])
+        self.assertIsNone(self.store.get(claimed["id"]))
+        with self.assertRaisesRegex(JobStoreError, "job not found"):
+            self.store.delete(claimed["id"])
 
 
 class RetryTests(JobStoreTestCase):
