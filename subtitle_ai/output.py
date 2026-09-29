@@ -8,6 +8,7 @@ enforced in exactly one place instead of trusted to every caller.
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 # Any file matching one of these is categorically off-limits: never
@@ -92,8 +93,7 @@ def re_lang_ok(language: str) -> bool:
 def write_srt_atomic(path: str | Path, content: str, *, allow_overwrite: bool) -> bool:
     """temp file -> fsync -> atomic rename. Never a partial write is ever
     visible at `path`: a crash mid-write leaves the temp file, never a
-    truncated target. `allow_overwrite=False` (the KEEP case) makes this
-    exactly as safe as the prior implementation's O_EXCL create -- refuses
+    truncated target. `allow_overwrite=False` (the KEEP case) refuses
     silently, does not raise, so callers can treat "already exists" as a
     normal outcome rather than an error."""
     target = Path(path)
@@ -103,15 +103,15 @@ def write_srt_atomic(path: str | Path, content: str, *, allow_overwrite: bool) -
         return False
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + f".tmp{os.getpid()}")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.tmp-", dir=target.parent)
+    tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            os.fchmod(fh.fileno(), 0o644)
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, target)
     finally:
-        if tmp.exists():
-            tmp.unlink()
+        tmp.unlink(missing_ok=True)
     return True

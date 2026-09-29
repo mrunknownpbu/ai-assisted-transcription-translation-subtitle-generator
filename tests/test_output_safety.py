@@ -1,3 +1,5 @@
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -109,6 +111,19 @@ class WriteSrtAtomicTests(unittest.TestCase):
         result = write_srt_atomic(target, "new content", allow_overwrite=True)
         self.assertTrue(result)
         self.assertEqual(target.read_text(), "new content")
+
+    def test_stale_temp_from_previous_process_does_not_block_write(self):
+        target = self.root / "S01E01.en.srt"
+        stale_temp = target.with_suffix(target.suffix + f".tmp{os.getpid()}")
+        stale_temp.write_text("left by a crashed write")
+        self.assertTrue(write_srt_atomic(target, "new content", allow_overwrite=True))
+        self.assertEqual(target.read_text(), "new content")
+        self.assertEqual(stale_temp.read_text(), "left by a crashed write")
+
+    def test_output_permissions_remain_readable(self):
+        target = self.root / "S01E01.en.srt"
+        write_srt_atomic(target, "content", allow_overwrite=False)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
 
     def test_no_temp_file_left_behind_after_success(self):
         target = self.root / "S01E01.en.srt"
