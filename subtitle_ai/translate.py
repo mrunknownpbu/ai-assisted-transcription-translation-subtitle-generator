@@ -20,6 +20,8 @@ from glossary import (_phrase_key, bare_entity_translation,
                       join_multi_speaker_dash_lines, protect,
                       repair_corrupted_placeholders, restore,
                       split_into_sentences, split_multi_speaker_dash_lines)
+from langid import detect_language_overrides
+from output import TARGET_LANG
 from transcript import BoundaryReason, MERGEABLE_BOUNDARIES, Segment
 
 REMOTE_TIMEOUT_SECONDS = 60.0
@@ -646,6 +648,24 @@ _REAL_BOUNDARIES_FOR_CONTEXT = frozenset({BoundaryReason.REAL_ACOUSTIC_GAP, Boun
 _AFFIX_STRIP_CHARS = ".,!?…\"'“”‘’"
 
 
+def code_switch_detection_enabled() -> bool:
+    """SUBTITLE_AI_CODE_SWITCH_DETECTION=off|0|false|no disables
+    translate_spans()'s per-sentence language-override pass (see
+    _translate_flat_sentences()'s docstring). On by default: measured
+    zero false positives across the whole Turkish media library
+    (90,076 real cues, 43 episodes -- see langid.py's module docstring
+    and CLAUDE.md's dated entry), and it only ever changes behavior for
+    a run of 3+ consecutive sentences that confidently and consistently
+    disagree with the job's own detected source language -- the
+    overwhelming majority of jobs (no code-switching at all) are
+    completely unaffected either way. The toggle exists so a real
+    production regression can be turned off with an env var change, not
+    a code revert, matching orphan_context_padding_enabled()'s pattern."""
+    import os
+    return os.environ.get("SUBTITLE_AI_CODE_SWITCH_DETECTION", "").strip().lower() not in {
+        "off", "0", "false", "no"}
+
+
 def orphan_context_padding_enabled() -> bool:
     """SUBTITLE_AI_ORPHAN_CONTEXT_PADDING=off|0|false|no disables the
     isolated-single-word soft-context grounding pass in translate_spans()
@@ -841,9 +861,9 @@ def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
     nested = [[split_into_sentences(line) or [line] for line in group] for group in dash_groups]
     flat_sentences = [s for group in nested for line_sentences in group for s in line_sentences]
 
-    flat_result = _translate_sentences(flat_sentences, src_lang, glossary_map=glossary_map,
-                                       phrase_map=phrase_map, config=config, model=model, tok=tok,
-                                       bos=bos, remote_url=remote_url, on_progress=on_progress)
+    flat_result = _translate_flat_sentences(flat_sentences, src_lang, glossary_map=glossary_map,
+                                            phrase_map=phrase_map, config=config, model=model, tok=tok,
+                                            bos=bos, remote_url=remote_url, on_progress=on_progress)
 
     result: list[str] = []
     cursor = 0
@@ -858,6 +878,83 @@ def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
     if orphan_context_padding_enabled():
         result = _pad_orphan_context(cues, spans, result, src_lang, glossary_map, phrase_map,
                                      config, model, tok, bos, remote_url)
+    return result
+
+
+def _translate_flat_sentences(flat_sentences: list[str], src_lang: str,
+                              glossary_map: dict[str, tuple[str, str]] | None, phrase_map: dict[str, str] | None,
+                              config: TranslationConfig | None, model, tok, bos: int | None,
+                              remote_url: str | None, on_progress) -> list[str]:
+    """Wraps _translate_sentences() with an optional per-sentence
+    language-override pass (code_switch_detection_enabled()): a run of
+    3+ consecutive sentences langid.detect_language_overrides()
+    confidently and consistently identifies as a DIFFERENT language than
+    this job's own src_lang is translated using THAT language's own NLLB
+    tokenizer instead of src_lang's -- see CLAUDE.md's dated entry for
+    the real motivating case (a Spanish cold-open scene transcribed
+    correctly by Whisper inside an otherwise-Turkish episode, but then
+    garbled or left untranslated because the whole job's translation was
+    locked to Turkish regardless of what language each sentence's text
+    actually was) and langid.py's module docstring for the measured
+    evidence behind the thresholds.
+
+    A sentence overridden to the TARGET language (English) is passed
+    through UNCHANGED rather than sent to NLLB -- it's already the
+    answer, and round-tripping already-English text through a
+    translation model risks paraphrasing it instead of preserving it
+    verbatim.
+
+    Each override group is translated via its own fresh _translate_sentences()
+    call with model=None/tok=None/bos=None, letting that call's own
+    ownership logic resolve the right tokenizer for that language --
+    under model residency (the production default) this reuses the
+    SAME already-loaded model weights (language-agnostic; see
+    load_model()'s docstring) and only adds a cached tokenizer, never a
+    second model load. glossary_map/phrase_map are passed through
+    unchanged for override groups too: entity-name protection is a plain
+    text match independent of sentence language, and a Turkish phrase-map
+    entry's exact-string key simply won't match non-Turkish text, so
+    passing it through is harmless.
+
+    Disabled, or no run found, is IDENTICAL to a single
+    _translate_sentences() call over the whole flat list -- same call,
+    same behavior, zero risk to the overwhelming majority of jobs that
+    never code-switch. `on_progress` is only wired to the default-
+    language group's call (the vast majority of sentences in any real
+    override case); an override group's own handful of sentences aren't
+    separately reported, a minor, disclosed progress-bar approximation."""
+    if not flat_sentences or not code_switch_detection_enabled():
+        return _translate_sentences(flat_sentences, src_lang, glossary_map=glossary_map,
+                                    phrase_map=phrase_map, config=config, model=model, tok=tok,
+                                    bos=bos, remote_url=remote_url, on_progress=on_progress)
+
+    overrides = detect_language_overrides(flat_sentences, src_lang, supported_langs=frozenset(NLLB_LANG))
+    if not any(overrides):
+        return _translate_sentences(flat_sentences, src_lang, glossary_map=glossary_map,
+                                    phrase_map=phrase_map, config=config, model=model, tok=tok,
+                                    bos=bos, remote_url=remote_url, on_progress=on_progress)
+
+    result: list[str | None] = [None] * len(flat_sentences)
+    default_idx = [i for i, o in enumerate(overrides) if o is None]
+    if default_idx:
+        default_sentences = [flat_sentences[i] for i in default_idx]
+        default_result = _translate_sentences(default_sentences, src_lang, glossary_map=glossary_map,
+                                              phrase_map=phrase_map, config=config, model=model, tok=tok,
+                                              bos=bos, remote_url=remote_url, on_progress=on_progress)
+        for i, text in zip(default_idx, default_result):
+            result[i] = text
+
+    for lang in sorted({o for o in overrides if o is not None}):
+        idx = [i for i, o in enumerate(overrides) if o == lang]
+        texts = [flat_sentences[i] for i in idx]
+        if lang == TARGET_LANG:
+            translated = texts  # already English -- keep verbatim, no model call
+        else:
+            translated = _translate_sentences(texts, lang, glossary_map=glossary_map,
+                                              phrase_map=phrase_map, config=config, model=None, tok=None,
+                                              bos=None, remote_url=remote_url, on_progress=None)
+        for i, text in zip(idx, translated):
+            result[i] = text
     return result
 
 

@@ -703,6 +703,120 @@ class SrtCuesWithoutBoundaryProvenanceTests(unittest.TestCase):
         self.assertEqual(result, ["Hey", "How are you"])
 
 
+class CodeSwitchDetectionTests(unittest.TestCase):
+    """translate_spans()'s per-sentence language-override pass (langid.py,
+    2026-09-29). Real motivating case: a short Spanish cold-open scene
+    inside an otherwise-Turkish episode ("If You Love" S01E01),
+    transcribed correctly by Whisper but garbled/untranslated because
+    the whole job's translation was locked to Turkish regardless of what
+    language each sentence's text actually was -- see CLAUDE.md and
+    tests/test_langid.py for the measured evidence behind the
+    thresholds this relies on."""
+
+    def _spanish_scene_cues(self):
+        # Same real shape as test_langid.py's regression case: a run of
+        # 3 confidently-Spanish sentences bracketed by ordinary Turkish
+        # dialogue -- a real run, not noise.
+        texts = ["Hadi gel, sana kahve ısmarlayayım.", "Este hombre es increíble.",
+                "Mire el estado de esta casa.", "Todas las noches es así.",
+                "Ateş Bey, sizi tekrar görmek ne kadar güzel."]
+        cues = [cue(i, float(i), float(i) + 1.0, t) for i, t in enumerate(texts)]
+        spans = [[i] for i in range(len(texts))]
+        return cues, spans
+
+    def test_spanish_run_is_routed_through_its_own_tokenizer(self):
+        cues, spans = self._spanish_scene_cues()
+        with patch("translate.load_model", side_effect=lambda c, lang: (object(), f"tok-{lang}", 7)), \
+             patch("translate.translate_batch",
+                   side_effect=lambda model, tok, bos, sentences, *a, **k:
+                   [f"[{tok}] {s}" for s in sentences]) as mock_batch:
+            result = translate_spans(cues, spans, "tr")
+
+        self.assertEqual(mock_batch.call_count, 2)
+        tur_call = next(c for c in mock_batch.call_args_list if c[0][1] == "tok-tur_Latn")
+        spa_call = next(c for c in mock_batch.call_args_list if c[0][1] == "tok-spa_Latn")
+        self.assertEqual(tur_call[0][3], ["Hadi gel, sana kahve ısmarlayayım.",
+                                         "Ateş Bey, sizi tekrar görmek ne kadar güzel."])
+        self.assertEqual(spa_call[0][3], ["Este hombre es increíble.",
+                                          "Mire el estado de esta casa.",
+                                          "Todas las noches es así."])
+        self.assertEqual(result, [
+            "[tok-tur_Latn] Hadi gel, sana kahve ısmarlayayım.",
+            "[tok-spa_Latn] Este hombre es increíble.",
+            "[tok-spa_Latn] Mire el estado de esta casa.",
+            "[tok-spa_Latn] Todas las noches es así.",
+            "[tok-tur_Latn] Ateş Bey, sizi tekrar görmek ne kadar güzel.",
+        ])
+
+    def test_target_language_override_is_passed_through_verbatim(self):
+        # A run of English sentences (e.g. an embedded song lyric) must
+        # never be sent to the model at all -- it's already the answer.
+        texts = ["Bir konu var.", '"Out singing in the rain"', '"She returning all the favors"',
+                "\"I'm crossing your borderline\"", "Devam ediyoruz."]
+        cues = [cue(i, float(i), float(i) + 1.0, t) for i, t in enumerate(texts)]
+        spans = [[i] for i in range(len(texts))]
+        with patch("translate.load_model", side_effect=lambda c, lang: (object(), f"tok-{lang}", 7)), \
+             patch("translate.translate_batch",
+                   side_effect=lambda model, tok, bos, sentences, *a, **k:
+                   [f"[{tok}] {s}" for s in sentences]) as mock_batch:
+            result = translate_spans(cues, spans, "tr")
+
+        self.assertEqual(mock_batch.call_count, 1)  # only the Turkish group ever reaches the model
+        self.assertEqual(result[1:4], texts[1:4])   # English run passed through unchanged
+
+    def test_isolated_misfire_does_not_split_the_call(self):
+        # No real run present (same shape as an ordinary job) -- must
+        # behave EXACTLY like a single _translate_sentences() call, not
+        # just produce the same result via a slower path.
+        cues, spans = self._spanish_scene_cues()
+        # Drop two of the three Spanish sentences so no run of >=3 forms.
+        cues, spans = cues[:2], spans[:2]
+        with patch("translate.load_model", side_effect=lambda c, lang: (object(), f"tok-{lang}", 7)), \
+             patch("translate.translate_batch",
+                   side_effect=lambda model, tok, bos, sentences, *a, **k:
+                   [f"[{tok}] {s}" for s in sentences]) as mock_batch:
+            translate_spans(cues, spans, "tr")
+        mock_batch.assert_called_once()
+        self.assertEqual(mock_batch.call_args[0][1], "tok-tur_Latn")
+
+    def test_disabled_via_env_behaves_like_a_single_call(self):
+        import os
+        cues, spans = self._spanish_scene_cues()
+        with patch.dict(os.environ, {"SUBTITLE_AI_CODE_SWITCH_DETECTION": "off"}), \
+             patch("translate.load_model", side_effect=lambda c, lang: (object(), f"tok-{lang}", 7)), \
+             patch("translate.translate_batch",
+                   side_effect=lambda model, tok, bos, sentences, *a, **k:
+                   [f"[{tok}] {s}" for s in sentences]) as mock_batch:
+            result = translate_spans(cues, spans, "tr")
+        mock_batch.assert_called_once()
+        self.assertEqual(mock_batch.call_args[0][1], "tok-tur_Latn")
+        # The Spanish run is translated as if it were Turkish -- exactly
+        # today's (pre-fix) behavior with the toggle off.
+        self.assertTrue(all(t.startswith("[tok-tur_Latn]") for t in result))
+
+
+class CodeSwitchDetectionEnabledTests(unittest.TestCase):
+    def test_on_by_default(self):
+        import os
+        from translate import code_switch_detection_enabled
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SUBTITLE_AI_CODE_SWITCH_DETECTION", None)
+            self.assertTrue(code_switch_detection_enabled())
+
+    def test_off_values(self):
+        import os
+        from translate import code_switch_detection_enabled
+        for v in ("off", "OFF", "0", "false", "No"):
+            with patch.dict(os.environ, {"SUBTITLE_AI_CODE_SWITCH_DETECTION": v}):
+                self.assertFalse(code_switch_detection_enabled(), v)
+
+    def test_anything_else_stays_enabled(self):
+        import os
+        from translate import code_switch_detection_enabled
+        with patch.dict(os.environ, {"SUBTITLE_AI_CODE_SWITCH_DETECTION": "on"}):
+            self.assertTrue(code_switch_detection_enabled())
+
+
 class OrphanContextPaddingEnabledTests(unittest.TestCase):
     def test_on_by_default(self):
         import os

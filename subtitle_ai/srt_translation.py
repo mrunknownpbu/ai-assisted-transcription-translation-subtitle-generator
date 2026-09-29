@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import glossary as glossary_mod
+import langid
 import segmentation_target
 import srt
 import translate
@@ -39,11 +40,6 @@ from qc.types import JobQc
 # conceptually different detectors (audio-based vs. text-based) that only
 # happen to share a starting value.
 LOW_CONFIDENCE_THRESHOLD = 0.5
-
-# langdetect's own code differs from translate.NLLB_LANG's keys for a
-# handful of languages -- normalized here, once, rather than wherever
-# detection happens to be called.
-_LANGDETECT_ALIASES = {"iw": "he", "zh-cn": "zh", "zh-tw": "zh"}
 
 
 class SrtValidationError(ValueError):
@@ -137,23 +133,14 @@ def parse_and_validate(path: str | Path) -> list[ValidatedCue]:
 def _detect_source_language(cues: list[ValidatedCue]) -> tuple[str, float]:
     """Best-effort text-based detection for source_lang="auto". There is
     no audio here for a real acoustic language-ID pass (see asr.py, which
-    detects from decoded audio, never from text) -- langdetect is the
-    text-only equivalent, deterministic given a fixed seed (set on every
-    call; cheap and idempotent). Returns ("und", 0.0) on totally
-    undetectable input (e.g. no live text at all) rather than raising,
-    so the caller's existing low-confidence-threshold handling covers
-    this case too instead of needing a separate one."""
-    import langdetect
-    langdetect.DetectorFactory.seed = 0
+    detects from decoded audio, never from text) -- langid.py is the
+    text-only equivalent (also used per-sentence inside translate.py's
+    code-switch detection). Returns ("und", 0.0) on totally undetectable
+    input (e.g. no live text at all) rather than raising, so the
+    caller's existing low-confidence-threshold handling covers this case
+    too instead of needing a separate one."""
     sample = " ".join(c.text for c in cues)[:5000]
-    try:
-        candidates = langdetect.detect_langs(sample) if sample.strip() else []
-    except langdetect.lang_detect_exception.LangDetectException:
-        candidates = []
-    if not candidates:
-        return "und", 0.0
-    top = candidates[0]
-    return _LANGDETECT_ALIASES.get(top.lang, top.lang), float(top.prob)
+    return langid.detect_text_language(sample)
 
 
 def _emit(on_event, events: list, name: str, **data) -> None:
