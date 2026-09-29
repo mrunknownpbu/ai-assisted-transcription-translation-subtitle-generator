@@ -8,14 +8,16 @@ from pathlib import Path
 
 import yaml
 
-from auto_glossary import AutoCandidate, mine_series_entities, write_suggestions
+from auto_glossary import (AutoCandidate, detect_series_mining_language,
+                           mine_series_entities, mine_series_entities_auto,
+                           write_suggestions)
 
 
-def _write_pair(root: Path, stem: str, tr_lines: list[str], *, with_english=True):
+def _write_pair(root: Path, stem: str, tr_lines: list[str], *, with_english=True, lang="tr"):
     tr_cues = "\n\n".join(
         f"{i}\n00:00:{i:02d},000 --> 00:00:{i+1:02d},000\n{line}"
         for i, line in enumerate(tr_lines, 1))
-    (root / f"{stem}.tr.srt").write_text(tr_cues, encoding="utf-8")
+    (root / f"{stem}.{lang}.srt").write_text(tr_cues, encoding="utf-8")
     if with_english:
         (root / f"{stem}.en.srt").write_text(
             "1\n00:00:01,000 --> 00:00:02,000\nSome translation.", encoding="utf-8")
@@ -149,6 +151,173 @@ class MiningTests(unittest.TestCase):
         # None of the lyric's words qualify purely from lyric repetition.
         self.assertNotIn("Sana", candidates)
         self.assertNotIn("Degilim", candidates)
+
+
+class JapaneseMiningTests(unittest.TestCase):
+    """Katakana script-switching, not capitalization -- see auto_glossary.py's
+    module docstring. Real cases below are the exact motivating ones
+    (2026-09-29, "Happy Kanako's Killer Life" S02): スマイル is the show's
+    talent-agency name, mistranslated as the common word "smile" because
+    no glossary existed for this series at all; a Turkish-only miner
+    mines nothing for a Japanese series by construction."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_mines_recurring_katakana_name_across_episodes(self):
+        lines = ["カナコ です", "はい カナコ", "カナコ 待って"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ja")
+        candidates = mine_series_entities(self.root, "ja")
+        self.assertIn("カナコ", [c.canonical for c in candidates])
+
+    def test_real_agency_name_recovered_from_a_single_episode(self):
+        # The real motivating case: only ONE episode's dialogue mentions
+        # it (3 times, clearing MIN_OCCURRENCES_PER_EPISODE), and
+        # MIN_DISTINCT_EPISODES=1 already covers a single-episode name.
+        lines = ["スマイル 辞めない", "スマイル より稼ごう", "スマイル は嫌だ"]
+        _write_pair(self.root, "S01E03", lines, lang="ja")
+        candidates = mine_series_entities(self.root, "ja")
+        self.assertIn("スマイル", [c.canonical for c in candidates])
+
+    def test_bracketed_speaker_label_prefix_stripped_not_mined(self):
+        # Real content (confirmed genuinely spoken, not an ASR artifact --
+        # see CLAUDE.md): a half-width-katakana speaker label prefixes
+        # some cues. It must never itself become a mining candidate.
+        lines = ["(ｶﾅｺ)うーん", "(ｶﾅｺ)見出すと", "(ｶﾅｺ)止まんない"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ja")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "ja")]
+        self.assertNotIn("ｶﾅｺ", candidates)
+
+    def test_no_position_confound_single_word_cue_still_corroborates(self):
+        # Latin scripts need a NON-cue-initial sighting to corroborate
+        # (see the position-confound tests below) because sentence-
+        # initial capitalization is itself a confound. Katakana has no
+        # such confound, so a name that ONLY ever appears cue-initial
+        # (a very short, single-word line) must still qualify.
+        lines = ["カズ", "カズ", "カズ"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ja")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "ja")]
+        self.assertIn("カズ", candidates)
+
+    def test_stopword_loanwords_excluded(self):
+        # Real measured noise (2026-09-29 mining run over the only real
+        # .ja.srt transcripts in this deployment): common katakana
+        # loanwords/interjections that recur often but aren't names.
+        lines = ["マジ で ダメ", "マジ に ダメ", "本当に マジ ダメ"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ja")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "ja")]
+        self.assertNotIn("マジ", candidates)
+        self.assertNotIn("ダメ", candidates)
+
+    def test_single_katakana_character_too_short_to_qualify(self):
+        lines = ["ア と イ", "ア また イ", "ア さらに イ"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ja")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "ja")]
+        self.assertNotIn("ア", candidates)
+        self.assertNotIn("イ", candidates)
+
+
+class MalayMiningTests(unittest.TestCase):
+    """Latin capitalization, same mechanism as Turkish -- see auto_glossary.py's
+    module docstring for why STOPWORDS_MS is an unvalidated starter list
+    (no real Malay transcript exists in this deployment yet)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_mines_recurring_name_across_episodes(self):
+        lines = ["Aisyah datang.", "Mana Aisyah?", "Aisyah sangat gembira."]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ms")
+        candidates = mine_series_entities(self.root, "ms")
+        self.assertIn("Aisyah", [c.canonical for c in candidates])
+
+    def test_sentence_initial_only_capitalization_not_counted(self):
+        lines = ["Baik saya faham.", "Baik kita pergi.", "Baik boleh juga."]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ms")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "ms")]
+        self.assertNotIn("Baik", candidates)
+
+    def test_stopwords_excluded(self):
+        lines = ["Emak tolong.", "Ya Emak datang.", "Emak ada di sini Ya."]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ms")
+        candidates = [c.canonical for c in mine_series_entities(self.root, "ms")]
+        self.assertNotIn("Emak", candidates)
+
+    def test_all_caps_excluded(self):
+        lines = ["AISYAH datang.", "AISYAH pergi.", "AISYAH gembira."]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ms")
+        candidates = mine_series_entities(self.root, "ms")
+        self.assertNotIn("AISYAH", [c.canonical for c in candidates])
+
+
+class UnregisteredLanguageTests(unittest.TestCase):
+    """ko/zh/th have no orthographic mining strategy yet (see module
+    docstring) -- mine_series_entities() must degrade to [], never raise,
+    same as its existing "no match of any kind" behavior."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_unregistered_language_returns_empty(self):
+        lines = ["안녕하세요", "안녕하세요", "안녕하세요"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ko")
+        self.assertEqual(mine_series_entities(self.root, "ko"), [])
+
+
+class AutoLanguageDetectionTests(unittest.TestCase):
+    """mine_series_entities_auto()/detect_series_mining_language() --
+    fixes a real bug (2026-09-29): worker.py used to always mine with
+    the hardcoded module SOURCE_LANG ("tr") regardless of the series'
+    actual language, so every non-Turkish series silently mined zero
+    candidates. See CLAUDE.md's dated entry."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_detects_japanese_series_from_files_on_disk(self):
+        lines = ["カナコ です", "はい カナコ", "カナコ 待って"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ja")
+        self.assertEqual(detect_series_mining_language(self.root), "ja")
+
+    def test_auto_mining_dispatches_to_the_detected_language(self):
+        lines = ["カナコ です", "はい カナコ", "カナコ 待って"]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="ja")
+        candidates = mine_series_entities_auto(self.root)
+        self.assertIn("カナコ", [c.canonical for c in candidates])
+
+    def test_no_registered_language_files_returns_none(self):
+        self.assertIsNone(detect_series_mining_language(self.root))
+        self.assertEqual(mine_series_entities_auto(self.root), [])
+
+    def test_turkish_series_still_auto_detected(self):
+        # The pre-existing Turkish-only behavior must keep working
+        # unchanged through the new auto-detecting entry point.
+        lines = ["Eda geldi.", "Nerede Eda?", "Eda çok mutlu."]
+        for i in range(1, 4):
+            _write_pair(self.root, f"S01E0{i}", lines, lang="tr")
+        self.assertEqual(detect_series_mining_language(self.root), "tr")
+        candidates = mine_series_entities_auto(self.root)
+        self.assertIn("Eda", [c.canonical for c in candidates])
 
 
 class WriteSuggestionsTests(unittest.TestCase):

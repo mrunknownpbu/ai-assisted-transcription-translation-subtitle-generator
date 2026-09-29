@@ -229,11 +229,27 @@ class Worker(threading.Thread):
         ASR output already does) makes it minable by this exact same
         function with zero changes here.
 
+        Uses mine_series_entities_auto() (2026-09-29), not a hardcoded
+        source language: mining targets *other, already-resolved*
+        episodes of the same series, so which language to mine is a
+        property of what's already on disk, discovered there, not
+        assumed to always be auto_glossary.SOURCE_LANG ("tr") -- the
+        real bug this replaces silently mined zero candidates for every
+        non-Turkish series (confirmed on a real Japanese series,
+        2026-09-29 -- see CLAUDE.md). exclude_srt_path below is
+        deliberately still resolved against auto_glossary.SOURCE_LANG:
+        it only needs to line up with THIS job's own not-yet-validated
+        output if that output happens to be Turkish, and a mismatch here
+        just means one path comparison never equals another file's path
+        (mine_series_entities' exclude check is a no-op then) -- not a
+        correctness problem for any language.
+
         Degrades to [] on: no {tvdb-<id>} ancestor (find_series_root
         returns None, same as find_tvdb_id degrading
-        _load_glossary_profile), no sibling files, or any read/parse
-        error at the series-root level -- per-file errors are already
-        handled inside mine_series_entities itself. Never fails a job."""
+        _load_glossary_profile), no sibling files, no registered mining
+        language detected, or any read/parse error at the series-root
+        level -- per-file errors are already handled inside
+        mine_series_entities itself. Never fails a job."""
         try:
             # find_series_root returns an actual filesystem Path used for
             # globbing (unlike find_tvdb_id's plain regex search, which
@@ -245,9 +261,8 @@ class Worker(threading.Thread):
                 return []
             exclude_path = resolve_output_path(self.media_root, video_path, auto_glossary.SOURCE_LANG)
             known = {form.casefold() for e in glossary_entities for form in e.surface_forms}
-            candidates = auto_glossary.mine_series_entities(
-                series_root, auto_glossary.SOURCE_LANG,
-                exclude_srt_path=exclude_path, exclude_canonicals=known)
+            candidates = auto_glossary.mine_series_entities_auto(
+                series_root, exclude_srt_path=exclude_path, exclude_canonicals=known)
             if self.glossary_suggestions_dir:
                 tvdb_id = glossary_profile.find_tvdb_id(video_path)
                 if tvdb_id is not None:
