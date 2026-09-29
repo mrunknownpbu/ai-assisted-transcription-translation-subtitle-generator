@@ -414,7 +414,7 @@ Cleanup problems are logged and never change a job's result.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `SUBTITLE_AI_API_KEY` | unset (open; intended for a LAN) | When set, mutating endpoints (cancel, retry, delete, glossary writes, subtitle edits) require a matching `X-API-Key` header. Job creation and read endpoints stay open. |
+| `SUBTITLE_AI_API_KEY` | unset (open; intended for a LAN) | When set, endpoints that queue work, upload subtitles, perform audio-stream analysis, or mutate job/glossary/subtitle state require a matching `X-API-Key` header. Read-only endpoints stay open. |
 | `SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS` | `24` | How long a failed job's scratch directory is kept (see below). |
 | `SUBTITLE_AI_ASR_HOTWORDS` | off | `on` feeds glossary names to Whisper as hotwords (see "ASR decoding defaults"). |
 | `FAILURE_WEBHOOK_URL` | unset | A plain JSON POST is sent to this URL when a job fails (works with anything that accepts one, or a relay in front of it). |

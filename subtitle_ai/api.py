@@ -6,6 +6,7 @@ guess a backend field name.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import shutil
@@ -60,19 +61,12 @@ app = FastAPI(title="Subtitle AI v2", docs_url=None, redoc_url=None, lifespan=_l
 
 
 def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
-    """Real gap this closes (production-readiness audit, 2026-09-21):
-    every endpoint had zero access control, including delete/cancel/
-    retry/glossary-write. Opt-in only -- confirmed LAN-only deployment
-    makes this cheap insurance, not a hard requirement, so an unset
-    SUBTITLE_AI_API_KEY (today's default everywhere this runs) makes
-    this a no-op, identical to current behavior. Deliberately NOT
-    applied to read-only or job-creation endpoints -- see the plan this
-    implements for why the scope stops at delete/cancel/retry/
-    glossary-write specifically."""
+    """Protect endpoints that queue work, mutate job state, or consume GPU."""
     expected = os.environ.get("SUBTITLE_AI_API_KEY")
     if not expected:
         return
-    if x_api_key != expected:
+    provided_bytes = (x_api_key or "").encode("utf-8")
+    if not hmac.compare_digest(provided_bytes, expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="missing or invalid X-API-Key")
 
 
@@ -409,7 +403,7 @@ def release_stream_sampler() -> None:
         free_gpu()
 
 
-@app.get("/api/audio-streams")
+@app.get("/api/audio-streams", dependencies=[Depends(require_api_key)])
 def audio_stream_recommendation(path: str = Query(...)) -> dict:
     """Slower than /api/media: samples each plausible-dialogue candidate
     stream with a short clip + a small ASR model to recommend one, rather
@@ -443,7 +437,7 @@ def audio_stream_recommendation(path: str = Query(...)) -> dict:
     }
 
 
-@app.post("/api/jobs", status_code=201)
+@app.post("/api/jobs", status_code=201, dependencies=[Depends(require_api_key)])
 def create_job(request: JobRequest) -> dict:
     media_root = Path(get_media_root()).resolve()
     try:
@@ -493,7 +487,7 @@ def list_languages() -> dict:
 MAX_SRT_UPLOAD_BYTES = MAX_SRT_FILE_BYTES
 
 
-@app.post("/api/srt-uploads", status_code=201)
+@app.post("/api/srt-uploads", status_code=201, dependencies=[Depends(require_api_key)])
 async def upload_srt(file: UploadFile) -> dict:
     """Real browser upload for the SRT-translation workflow. The client
     filename is NEVER trusted as a path -- it's stored only for display,

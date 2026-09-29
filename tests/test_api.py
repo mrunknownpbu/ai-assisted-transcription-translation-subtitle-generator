@@ -34,7 +34,9 @@ class ApiTestCase(unittest.TestCase):
             video.parent.mkdir(parents=True, exist_ok=True)
             video.write_bytes(b"test video")
         (self.media_root / "Show" / "notes.txt").write_text("not a video", encoding="utf-8")
-        app = api.create_app(Path(self.tmp.name) / "jobs.db", str(self.media_root))
+        self.upload_dir = Path(self.tmp.name) / "uploads"
+        app = api.create_app(Path(self.tmp.name) / "jobs.db", str(self.media_root),
+                             srt_upload_dir=str(self.upload_dir))
         self.client = TestClient(app)
 
 
@@ -96,6 +98,21 @@ class ApiKeyGuardTests(ApiTestCase):
             r = self.client.post(f"/api/jobs/{job.json()['job']['id']}/cancel")
         self.assertEqual(r.status_code, 401)
 
+    def test_configured_key_protects_job_creation_uploads_and_audio_analysis(self):
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}), \
+             patch("api.get_stream_sampler", return_value=lambda _wav: None), \
+             patch("api.audio_streams.recommend_stream") as recommend:
+            job = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"})
+            upload = self.client.post(
+                "/api/srt-uploads",
+                files={"file": ("input.srt", b"1\n00:00:00,000 --> 00:00:01,000\nHi\n", "text/plain")})
+            audio = self.client.get("/api/audio-streams", params={"path": "Show/S01E01.mkv"})
+        self.assertEqual(job.status_code, 401)
+        self.assertEqual(upload.status_code, 401)
+        self.assertEqual(audio.status_code, 401)
+        self.assertEqual(self.client.get("/api/jobs").json()["total"], 0)
+        recommend.assert_not_called()
+
     def test_configured_key_blocks_request_with_wrong_header(self):
         job = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv", "source_lang": "tr"})
         with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
@@ -109,6 +126,15 @@ class ApiKeyGuardTests(ApiTestCase):
             r = self.client.post(f"/api/jobs/{job.json()['job']['id']}/cancel",
                                  headers={"X-API-Key": "secret123"})
         self.assertEqual(r.status_code, 200)
+
+    def test_api_key_comparison_uses_constant_time_helper(self):
+        import hmac
+        with patch("api.hmac.compare_digest", wraps=hmac.compare_digest) as compare, \
+             patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
+            r = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"},
+                                 headers={"X-API-Key": "secret123"})
+        self.assertEqual(r.status_code, 201)
+        compare.assert_called_once_with(b"secret123", b"secret123")
 
     def test_read_only_endpoints_stay_open_even_with_key_configured(self):
         with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
