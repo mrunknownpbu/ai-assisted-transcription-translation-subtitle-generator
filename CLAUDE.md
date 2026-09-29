@@ -1121,6 +1121,17 @@ byte-for-byte; no series-specific manual glossary existed before or after
 the job. Backups:
 `/cache/verification-backups/20260929-glossary-edit-lock-final/`.
 
+**Lock/commit separation measurement (2026-09-29):** A temporary real-Git
+benchmark ran 32 concurrent same-series promotions across eight threads.
+Total elapsed time was 0.915s; lock wait was p50 79.951ms / p95
+259.832ms, lock hold p50 28.125ms / p95 44.561ms, while Git commit
+duration was p50 7.449ms / p95 7.910ms (32 runs). The wait is dominated
+by queued concurrent edits, not the Git subprocess. Releasing the edit
+lock before committing would add index/content races to save only a few
+milliseconds per edit, so the current simple serialization is retained;
+revisit only if production lock-wait telemetry shows a meaningful user
+impact.
+
 ## Make job cancellation and deletion status checks atomic (2026-09-29)
 
 Before the change, a controlled interleaving let `request_cancel()` read
