@@ -271,11 +271,13 @@ def health() -> dict:
 
 
 def _sibling_subtitle_paths(root: Path, video: Path,
-                            names: set[str] | None = None) -> list[tuple[str, str]]:
+                            names: set[str] | None = None, *,
+                            sort_by_path: bool = False) -> list[tuple[str, str]]:
     if names is None:
         names = {entry.name for entry in video.parent.iterdir()}
     result = []
-    for name in sorted(names):
+    candidate_names = names if sort_by_path else sorted(names)
+    for name in candidate_names:
         if not (name.startswith(video.stem + ".") and name.lower().endswith(".srt")):
             continue
         try:
@@ -284,6 +286,8 @@ def _sibling_subtitle_paths(root: Path, video: Path,
             continue
         if candidate.is_file():
             result.append((name, str(candidate.relative_to(root))))
+    if sort_by_path:
+        result.sort(key=lambda item: item[1])
     return result
 
 
@@ -382,7 +386,7 @@ def media_metadata(path: str = Query(...)) -> dict:
     if not file.is_file() or file.suffix.lower() not in VIDEO_EXTENSIONS:
         raise HTTPException(status_code=400, detail="not a supported video")
     root = Path(get_media_root()).resolve()
-    existing = sorted(path for _, path in _sibling_subtitle_paths(root, file))
+    existing = [path for _, path in _sibling_subtitle_paths(root, file, sort_by_path=True)]
     metadata = _probe_metadata(file)
     metadata.update(path=str(file.relative_to(root)), filename=file.name,
                     size=file.stat().st_size, existing_subtitles=sorted(existing))

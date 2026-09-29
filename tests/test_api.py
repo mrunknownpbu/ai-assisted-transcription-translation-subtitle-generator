@@ -922,6 +922,18 @@ class MediaMetadataTests(MediaRootApiTestCase):
         self.assertEqual(r.json()["existing_subtitles"],
                          ["Show/[Grp] Ep 01.en.srt", "Show/[Grp] Ep 01.tr.srt"])
 
+    def test_existing_subtitles_remain_sorted_by_resolved_path(self):
+        show = self.root / "Show"
+        (show / "aa.srt").write_text("target a", encoding="utf-8")
+        (show / "zz.srt").write_text("target z", encoding="utf-8")
+        (show / "S01E01.a.srt").symlink_to(show / "zz.srt")
+        (show / "S01E01.b.srt").symlink_to(show / "aa.srt")
+        with patch("media.subprocess.run") as run:
+            run.return_value.stdout = '{"format": {"duration": "1"}, "streams": []}'
+            r = self.client.get("/api/media", params={"path": "Show/S01E01.mkv"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["existing_subtitles"], ["Show/aa.srt", "Show/zz.srt"])
+
     def test_valid_video_returns_metadata_shape(self):
         with patch("media.subprocess.run") as run:
             run.return_value.stdout = ('{"format": {"duration": "3600"}, "streams": '
