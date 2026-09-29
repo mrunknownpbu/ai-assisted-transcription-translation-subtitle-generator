@@ -7,6 +7,7 @@ days in the glossary's own git repo."""
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -55,6 +56,7 @@ class RoundTripTests(unittest.TestCase):
         self.assertTrue(text.startswith(COMMENTED_YAML), text)
         self.assertIn("- canonical: Melek", text)
         self.assertEqual(yaml.safe_load(text)["entities"][-1]["canonical"], "Melek")
+        self.assertEqual(list(self.path.parent.iterdir()), [self.path])
 
     def test_unchanged_round_trip_is_byte_identical(self):
         glossary_files.write(self.path, glossary_files.load(self.path))
@@ -74,6 +76,28 @@ class RoundTripTests(unittest.TestCase):
         self.path.write_text(indented, encoding="utf-8")
         glossary_files.write(self.path, glossary_files.load(self.path))
         self.assertEqual(self.path.read_text(encoding="utf-8"), indented)
+
+    def test_concurrent_atomic_writes_use_independent_temporary_files(self):
+        barrier = threading.Barrier(2)
+        errors = []
+        contents = ("first complete value\n", "second complete value\n")
+
+        def write(content):
+            try:
+                barrier.wait(timeout=2)
+                glossary_files.write_text_atomic(self.path, content)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=write, args=(content,)) for content in contents]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=3)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertFalse(errors, errors)
+        self.assertIn(self.path.read_text(encoding="utf-8"), contents)
+        self.assertEqual(list(self.path.parent.iterdir()), [self.path])
 
     def test_unicode_is_written_literally(self):
         data = glossary_files.load(self.path)
@@ -159,6 +183,75 @@ class ApiIntegrationTests(unittest.TestCase):
 
     def _subjects(self):
         return _git(self.glossary_dir, "log", "--format=%s").splitlines()
+
+    def test_api_edit_waits_for_glossary_lock(self):
+        started = threading.Event()
+        finished = threading.Event()
+        result = []
+        errors = []
+
+        def promote():
+            started.set()
+            try:
+                result.append(api.promote_glossary_entity(
+                    111, api.PromoteGlossaryEntityRequest(canonical="Melek")))
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                finished.set()
+
+        with glossary_files.edit_lock(self.glossary_dir):
+            thread = threading.Thread(target=promote)
+            thread.start()
+            self.assertTrue(started.wait(timeout=2))
+            self.assertFalse(finished.wait(timeout=0.1))
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(errors, errors)
+        self.assertEqual(len(result), 1)
+        self.assertIn("Melek", [e["canonical"] for e in result[0]["manual_glossary"]])
+
+    def test_concurrent_promotions_preserve_both_read_modify_writes(self):
+        first_loaded = threading.Event()
+        release_first = threading.Event()
+        second_started = threading.Event()
+        results = []
+        errors = []
+        real_load = glossary_files.load
+
+        def delayed_load(path):
+            data = real_load(path)
+            if threading.current_thread().name == "first-promotion":
+                first_loaded.set()
+                if not release_first.wait(timeout=5):
+                    raise TimeoutError("test did not release the first promotion")
+            return data
+
+        def promote(name, started=None):
+            if started is not None:
+                started.set()
+            try:
+                results.append(api.promote_glossary_entity(
+                    111, api.PromoteGlossaryEntityRequest(canonical=name)))
+            except Exception as exc:
+                errors.append(exc)
+
+        with patch.object(glossary_files, "load", side_effect=delayed_load), \
+             patch.object(api, "_series_title", return_value="Test Series"):
+            first = threading.Thread(target=promote, args=("Alpha",), name="first-promotion")
+            second = threading.Thread(target=promote, args=("Beta", second_started))
+            first.start()
+            self.assertTrue(first_loaded.wait(timeout=2))
+            second.start()
+            self.assertTrue(second_started.wait(timeout=2))
+            release_first.set()
+            first.join(timeout=5)
+            second.join(timeout=5)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertFalse(errors, errors)
+        names = {e["canonical"] for e in yaml.safe_load(self.path.read_text())["entities"]}
+        self.assertEqual(names, {"Eda", "Sirius", "Ceren", "Alpha", "Beta"})
 
     def test_promote_update_delete_each_commit_and_keep_comments(self):
         self.assertEqual(self.client.post("/api/series/111/glossary/promote",

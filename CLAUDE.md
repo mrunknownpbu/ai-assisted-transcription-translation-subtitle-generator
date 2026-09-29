@@ -1100,3 +1100,23 @@ POST `/api/jobs` completed with KEEP semantics (`outputs: []`); the
 backed-up `.ja.srt`, `.en.srt`, and `.en.hi.srt` files remained
 byte-identical. Backup:
 `/cache/verification-backups/20260929-media-subtitle-discovery/`.
+
+## Serialize glossary edits and cast-enrichment writes (2026-09-29)
+
+Before the change, a barrier-synchronized reproduction of 20 pairs of
+same-series promotions lost at least one update in all 20 runs; 16 runs
+also raised from the shared fixed `.yaml.tmp` file. Glossary API
+promote/update/delete now hold a directory `flock` across read, mutation,
+write, and commit. Cast enrichment re-reads and merges the current series
+file under the same lock before writing, preserving manual edits made
+during its probe. Glossary and auto-suggestion YAML writes use unique,
+same-directory temporary files, fsync, and atomic replace. The equivalent
+20-run concurrent promotion check now has zero lost updates and zero
+request exceptions. Full suite: 1156 passed, 40 subtests.
+
+After deployment, a production Hammer Session! S01E01 POST completed with
+KEEP semantics (`outputs: []`). Its `.ja.srt`, `.en.srt`, `.en.hi.srt`,
+cast report, and glossary suggestion YAML matched their pre-run backups
+byte-for-byte; no series-specific manual glossary existed before or after
+the job. Backups:
+`/cache/verification-backups/20260929-glossary-edit-lock-final/`.

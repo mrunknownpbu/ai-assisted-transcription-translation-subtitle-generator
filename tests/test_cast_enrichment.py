@@ -197,6 +197,22 @@ class EnrichSeriesTests(unittest.TestCase):
         names = [e["canonical"] for e in yaml.safe_load((self.glossary / "show.yaml").read_text())["entities"]]
         self.assertEqual(names.count("Kiraz"), 1)
 
+    def test_worker_write_preserves_a_manual_edit_made_during_probe(self):
+        def edit_during_probe(lines, lang):
+            with ce.glossary_files.edit_lock(self.glossary):
+                path = self.glossary / "show.yaml"
+                data = ce.glossary_files.load(path)
+                data["entities"].append({"canonical": "Melek", "protected": True})
+                ce.glossary_files.write(path, data)
+            return self.probe(lines, lang)
+
+        with patch.object(ce.glossary_files, "commit", return_value=True), \
+             patch.object(ce, "_text_language", return_value="tr"):
+            ce.enrich_series(1, self.root, self.glossary, probe=edit_during_probe, book=self.book)
+        names = {e["canonical"] for e in yaml.safe_load(
+            (self.glossary / "show.yaml").read_text(encoding="utf-8"))["entities"]}
+        self.assertEqual(names, {"Eda", "Melek", "Kiraz"})
+
     def test_dry_run_writes_nothing(self):
         before = (self.glossary / "show.yaml").read_text()
         report, commit = self.run_enrich(dry_run=True)

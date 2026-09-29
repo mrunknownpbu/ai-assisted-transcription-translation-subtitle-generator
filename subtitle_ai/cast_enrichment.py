@@ -178,11 +178,9 @@ def _sample(items: list[str], n: int) -> list[str]:
 
 # --- glossary ---------------------------------------------------------------
 
-def _existing_forms(glossary_dir: Path, key_field: str, key: int) -> tuple[dict[str, dict], Path | None, object]:
-    """{folded surface form: entry} over every layer that applies to this
-    series/movie, plus its own file's path and round-trip data (to write to)."""
+def _existing_forms(glossary_dir: Path, key_field: str, key: int) -> dict[str, dict]:
+    """{folded surface form: entry} over every layer that applies to this series/movie."""
     forms: dict[str, dict] = {}
-    series_path = glossary_profile.find_glossary_path(glossary_dir, key_field, key)
     for path in sorted(glossary_dir.glob("*.yaml")):
         data = glossary_files.load(path)
         own = data.get(key_field) == key
@@ -192,8 +190,7 @@ def _existing_forms(glossary_dir: Path, key_field: str, key: int) -> tuple[dict[
             for form in [entry.get("canonical"), *(entry.get("aliases") or [])]:
                 if form:
                     forms[fold(str(form))] = entry
-    data = glossary_files.load(series_path) if series_path else None
-    return forms, series_path, data
+    return forms
 
 
 def enrich_series(tvdb_id: int, series_root: Path, glossary_dir: Path, *, probe=default_probe,
@@ -233,7 +230,7 @@ def _enrich(key_field: str, key: int, report_key: str, book, lang, subtitles, gl
     for season, number in subtitles:
         known[season] = max(known.get(season, 0), number)
 
-    existing, series_path, series_data = _existing_forms(glossary_dir, key_field, key)
+    existing = _existing_forms(glossary_dir, key_field, key)
     candidates: list[Candidate] = []
     for member in book.members.values():
         cand = Candidate(member=member, scope=scope_for(member, known))
@@ -277,7 +274,7 @@ def _enrich(key_field: str, key: int, report_key: str, book, lang, subtitles, gl
             cand.decision = "skip"
             cand.reason = f"translates correctly unprotected ({n}/{cand.probe_total} lines lost it)"
 
-    changed = []
+    changed: list[Candidate] = []
     for cand in candidates:
         m = cand.member
         report["candidates"].append({
@@ -288,39 +285,68 @@ def _enrich(key_field: str, key: int, report_key: str, book, lang, subtitles, gl
             "examples": [{"source": s, "unprotected": o} for s, o in cand.probe_failures[:3]],
             "decision": cand.decision, "reason": cand.reason})
         if cand.decision == "protect":
-            aliases = [f for f in m.surface_forms()[1:] if fold(f) not in existing
-                       or existing[fold(f)].get("source") == "metadata"]
-            changed.append((cand, aliases))
+            changed.append(cand)
 
-    report["added"] = [cand.member.given for cand, _ in changed]
+    report["added"] = [cand.member.given for cand in changed]
     if changed and not dry_run:
-        if series_path is None:
-            series_path = glossary_dir / f"{report_key}.yaml"
-            series_data = {key_field: key, "title": None, "entities": []}
-        entities = series_data.setdefault("entities", [])
-        for cand, aliases in changed:
-            m = cand.member
-            # case_sensitive: these are names that are often also words
-            # (Melek = angel, Kiraz = cherry); only the capitalised name
-            # is protected, never the lowercase word.
-            entry = {"canonical": m.given, "aliases": aliases, "protected": True, "case_sensitive": True}
-            if cand.scope:
-                entry["episodes"] = cand.scope
-            entry["source"] = "metadata"
-            entry["evidence"] = {
-                "credited_by": sorted(m.sources), "credited_episodes": len(m.episodes),
-                "name_lines": len(cand.name_lines), "name_episodes": len(cand.name_episodes),
-                "unprotected_probe": f"{len(cand.probe_failures)}/{cand.probe_total} lines lost the name",
-                "checked": date.fromtimestamp(started).isoformat()}
-            previous = next((e for e in entities if e.get("source") == "metadata"
-                             and fold(str(e.get("canonical", ""))) == fold(m.given)), None)
-            if previous is not None:
-                previous.update(entry)
+        with glossary_files.edit_lock(glossary_dir):
+            series_path = glossary_profile.find_glossary_path(glossary_dir, key_field, key)
+            if series_path is None:
+                series_path = glossary_dir / f"{report_key}.yaml"
+                series_data = {key_field: key, "title": None, "entities": []}
             else:
-                entities.append(entry)
-        glossary_files.write(series_path, series_data)
-        glossary_files.commit(series_path, "Protect " + ", ".join(repr(n) for n in report["added"])
-                              + f" ({report_key}) from cast metadata")
+                series_data = glossary_files.load(series_path)
+            entities = series_data.setdefault("entities", [])
+            latest_forms = {
+                fold(str(form)): entry
+                for entry in entities
+                for form in [entry.get("canonical"), *(entry.get("aliases") or [])]
+                if form
+            }
+            added = []
+            for cand in changed:
+                m = cand.member
+                person_entry = next((latest_forms[fold(form)] for form in m.surface_forms()
+                                     if fold(form) in latest_forms
+                                     and latest_forms[fold(form)].get("source") != "metadata"), None)
+                if person_entry is not None:
+                    cand.decision = "skip"
+                    cand.reason = "added to the glossary by a person while cast metadata was being checked"
+                    candidate_report = next(r for r in report["candidates"] if r["name"] == m.given)
+                    candidate_report["decision"] = cand.decision
+                    candidate_report["reason"] = cand.reason
+                    continue
+                # case_sensitive: these are names that are often also words
+                # (Melek = angel, Kiraz = cherry); only the capitalised name
+                # is protected, never the lowercase word.
+                aliases = [form for form in m.surface_forms()[1:]
+                           if fold(form) not in latest_forms
+                           or latest_forms[fold(form)].get("source") == "metadata"]
+                entry = {"canonical": m.given, "aliases": aliases, "protected": True, "case_sensitive": True}
+                if cand.scope:
+                    entry["episodes"] = cand.scope
+                entry["source"] = "metadata"
+                entry["evidence"] = {
+                    "credited_by": sorted(m.sources), "credited_episodes": len(m.episodes),
+                    "name_lines": len(cand.name_lines), "name_episodes": len(cand.name_episodes),
+                    "unprotected_probe": f"{len(cand.probe_failures)}/{cand.probe_total} lines lost the name",
+                    "checked": date.fromtimestamp(started).isoformat()}
+                previous = next((e for e in entities if e.get("source") == "metadata"
+                                 and fold(str(e.get("canonical", ""))) == fold(m.given)), None)
+                if previous is not None:
+                    previous.update(entry)
+                    target = previous
+                else:
+                    entities.append(entry)
+                    target = entry
+                for form in m.surface_forms():
+                    latest_forms[fold(form)] = target
+                added.append(m.given)
+            report["added"] = added
+            if added:
+                glossary_files.write(series_path, series_data)
+                glossary_files.commit(series_path, "Protect " + ", ".join(repr(n) for n in added)
+                                      + f" ({report_key}) from cast metadata")
     report["seconds"] = round(time.time() - started, 1)
     return report
 

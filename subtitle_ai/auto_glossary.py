@@ -36,6 +36,7 @@ from pathlib import Path
 
 import yaml
 
+import glossary_files
 import srt
 
 SOURCE_LANG = "tr"
@@ -257,7 +258,6 @@ def write_suggestions(suggestions_dir: str | Path, tvdb_id: int,
         ],
     }
     target = directory / f"{tvdb_id}.yaml"
-    tmp = target.with_suffix(".yaml.tmp")
-    tmp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    tmp.replace(target)
+    glossary_files.write_text_atomic(
+        target, yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
     return target

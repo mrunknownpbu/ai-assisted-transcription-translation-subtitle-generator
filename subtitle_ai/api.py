@@ -696,28 +696,29 @@ def promote_glossary_entity(tvdb_id: int, request: PromoteGlossaryEntityRequest)
     directory = Path(glossary_dir)
     directory.mkdir(parents=True, exist_ok=True)
 
-    path = glossary_profile.find_series_glossary_path(directory, tvdb_id)
-    if path is not None:
-        data = glossary_files.load(path)
-    else:
-        path = directory / f"{tvdb_id}.yaml"
-        data = {"tvdb_id": tvdb_id, "title": _series_title(tvdb_id), "entities": []}
+    with glossary_files.edit_lock(directory):
+        path = glossary_profile.find_series_glossary_path(directory, tvdb_id)
+        if path is not None:
+            data = glossary_files.load(path)
+        else:
+            path = directory / f"{tvdb_id}.yaml"
+            data = {"tvdb_id": tvdb_id, "title": _series_title(tvdb_id), "entities": []}
 
-    entities = data.setdefault("entities", [])
-    existing = next((e for e in entities if e.get("canonical") == request.canonical), None)
-    if existing is not None:
-        existing["protected"] = True
-        if request.aliases:
-            existing["aliases"] = sorted(set(existing.get("aliases", [])) | set(request.aliases))
-    else:
-        entities.append({"canonical": request.canonical, "aliases": request.aliases, "protected": True})
+        entities = data.setdefault("entities", [])
+        existing = next((e for e in entities if e.get("canonical") == request.canonical), None)
+        if existing is not None:
+            existing["protected"] = True
+            if request.aliases:
+                existing["aliases"] = sorted(set(existing.get("aliases", [])) | set(request.aliases))
+        else:
+            entities.append({"canonical": request.canonical, "aliases": request.aliases, "protected": True})
 
-    _write_series_glossary(path, data, f"Protect {request.canonical!r} (series {tvdb_id})")
+        _write_series_glossary(path, data, f"Protect {request.canonical!r} (series {tvdb_id})")
 
-    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id, all_episodes=True)
-    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms,
-                                 "episodes": e.episodes, "source": e.source}
-                                for e in profile.entities]}
+        profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id, all_episodes=True)
+        return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms,
+                                     "episodes": e.episodes, "source": e.source}
+                                    for e in profile.entities]}
 
 
 class UpdateGlossaryEntityRequest(BaseModel):
@@ -752,21 +753,22 @@ def update_glossary_entity(tvdb_id: int, request: UpdateGlossaryEntityRequest) -
     if not glossary_dir:
         raise HTTPException(status_code=503, detail="glossary directory is not configured")
     directory = Path(glossary_dir)
-    path, data = _load_series_glossary_or_404(directory, tvdb_id)
+    with glossary_files.edit_lock(directory):
+        path, data = _load_series_glossary_or_404(directory, tvdb_id)
 
-    entities = data.setdefault("entities", [])
-    entry = next((e for e in entities if e.get("canonical") == request.original_canonical), None)
-    if entry is None:
-        raise HTTPException(status_code=404,
-                            detail=f"{request.original_canonical!r} not found in this series' glossary")
-    entry["canonical"] = request.canonical
-    entry["aliases"] = request.aliases
+        entities = data.setdefault("entities", [])
+        entry = next((e for e in entities if e.get("canonical") == request.original_canonical), None)
+        if entry is None:
+            raise HTTPException(status_code=404,
+                                detail=f"{request.original_canonical!r} not found in this series' glossary")
+        entry["canonical"] = request.canonical
+        entry["aliases"] = request.aliases
 
-    _write_series_glossary(path, data, f"Edit {request.original_canonical!r} (series {tvdb_id})")
-    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id, all_episodes=True)
-    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms,
-                                 "episodes": e.episodes, "source": e.source}
-                                for e in profile.entities]}
+        _write_series_glossary(path, data, f"Edit {request.original_canonical!r} (series {tvdb_id})")
+        profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id, all_episodes=True)
+        return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms,
+                                     "episodes": e.episodes, "source": e.source}
+                                    for e in profile.entities]}
 
 
 class DeleteGlossaryEntityRequest(BaseModel):
@@ -781,20 +783,21 @@ def delete_glossary_entity(tvdb_id: int, request: DeleteGlossaryEntityRequest) -
     if not glossary_dir:
         raise HTTPException(status_code=503, detail="glossary directory is not configured")
     directory = Path(glossary_dir)
-    path, data = _load_series_glossary_or_404(directory, tvdb_id)
+    with glossary_files.edit_lock(directory):
+        path, data = _load_series_glossary_or_404(directory, tvdb_id)
 
-    entities = data.setdefault("entities", [])
-    entry = next((e for e in entities if e.get("canonical") == request.canonical), None)
-    if entry is None:
-        raise HTTPException(status_code=404,
-                            detail=f"{request.canonical!r} not found in this series' glossary")
-    entities.remove(entry)
+        entities = data.setdefault("entities", [])
+        entry = next((e for e in entities if e.get("canonical") == request.canonical), None)
+        if entry is None:
+            raise HTTPException(status_code=404,
+                                detail=f"{request.canonical!r} not found in this series' glossary")
+        entities.remove(entry)
 
-    _write_series_glossary(path, data, f"Unprotect {request.canonical!r} (series {tvdb_id})")
-    profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id, all_episodes=True)
-    return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms,
-                                 "episodes": e.episodes, "source": e.source}
-                                for e in profile.entities]}
+        _write_series_glossary(path, data, f"Unprotect {request.canonical!r} (series {tvdb_id})")
+        profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id, all_episodes=True)
+        return {"manual_glossary": [{"canonical": e.canonical, "surface_forms": e.surface_forms,
+                                     "episodes": e.episodes, "source": e.source}
+                                    for e in profile.entities]}
 
 
 @app.get("/api/events")

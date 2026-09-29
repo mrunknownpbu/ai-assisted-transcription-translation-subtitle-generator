@@ -20,10 +20,14 @@ Two real gaps this closes (found 2026-09-28, in the live glossary repo):
 
 from __future__ import annotations
 
+import fcntl
 import io
 import logging
+import os
 import shutil
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from ruamel.yaml import YAML
@@ -63,12 +67,49 @@ def dumps(data, like: str | None = None) -> str:
     return buf.getvalue()
 
 
+@contextmanager
+def edit_lock(directory: Path):
+    """Serialize glossary read-modify-write operations in this directory.
+
+    flock on the directory descriptor leaves no lock-file artifact in the
+    versioned glossary repository; all series share the short critical
+    section so files created under different valid names cannot race.
+    """
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except BaseException:
+        os.close(fd)
+        raise
+    try:
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.tmp-", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            os.fchmod(fh.fileno(), 0o644)
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def write(path: Path, data) -> None:
-    """Atomic tmp-then-replace, same as auto_glossary.write_suggestions()."""
+    """Atomic unique-temp write. Call under edit_lock() for read-modify-write."""
     existing = path.read_text(encoding="utf-8") if path.exists() else None
-    tmp = path.with_suffix(".yaml.tmp")
-    tmp.write_text(dumps(data, like=existing), encoding="utf-8")
-    tmp.replace(path)
+    write_text_atomic(path, dumps(data, like=existing))
 
 
 def commit(path: Path, message: str) -> bool:
