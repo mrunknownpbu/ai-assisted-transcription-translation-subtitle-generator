@@ -25,11 +25,11 @@ import translate
 import turns
 from asr import AsrConfig, PIPELINE_VERSION, asr_style_prompt, hotwords_enabled, transcribe as asr_transcribe, vad_parameters
 from output import TARGET_LANG, write_srt_atomic, resolve_output_path
-from projection import ProjectedCue, merge_groups, project, validate_coverage
+from projection import ProjectedCue, SourceGroup, merge_groups, project, validate_coverage
 from qc import entity_qc, output_qc, readability_qc, timing_qc, transcription_qc, translation_qc
 from qc.types import JobQc
-from transcript import (CanonicalTranscript, ModelInfo, auto_lookup_key, cache_key,
-                        join_words, validate_cached_transcript)
+from transcript import (NO_SPACE_LANGUAGES, CanonicalTranscript, ModelInfo, Segment, auto_lookup_key,
+                        cache_key, join_words, validate_cached_transcript)
 
 
 AUTO = "auto"
@@ -118,24 +118,69 @@ def _pack_pieces_by_weight(pieces: list[str], weights: list[int]) -> list[str]:
     return [" ".join(words[cuts[i]:cuts[i + 1]]) for i in range(len(weights))]
 
 
-def _distribute_span_text(text: str, weights: list[int]) -> list[str]:
-    """Split `text` (one translation span) across len(weights) pieces,
-    proportional to `weights` -- at LINE boundaries if `text` is
-    multi-speaker dash-formatted (glossary.split_multi_speaker_dash_lines,
-    the shape translate_spans() itself produces for a dash-formatted
-    source span), else at SENTENCE boundaries
-    (segmentation_target.split_sentences) -- never a raw word-count
-    fraction, which could land mid-sentence and always discarded any
-    line break by flattening through plain `.split()`. A single-group
-    span (the overwhelming common case) always gets `text` back
-    unchanged."""
-    if len(weights) <= 1:
-        return [text]
+def _merge_groups_into_sentences(pieces: list[str], weights: list[int]) -> list[tuple[int, int, str]]:
+    """Fewer English sentences than display groups: give each sentence
+    WHOLE to a run of adjacent groups, instead of cutting a sentence
+    at the word level so every group gets a slice.
+
+    Real case this replaces (Hammer Session! S01E01, 2026-09-29): one
+    span of three groups (1881.2-1895.6s, no real pause between them)
+    came back from NLLB as one sentence, "Hey, can you read it?", and was
+    shown as three cues "Hey, can" / "you" / "read it?" -- a human editor
+    shows it as one cue. The run boundaries are the group boundaries that
+    best match where each sentence falls, by cumulative weight vs.
+    cumulative characters. All groups here are inside one translation
+    span, so merging them never crosses a REAL_ACOUSTIC_GAP or
+    UTTERANCE_END boundary (build_context_spans breaks the span there)."""
+    k, m = len(weights), len(pieces)
+    total_w = sum(weights) or 1
+    total_c = sum(len(p) for p in pieces) or 1
+    cum_w = [0]
+    for w in weights:
+        cum_w.append(cum_w[-1] + w)
+    bounds = [0]
+    for j in range(1, m):
+        target = sum(len(p) for p in pieces[:j]) / total_c
+        lo, hi = bounds[-1] + 1, k - (m - j)
+        bounds.append(min(range(lo, hi + 1), key=lambda b: abs(cum_w[b] / total_w - target)))
+    bounds.append(k)
+    return [(bounds[j], bounds[j + 1], pieces[j]) for j in range(m)]
+
+
+def _distribute_span_text(text: str, weights: list[int]) -> list[tuple[int, int, str]]:
+    """Split `text` (one translation span) across len(weights) display
+    groups, proportional to `weights`. Returns runs `(first, stop, text)`
+    over group positions: a run covering more than one group means those
+    groups are shown as ONE display window (see run()).
+
+    At LINE boundaries if `text` is multi-speaker dash-formatted
+    (glossary.split_multi_speaker_dash_lines, the shape translate_spans()
+    itself produces for a dash-formatted source span), else at SENTENCE
+    boundaries (segmentation_target.split_sentences) -- never mid-sentence
+    when there are fewer sentences than groups: those groups are merged
+    instead (_merge_groups_into_sentences). A single-group span (the
+    overwhelming common case) always gets `text` back unchanged."""
+    k = len(weights)
+    if k <= 1:
+        return [(0, k, text)]
     dash_lines = glossary_mod.split_multi_speaker_dash_lines(text)
-    if dash_lines is not None and len(dash_lines) == len(weights):
-        return [f"- {line}" for line in dash_lines]
+    if dash_lines is not None and len(dash_lines) == k:
+        return [(g, g + 1, f"- {line}") for g, line in enumerate(dash_lines)]
     pieces = segmentation_target.split_sentences(text) or [text]
-    return _pack_pieces_by_weight(pieces, weights)
+    if len(pieces) < k:
+        return _merge_groups_into_sentences(pieces, weights)
+    return [(g, g + 1, piece) for g, piece in enumerate(_pack_pieces_by_weight(pieces, weights))]
+
+
+def _group_weight(cues: list[Segment], language: str) -> int:
+    """How much source content a display group holds, for dividing its
+    span's translation. Words for spaced languages; characters for an
+    unspaced one (transcript.NO_SPACE_LANGUAGES), where `.split()` counts
+    every cue as one word -- which is how every Japanese group came to
+    weigh the same, whatever its length (2026-09-29, Hammer Session!)."""
+    if language in NO_SPACE_LANGUAGES:
+        return max(sum(len(c.text.replace(" ", "")) for c in cues), 1)
+    return sum(max(len(c.text.split()), 1) for c in cues)
 
 
 def run(video_path: str, media_root: str, work_dir: str, *,
@@ -430,14 +475,21 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     # this replaced a raw word-count-FRACTION cut (translate.py:343-356's
     # old logic) that could land mid-sentence and always flattened a
     # span's own dash/newline structure via plain .split().
-    target_cues_by_group: list[list] = [[] for _ in groups]
+    display_groups: list[SourceGroup] = []
+    target_cues_by_group: list[list] = []
     for si, span in enumerate(spans):
-        span_groups_here = [g for g, s in enumerate(span_of_group) if s == si]
-        weights = [sum(max(len(source_cues[i].text.split()), 1) for i in groups[g].indices)
+        span_groups_here = [groups[g] for g, s in enumerate(span_of_group) if s == si]
+        if not span_groups_here:
+            continue
+        weights = [_group_weight([source_cues[i] for i in g.indices], transcript.language)
                   for g in span_groups_here]
-        pieces = _distribute_span_text(translations[si], weights)
-        for g, piece in zip(span_groups_here, pieces):
-            target_cues_by_group[g] = segmentation_target.segment(piece, groups[g].start, groups[g].end)
+        for first, stop, piece in _distribute_span_text(translations[si], weights):
+            run_groups = span_groups_here[first:stop]
+            merged = SourceGroup([i for g in run_groups for i in g.indices],
+                                 run_groups[0].start, run_groups[-1].end)
+            display_groups.append(merged)
+            target_cues_by_group.append(segmentation_target.segment(piece, merged.start, merged.end))
+    groups = display_groups
     _emit(on_event, events, "TARGET_SEGMENTATION_COMPLETED",
          cues=sum(len(c) for c in target_cues_by_group))
 
