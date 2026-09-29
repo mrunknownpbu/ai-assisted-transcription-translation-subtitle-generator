@@ -872,6 +872,18 @@ class WorkDirLifecycleTests(WorkerTestCase):
         args = mock_sweep.call_args
         self.assertEqual(args[0][2], self.worker.failed_work_retention_hours)
 
+    def test_sweep_also_cleans_uploads_at_the_same_interval(self):
+        self.worker.srt_upload_dir = str(Path(self.tmp.name) / "uploads")
+        with patch.object(worker_mod.upload_cleanup, "sweep_stale") as mock_upload_sweep:
+            self.worker._maybe_sweep_work_root()
+            self.worker._maybe_sweep_work_root()
+            self.assertEqual(mock_upload_sweep.call_count, 1)
+            self.worker._last_work_sweep -= worker_mod._WORK_SWEEP_INTERVAL_SECONDS + 1
+            self.worker._maybe_sweep_work_root()
+            self.assertEqual(mock_upload_sweep.call_count, 2)
+        self.assertEqual(mock_upload_sweep.call_args.args[:2],
+                         (self.worker.srt_upload_dir, self.store))
+
     def test_sweep_failure_is_swallowed(self):
         with patch.object(worker_mod.workdir, "sweep_stale", side_effect=RuntimeError("boom")):
             self.worker._maybe_sweep_work_root()   # must not raise

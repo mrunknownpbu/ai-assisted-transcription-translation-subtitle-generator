@@ -413,6 +413,15 @@ class JobStore:
                 (tvdb_id,)).fetchone()
         return row["video_path"] if row else None
 
+    def active_uploaded_sources(self) -> set[str]:
+        """Upload ids currently needed by queued or running SRT jobs."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT source_srt_path FROM jobs "
+                "WHERE source_is_uploaded=1 AND status IN ('queued','running') "
+                "AND source_srt_path IS NOT NULL").fetchall()
+        return {row["source_srt_path"] for row in rows}
+
     def list_by_tvdb_id(self, tvdb_id: int | None) -> list[dict]:
         # video_path sorts naturally today because every real filename in
         # this deployment's library is zero-padded (S01E01, S01E02, ...,

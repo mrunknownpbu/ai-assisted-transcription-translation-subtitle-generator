@@ -27,6 +27,7 @@ import name_correction
 import gpu
 import pipeline
 import srt_translation
+import upload_cleanup
 import workdir
 from jobstore import TERMINAL_STATUSES, JobStore
 from output import (TARGET_LANG, OutputSafetyError, resolve_media_path, resolve_output_path,
@@ -298,6 +299,11 @@ class Worker(threading.Thread):
             workdir.sweep_stale(self.work_root, self.store, self.failed_work_retention_hours, now=now)
         except Exception:  # noqa: BLE001
             logger.warning("work-dir sweep failed", exc_info=True)
+        if self.srt_upload_dir:
+            try:
+                upload_cleanup.sweep_stale(self.srt_upload_dir, self.store, now=now)
+            except Exception:
+                logger.warning("SRT upload sweep failed", exc_info=True)
 
     def _name_correction_context(self, video_path: str) -> dict | None:
         """Names for name_correction.py: this episode's credited/protected
