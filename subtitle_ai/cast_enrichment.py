@@ -60,6 +60,7 @@ _SENTENCE_START = re.compile(r"(^|[.!?…\"“”\-–—:]\s*)$")
 class Candidate:
     member: CastMember
     scope: list[str] | None = None            # None = series-wide
+    forms: list[str] = field(default_factory=list)
     name_lines: list[str] = field(default_factory=list)
     name_episodes: set[tuple[int, int]] = field(default_factory=set)
     probe_total: int = 0
@@ -178,6 +179,15 @@ def _sample(items: list[str], n: int) -> list[str]:
 
 # --- glossary ---------------------------------------------------------------
 
+def _index_entity_forms(entities: list[dict]) -> dict[str, dict]:
+    return {
+        fold(str(form)): entry
+        for entry in entities
+        for form in [entry.get("canonical"), *(entry.get("aliases") or [])]
+        if form
+    }
+
+
 def _existing_forms(glossary_dir: Path, key_field: str, key: int) -> dict[str, dict]:
     """{folded surface form: entry} over every layer that applies to this series/movie."""
     forms: dict[str, dict] = {}
@@ -186,10 +196,7 @@ def _existing_forms(glossary_dir: Path, key_field: str, key: int) -> dict[str, d
         own = data.get(key_field) == key
         if not own and any(data.get(f) is not None for f in glossary_profile.KEY_FIELDS):
             continue
-        for entry in data.get("entities") or []:
-            for form in [entry.get("canonical"), *(entry.get("aliases") or [])]:
-                if form:
-                    forms[fold(str(form))] = entry
+        forms.update(_index_entity_forms(data.get("entities") or []))
     return forms
 
 
@@ -233,7 +240,7 @@ def _enrich(key_field: str, key: int, report_key: str, book, lang, subtitles, gl
     existing = _existing_forms(glossary_dir, key_field, key)
     candidates: list[Candidate] = []
     for member in book.members.values():
-        cand = Candidate(member=member, scope=scope_for(member, known))
+        cand = Candidate(member=member, scope=scope_for(member, known), forms=member.surface_forms())
         candidates.append(cand)
         entry = existing.get(fold(member.given))
         if entry is not None and entry.get("source") != "metadata":
@@ -243,7 +250,7 @@ def _enrich(key_field: str, key: int, report_key: str, book, lang, subtitles, gl
                     f"{entry.get('canonical')}: protected series-wide, but cast metadata credits it only "
                     f"to {', '.join(cand.scope)} -- consider adding that `episodes:` scope")
             continue
-        forms = [f for f in member.surface_forms() if f[:1].isupper()]
+        forms = [f for f in cand.forms if f[:1].isupper()]
         for episode, lines in subtitles.items():
             if not _in(cand.scope, episode):
                 continue
@@ -275,15 +282,18 @@ def _enrich(key_field: str, key: int, report_key: str, book, lang, subtitles, gl
             cand.reason = f"translates correctly unprotected ({n}/{cand.probe_total} lines lost it)"
 
     changed: list[Candidate] = []
+    candidate_reports = {}
     for cand in candidates:
         m = cand.member
-        report["candidates"].append({
+        candidate_report = {
             "name": m.given, "full_names": sorted(m.full_names), "nicknames": sorted(m.nicknames),
             "sources": sorted(m.sources), "credited_episodes": len(m.episodes), "scope": cand.scope,
             "name_lines": len(cand.name_lines), "name_episodes": len(cand.name_episodes),
             "probe": f"{len(cand.probe_failures)}/{cand.probe_total}" if cand.probe_total else None,
             "examples": [{"source": s, "unprotected": o} for s, o in cand.probe_failures[:3]],
-            "decision": cand.decision, "reason": cand.reason})
+            "decision": cand.decision, "reason": cand.reason}
+        report["candidates"].append(candidate_report)
+        candidate_reports[m.given] = candidate_report
         if cand.decision == "protect":
             changed.append(cand)
 
@@ -297,29 +307,24 @@ def _enrich(key_field: str, key: int, report_key: str, book, lang, subtitles, gl
             else:
                 series_data = glossary_files.load(series_path)
             entities = series_data.setdefault("entities", [])
-            latest_forms = {
-                fold(str(form)): entry
-                for entry in entities
-                for form in [entry.get("canonical"), *(entry.get("aliases") or [])]
-                if form
-            }
+            latest_forms = _index_entity_forms(entities)
             added = []
             for cand in changed:
                 m = cand.member
-                person_entry = next((latest_forms[fold(form)] for form in m.surface_forms()
+                person_entry = next((latest_forms[fold(form)] for form in cand.forms
                                      if fold(form) in latest_forms
                                      and latest_forms[fold(form)].get("source") != "metadata"), None)
                 if person_entry is not None:
                     cand.decision = "skip"
                     cand.reason = "added to the glossary by a person while cast metadata was being checked"
-                    candidate_report = next(r for r in report["candidates"] if r["name"] == m.given)
+                    candidate_report = candidate_reports[m.given]
                     candidate_report["decision"] = cand.decision
                     candidate_report["reason"] = cand.reason
                     continue
                 # case_sensitive: these are names that are often also words
                 # (Melek = angel, Kiraz = cherry); only the capitalised name
                 # is protected, never the lowercase word.
-                aliases = [form for form in m.surface_forms()[1:]
+                aliases = [form for form in cand.forms[1:]
                            if fold(form) not in latest_forms
                            or latest_forms[fold(form)].get("source") == "metadata"]
                 entry = {"canonical": m.given, "aliases": aliases, "protected": True, "case_sensitive": True}
@@ -339,7 +344,7 @@ def _enrich(key_field: str, key: int, report_key: str, book, lang, subtitles, gl
                 else:
                     entities.append(entry)
                     target = entry
-                for form in m.surface_forms():
+                for form in cand.forms:
                     latest_forms[fold(form)] = target
                 added.append(m.given)
             report["added"] = added
