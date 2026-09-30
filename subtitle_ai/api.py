@@ -46,6 +46,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 _ENGLISH_SUBTITLE_SUFFIXES = (".en.srt",) + PROTECTED_SUFFIXES
 
 _event_bus = EventBus()
+SSE_HEARTBEAT_SECONDS = 15
 
 
 @asynccontextmanager
@@ -291,7 +292,7 @@ def _sibling_subtitle_paths(root: Path, video: Path,
     return result
 
 
-@app.get("/api/browse")
+@app.get("/api/browse", dependencies=[Depends(require_api_key)])
 def browse(path: str = Query(""), file_type: str = Query("video", pattern=r"^(video|srt)$")) -> dict:
     """file_type="video" (the default, unchanged from before this param
     existed) lists directories + video files, for the existing video-job
@@ -377,7 +378,7 @@ def _probe_metadata(path: Path) -> dict:
     return {"duration": float(fmt.get("duration") or 0), "audio_tracks": audio}
 
 
-@app.get("/api/media")
+@app.get("/api/media", dependencies=[Depends(require_api_key)])
 def media_metadata(path: str = Query(...)) -> dict:
     try:
         file = resolve_media_path(get_media_root(), path, must_exist=True)
@@ -504,7 +505,7 @@ def create_job(request: JobRequest) -> dict:
     return {"job": job}
 
 
-@app.get("/api/languages")
+@app.get("/api/languages", dependencies=[Depends(require_api_key)])
 def list_languages() -> dict:
     """Single source of truth for source-language choices: translate.
     NLLB_LANG's own keys, not a second hardcoded list -- a language this
@@ -639,14 +640,14 @@ def _job_summary(job: dict) -> dict:
     return summary
 
 
-@app.get("/api/jobs")
+@app.get("/api/jobs", dependencies=[Depends(require_api_key)])
 def list_jobs(status: str | None = Query(None), limit: int = Query(50, ge=1, le=500),
              offset: int = Query(0, ge=0)) -> dict:
     jobs, total = get_store().list(status=status, limit=limit, offset=offset)
     return {"jobs": [_job_summary(j) for j in jobs], "total": total}
 
 
-@app.get("/api/queue")
+@app.get("/api/queue", dependencies=[Depends(require_api_key)])
 def queue_counts() -> dict:
     return get_store().counts()
 
@@ -665,13 +666,13 @@ def _series_title(tvdb_id: int | None) -> str | None:
     return glossary_profile.title_from_video_path(path) if path else None
 
 
-@app.get("/api/series")
+@app.get("/api/series", dependencies=[Depends(require_api_key)])
 def list_series() -> dict:
     return {"series": [{**s, "title": _series_title(s["tvdb_id"])}
                        for s in get_store().list_series()]}
 
 
-@app.get("/api/series/{tvdb_id}")
+@app.get("/api/series/{tvdb_id}", dependencies=[Depends(require_api_key)])
 def series_detail(tvdb_id: int) -> dict:
     """tvdb_id-less ("Ungrouped") jobs have no series page -- they already
     surface in the flat /api/jobs listing; there is nothing series-shaped
@@ -822,26 +823,37 @@ def delete_glossary_entity(tvdb_id: int, request: DeleteGlossaryEntityRequest) -
                                     for e in profile.entities]}
 
 
-@app.get("/api/events")
-async def event_stream():
+@app.get("/api/events", dependencies=[Depends(require_api_key)])
+async def event_stream(request: Request):
     """Server-Sent Events: a bare change signal (`{"type", "job_id"}`),
     never a duplicate of the job payload -- GET /api/jobs*/api/series*
     stay the only place response shape is decided. A subscriber reacts by
     refetching, not by trusting this event body as authoritative."""
     queue = get_event_bus().subscribe()
+    if queue is None:
+        raise HTTPException(status_code=429, detail="too many event stream connections",
+                            headers={"Retry-After": "15"})
 
     async def gen():
         try:
             while True:
-                event = await queue.get()
-                yield f"data: {json.dumps(event)}\n\n"
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                else:
+                    yield f"data: {json.dumps(event)}\n\n"
         finally:
             get_event_bus().unsubscribe(queue)
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
-@app.get("/api/jobs/{job_id}")
+@app.get("/api/jobs/{job_id}", dependencies=[Depends(require_api_key)])
 def get_job(job_id: str) -> dict:
     job = get_store().get(job_id)
     if not job:
@@ -880,7 +892,7 @@ def _job_target_srt_path(job: dict) -> Path | None:
     return resolve_output_path(get_media_root(), job["video_path"], TARGET_LANG)
 
 
-@app.get("/api/jobs/{job_id}/srt")
+@app.get("/api/jobs/{job_id}/srt", dependencies=[Depends(require_api_key)])
 def get_job_srt(job_id: str) -> dict:
     """Read view of a completed job's target subtitle cues, for the
     inline review/fix editor (IMPROVEMENT_PLAN.md 4.2). Uses

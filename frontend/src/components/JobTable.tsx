@@ -87,7 +87,8 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                 {job.detected_language && ` (${job.detected_language})`}
               </td>
               <td>
-                <ProgressBar progress={job.progress} status={job.status} elapsedSeconds={job.elapsed_seconds} />
+                <ProgressBar progress={job.progress} status={job.status} elapsedSeconds={job.elapsed_seconds}
+                             etaSeconds={job.eta_seconds} />
               </td>
               <td>{fmtElapsed(job.elapsed_seconds)}</td>
               <td>{qcSummary(job)}</td>

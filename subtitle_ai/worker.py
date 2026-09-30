@@ -475,6 +475,9 @@ class Worker(threading.Thread):
         # (2026-09-28, ENHANCEMENT_DRAFT.md C2). Milestones are untouched.
         last_logged_bucket: dict[str, int] = {}
         last_written = {"stage": None, "progress": -1.0}
+        active_stage: str | None = None
+        stage_started_at: float | None = None
+        phase_durations: dict[str, float] = {}
 
         def should_log(name, data) -> bool:
             if not name.endswith("_PROGRESS"):
@@ -490,6 +493,7 @@ class Worker(threading.Thread):
             return True
 
         def on_event(name, data):
+            nonlocal active_stage, stage_started_at
             # Updated on every pipeline-stage event, not just once per
             # poll loop, so a long-running job's heartbeat stays fresh
             # instead of looking stale for its whole duration.
@@ -509,6 +513,34 @@ class Worker(threading.Thread):
             stage_progress = _stage_progress_for_event(job_type, name, data)
             if stage_progress is not None:
                 stage, progress = stage_progress
+                now = time.time()
+                stage_changed = stage != active_stage
+                if stage_changed:
+                    if active_stage is not None and stage_started_at is not None:
+                        phase_durations[active_stage] = round(now - stage_started_at, 3)
+                        fields["phase_durations"] = phase_durations
+                    active_stage = stage
+                    stage_started_at = now
+
+                # Fine-grained pipeline events include a real work-unit
+                # denominator. Estimate only the remaining current phase
+                # from observed throughput; milestone-only phases have no
+                # trustworthy completion denominator and deliberately
+                # expose no ETA.
+                fine = (_SRT_FINE_PROGRESS if job_type == "srt_translation"
+                        else _VIDEO_FINE_PROGRESS).get(name)
+                if fine and stage_started_at is not None:
+                    _, _, _, position_key, total_key = fine
+                    total = data.get(total_key) or 0
+                    position = data.get(position_key) or 0
+                    fraction = position / total if total else 0
+                    if 0.02 <= fraction < 1:
+                        elapsed = now - stage_started_at
+                        fields["eta_seconds"] = max(0.0, elapsed * (1 - fraction) / fraction)
+                    else:
+                        fields["eta_seconds"] = None
+                elif stage_changed:
+                    fields["eta_seconds"] = None
                 if (stage != last_written["stage"]
                         or abs(progress - last_written["progress"]) >= MIN_PROGRESS_DELTA
                         or not name.endswith("_PROGRESS")):

@@ -56,6 +56,17 @@ same as `CLAUDE.md`.
 
 ## Open issues
 
+- 2026-09-30 — OPEN: setting `SUBTITLE_AI_API_KEY` now protects all API
+  reads and SSE, but the bundled browser UI has no secure API-key provisioning
+  mechanism; deploy it behind same-origin reverse-proxy authentication or add
+  an explicit authenticated browser-session design before enabling the key for
+  direct UI access.
+  - RESOLVED 2026-09-30, Uncommitted (`git status`: authenticated event-stream
+    client, frontend regression test, and handover modified). The browser
+    already prompts for and stores the key for ordinary API requests; live
+    updates now use authenticated `fetch()` SSE instead of headerless
+    `EventSource`, so they send the same `X-API-Key` without exposing it in a
+    URL. Frontend typecheck and 94 tests passed.
 - 2026-09-30 — OPEN: protected character names in `glossary.py`'s
   `protect()` don't match when a Turkish case suffix is glued directly onto
   the name with no apostrophe (`Ateşi`, `Ateşin` still translate as "Fire"
@@ -83,6 +94,23 @@ same as `CLAUDE.md`.
 
 ## Change log
 
+- 2026-09-30 — Replaced headerless `EventSource` live updates with an
+  authenticated `fetch()` SSE reader so browser API-key mode also receives
+  job-change signals. Paths: `frontend/src/api/client.ts`,
+  `frontend/src/api/useEventStream.ts`, and
+  `frontend/src/api/useEventStream.test.tsx`. Uncommitted (`git status`:
+  frontend event client, test, and handover modified). Frontend typecheck and
+  94 tests passed.
+- 2026-09-30 — Hardened SSE/API reliability and job durability: bounded,
+  coalescing event queues with heartbeats/connection cap; API-key read
+  protection; capped job logs; finite orphan recovery; phase-throughput ETA;
+  locked CPU-only CI dependencies and worker smoke coverage. Paths:
+  `subtitle_ai/events.py`, `subtitle_ai/api.py`, `subtitle_ai/jobstore.py`,
+  `subtitle_ai/worker.py`, `frontend/src/{api/types.ts,components/JobTable.tsx,components/ProgressBar.tsx,pages/JobDetailPage.tsx}`,
+  `.github/workflows/test.yml`, `README.md`, and related tests. Uncommitted
+  (`git status`: reliability/API/worker/frontend/CI/docs/tests modified).
+  Full validation: 1229 backend tests, 48 subtests; frontend typecheck, 93
+  tests, and production build passed.
 - 2026-09-30 — Changed the default cast-metadata refresh interval from 30
   days to 12 hours (`0.5` days), including the Series UI, environment
   template, and README. Paths: `subtitle_ai/cast_enrichment.py`,

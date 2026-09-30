@@ -61,6 +61,34 @@ class BasicPubSubTests(unittest.IsolatedAsyncioTestCase):
         event = await asyncio.wait_for(queue.get(), timeout=1)
         self.assertEqual(event["job_id"], "from-thread")
 
+    async def test_pending_changes_for_a_job_are_coalesced(self):
+        bus = EventBus()
+        bus.bind_loop(asyncio.get_running_loop())
+        queue = bus.subscribe()
+        bus.publish({"type": "job_changed", "job_id": "abc"})
+        bus.publish({"type": "job_changed", "job_id": "abc"})
+        await asyncio.sleep(0)
+        self.assertEqual((await queue.get())["job_id"], "abc")
+        self.assertTrue(queue.empty())
+
+    async def test_slow_subscriber_queue_is_bounded(self):
+        bus = EventBus(subscriber_queue_size=2)
+        bus.bind_loop(asyncio.get_running_loop())
+        queue = bus.subscribe()
+        for job_id in ("one", "two", "three"):
+            bus.publish({"type": "job_changed", "job_id": job_id})
+        await asyncio.sleep(0)
+        self.assertEqual(queue.qsize(), 2)
+        self.assertEqual([await queue.get(), await queue.get()], [
+            {"type": "job_changed", "job_id": "two"},
+            {"type": "job_changed", "job_id": "three"},
+        ])
+
+    async def test_connection_limit_rejects_extra_subscribers(self):
+        bus = EventBus(max_subscribers=1)
+        self.assertIsNotNone(bus.subscribe())
+        self.assertIsNone(bus.subscribe())
+
 
 if __name__ == "__main__":
     unittest.main()

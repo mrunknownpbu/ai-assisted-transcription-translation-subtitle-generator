@@ -139,10 +139,31 @@ class ApiKeyGuardTests(ApiTestCase):
         self.assertEqual(r.status_code, 201)
         compare.assert_called_once_with(b"secret123", b"secret123")
 
-    def test_read_only_endpoints_stay_open_even_with_key_configured(self):
+    def test_health_stays_open_with_key_configured(self):
         with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
             r = self.client.get("/api/health")
         self.assertEqual(r.status_code, 200)
+
+    def test_configured_key_protects_sensitive_read_endpoints_and_events(self):
+        job = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv"}).json()["job"]
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
+            responses = [
+                self.client.get("/api/browse"),
+                self.client.get("/api/media", params={"path": "Show/S01E01.mkv"}),
+                self.client.get("/api/languages"),
+                self.client.get("/api/jobs"),
+                self.client.get("/api/queue"),
+                self.client.get("/api/series"),
+                self.client.get(f"/api/jobs/{job['id']}"),
+                self.client.get(f"/api/jobs/{job['id']}/srt"),
+                self.client.get("/api/events"),
+            ]
+        self.assertEqual([response.status_code for response in responses], [401] * len(responses))
+
+    def test_configured_key_allows_sensitive_reads(self):
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
+            response = self.client.get("/api/jobs", headers={"X-API-Key": "secret123"})
+        self.assertEqual(response.status_code, 200)
 
 
 class CrossSiteMutationTests(ApiTestCase):
@@ -1380,6 +1401,30 @@ class EventStreamTests(ApiTestCase):
                 self.assertEqual(event["type"], "job_changed")
             finally:
                 api.get_event_bus().unsubscribe(queue)
+        asyncio.run(run())
+
+    def test_heartbeat_and_disconnect_cleanup(self):
+        class DisconnectingRequest:
+            def __init__(self):
+                self.calls = 0
+
+            async def is_disconnected(self):
+                self.calls += 1
+                return self.calls > 1
+
+        async def run():
+            bus = api.EventBus()
+            bus.bind_loop(asyncio.get_running_loop())
+            request = DisconnectingRequest()
+            with patch("api.get_event_bus", return_value=bus), \
+                 patch("api.SSE_HEARTBEAT_SECONDS", 0):
+                response = await api.event_stream(request)
+                iterator = response.body_iterator
+                self.assertEqual(await anext(iterator), ": keepalive\n\n")
+                with self.assertRaises(StopAsyncIteration):
+                    await anext(iterator)
+            self.assertFalse(bus._subscribers)
+
         asyncio.run(run())
 
 

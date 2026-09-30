@@ -41,6 +41,14 @@ def _english_destination(original: dict) -> str:
 STATUSES = ("queued", "running", "completed", "failed", "skipped", "cancelled")
 TERMINAL_STATUSES = frozenset({"completed", "failed", "skipped", "cancelled"})
 ACTIVE_STATUSES = frozenset({"queued", "running"})
+MAX_JOB_LOG_ENTRIES = 200
+MAX_JOB_LOG_MESSAGE_CHARS = 4_000
+LOG_MESSAGE_TRUNCATION_SUFFIX = "… [truncated]"
+MAX_JOB_LOG_ENTRIES = 200
+MAX_JOB_LOG_MESSAGE_CHARS = 4_000
+LOG_MESSAGE_TRUNCATION_SUFFIX = "… [truncated]"
+MAX_AUTOMATIC_RECOVERIES = 3
+ORPHANED_RECOVERY_EXHAUSTED = "ORPHANED_JOB_RECOVERY_EXHAUSTED"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -79,6 +87,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     destination_srt_path TEXT,
     source_is_uploaded INTEGER NOT NULL DEFAULT 0,
     needs_review INTEGER NOT NULL DEFAULT 0
+    ,phase_durations TEXT NOT NULL DEFAULT '{}'
+    ,eta_seconds REAL,
+    recovery_count INTEGER NOT NULL DEFAULT 0,
+    last_recovery_reason TEXT,
+    last_recovered_at REAL,
+    claim_count INTEGER NOT NULL DEFAULT 0,
+    last_claimed_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
@@ -155,6 +170,15 @@ class JobStore:
             "source_is_uploaded":
                 "ALTER TABLE jobs ADD COLUMN source_is_uploaded INTEGER NOT NULL DEFAULT 0",
             "needs_review": "ALTER TABLE jobs ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0",
+            "recovery_count":
+                "ALTER TABLE jobs ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0",
+            "last_recovery_reason": "ALTER TABLE jobs ADD COLUMN last_recovery_reason TEXT",
+            "last_recovered_at": "ALTER TABLE jobs ADD COLUMN last_recovered_at REAL",
+            "claim_count": "ALTER TABLE jobs ADD COLUMN claim_count INTEGER NOT NULL DEFAULT 0",
+            "last_claimed_at": "ALTER TABLE jobs ADD COLUMN last_claimed_at REAL",
+            "phase_durations":
+                "ALTER TABLE jobs ADD COLUMN phase_durations TEXT NOT NULL DEFAULT '{}'",
+            "eta_seconds": "ALTER TABLE jobs ADD COLUMN eta_seconds REAL",
         }
         for column, ddl in migrations.items():
             if column not in existing:
@@ -171,6 +195,37 @@ class JobStore:
             tvdb_id = glossary_profile.find_tvdb_id(row["video_path"])
             if tvdb_id is not None:
                 conn.execute("UPDATE jobs SET tvdb_id=? WHERE id=?", (tvdb_id, row["id"]))
+        self._trim_persisted_logs(conn)
+
+    @staticmethod
+    def _bounded_log_entries(log: object) -> list:
+        """Keep diagnostic history useful without letting a JSON column grow forever."""
+        if not isinstance(log, list):
+            return []
+        retained = log[-MAX_JOB_LOG_ENTRIES:]
+        bounded = []
+        for entry in retained:
+            if isinstance(entry, dict) and isinstance(entry.get("message"), str):
+                message = entry["message"]
+                if len(message) > MAX_JOB_LOG_MESSAGE_CHARS:
+                    entry = dict(entry)
+                    entry["message"] = (
+                        message[:MAX_JOB_LOG_MESSAGE_CHARS - len(LOG_MESSAGE_TRUNCATION_SUFFIX)]
+                        + LOG_MESSAGE_TRUNCATION_SUFFIX)
+            bounded.append(entry)
+        return bounded
+
+    def _trim_persisted_logs(self, conn: sqlite3.Connection) -> None:
+        """Apply log retention to pre-retention databases during migration."""
+        for row in conn.execute("SELECT id, log FROM jobs").fetchall():
+            try:
+                original = json.loads(row["log"])
+            except (TypeError, json.JSONDecodeError):
+                original = None
+            bounded = self._bounded_log_entries(original)
+            if original is None or bounded != original:
+                conn.execute("UPDATE jobs SET log=? WHERE id=?",
+                             (json.dumps(bounded), row["id"]))
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
@@ -205,6 +260,7 @@ class JobStore:
         d["outputs"] = json.loads(d["outputs"])
         d["qc"] = json.loads(d["qc"])
         d["log"] = json.loads(d["log"])
+        d["phase_durations"] = json.loads(d["phase_durations"])
         d["elapsed_seconds"] = _elapsed(d)
         return d
 
@@ -450,8 +506,9 @@ class JobStore:
                 return None
             now = time.time()
             conn.execute(
-                "UPDATE jobs SET status='running', stage='RUNNING', started_at=?, updated_at=? WHERE id=?",
-                (now, now, row["id"]))
+                "UPDATE jobs SET status='running', stage='RUNNING', started_at=?, "
+                "last_claimed_at=?, claim_count=claim_count+1, updated_at=? WHERE id=?",
+                (now, now, now, row["id"]))
         self._notify(row["id"])
         return self.get(row["id"])
 
@@ -467,26 +524,58 @@ class JobStore:
         `running` forever: never reclaimed, its elapsed-time display
         climbing indefinitely, invisible to any log or alert.
 
-        Resetting straight back to 'queued' (not a new terminal
-        'interrupted' status) is safe specifically because this process
+        Resetting back to 'queued' (not a new terminal 'interrupted'
+        status) is safe specifically because this process
         is single-worker/single-thread (see worker.py's module
         docstring): by the time this method runs, at startup, no
         pipeline.run() call from a PRIOR process instance can still be
         executing -- there is no live worker to race against a row this
         call touches. A currently-running job in a live process is never
         affected: this only ever runs once, at construction-adjacent
-        startup, before Worker.start() is ever called (see main.py)."""
+        startup, before Worker.start() is ever called (see main.py).
+
+        Recovery is deliberately finite. Repeated startup crashes used
+        to requeue one bad job forever. Each automatic requeue is visible
+        through recovery_count, last_recovery_reason, and
+        last_recovered_at; after the limit, the job fails with a clear
+        error while remaining eligible for the existing manual retry."""
         with self._immediate() as conn:
-            rows = conn.execute("SELECT id FROM jobs WHERE status='running'").fetchall()
-            if rows:
-                now = time.time()
-                conn.execute(
-                    "UPDATE jobs SET status='queued', stage='QUEUED', started_at=NULL, "
-                    "updated_at=? WHERE status='running'", (now,))
+            rows = conn.execute(
+                "SELECT id, recovery_count FROM jobs WHERE status='running'").fetchall()
+            now = time.time()
+            recovered = []
+            failure_transitions = []
+            for row in rows:
+                if row["recovery_count"] < MAX_AUTOMATIC_RECOVERIES:
+                    recovery_number = row["recovery_count"] + 1
+                    reason = (
+                        "Process restarted while this job was running; "
+                        f"automatically requeued ({recovery_number}/{MAX_AUTOMATIC_RECOVERIES}).")
+                    conn.execute(
+                        "UPDATE jobs SET status='queued', stage='QUEUED', started_at=NULL, "
+                        "recovery_count=?, last_recovery_reason=?, last_recovered_at=?, "
+                        "updated_at=? WHERE id=?",
+                        (recovery_number, reason, now, now, row["id"]))
+                    recovered.append(row["id"])
+                else:
+                    error = (
+                        f"Job was interrupted by restarts {row['recovery_count']} times; "
+                        f"automatic recovery limit ({MAX_AUTOMATIC_RECOVERIES}) reached. "
+                        "Use Retry to create a new attempt.")
+                    conn.execute(
+                        "UPDATE jobs SET status='failed', stage='FAILED', progress=100, "
+                        "finished_at=?, error=?, error_category=?, "
+                        "last_recovery_reason=?, last_recovered_at=?, updated_at=? WHERE id=?",
+                        (now, error, ORPHANED_RECOVERY_EXHAUSTED, error, now, now, row["id"]))
+                    failed = conn.execute("SELECT * FROM jobs WHERE id=?", (row["id"],)).fetchone()
+                    failure_transitions.append(self._row_to_dict(failed))
         job_ids = [r["id"] for r in rows]
         for job_id in job_ids:
             self._notify(job_id)
-        return job_ids
+        for job in failure_transitions:
+            if self._on_failure_transition:
+                self._on_failure_transition(job)
+        return recovered
 
     def update(self, job_id: str, **fields) -> None:
         if not fields:
@@ -496,7 +585,7 @@ class JobStore:
             raise JobStoreError(f"update() got unknown column(s): {sorted(unknown)}")
         fields = dict(fields)
         fields["updated_at"] = time.time()
-        for key in ("outputs", "qc", "log"):
+        for key in ("outputs", "qc", "log", "phase_durations"):
             if key in fields and not isinstance(fields[key], str):
                 fields[key] = json.dumps(fields[key])
         assignments = ", ".join(f"{k}=?" for k in fields)
@@ -514,11 +603,21 @@ class JobStore:
             self._on_failure_transition(failure_transition)
 
     def append_log(self, job_id: str, message: str) -> None:
-        job = self.get(job_id)
-        if not job:
-            return
-        log = job["log"] + [{"time": time.time(), "message": message}]
-        self.update(job_id, log=log)
+        if len(message) > MAX_JOB_LOG_MESSAGE_CHARS:
+            message = (message[:MAX_JOB_LOG_MESSAGE_CHARS - len(LOG_MESSAGE_TRUNCATION_SUFFIX)]
+                       + LOG_MESSAGE_TRUNCATION_SUFFIX)
+        with self._immediate() as conn:
+            row = conn.execute("SELECT log FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                return
+            try:
+                log = json.loads(row["log"])
+            except json.JSONDecodeError:
+                log = []
+            log = self._bounded_log_entries(log + [{"time": time.time(), "message": message}])
+            conn.execute("UPDATE jobs SET log=?, updated_at=? WHERE id=?",
+                         (json.dumps(log), time.time(), job_id))
+        self._notify(job_id)
 
     def finish(self, job_id: str, status: str, *, error: str | None = None,
               error_category: str | None = None, outputs: list | None = None,
@@ -527,7 +626,8 @@ class JobStore:
             raise JobStoreError(f"finish() requires a terminal status, got {status!r}")
         now = time.time()
         fields = {"status": status, "stage": status.upper(), "progress": 100,
-                  "finished_at": now, "error": error, "error_category": error_category}
+                  "finished_at": now, "error": error, "error_category": error_category,
+                  "eta_seconds": None}
         if outputs is not None:
             fields["outputs"] = outputs
         if qc is not None:

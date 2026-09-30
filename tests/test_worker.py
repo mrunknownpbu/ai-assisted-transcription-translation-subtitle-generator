@@ -115,6 +115,44 @@ class WorkerLoopResilienceTests(WorkerTestCase):
 
 
 class SuccessfulJobTests(WorkerTestCase):
+    def test_worker_pipeline_smoke_transitions_and_commits_atomically(self):
+        """Exercise the mocked pipeline boundary through the real worker commit."""
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        claimed = self.store.claim()
+        self.assertEqual(claimed["status"], "running")
+        observed = {}
+
+        def fake_run(**kw):
+            observed["before_events"] = self.store.get(job["id"])
+            kw["on_event"]("ASR_STARTED", {})
+            kw["on_event"]("LANGUAGE_DETECTED", {
+                "language": "tr", "probability": 0.9, "mode": "MANUAL",
+            })
+            kw["on_event"]("QC_COMPLETED", {})
+            observed["after_events"] = self.store.get(job["id"])
+            return fake_result(Path(kw["work_dir"]))
+
+        with patch.object(worker_mod.pipeline, "run", side_effect=fake_run) as mock_run, \
+             patch.object(worker_mod, "write_srt_atomic",
+                          wraps=worker_mod.write_srt_atomic) as atomic_write:
+            self.worker._process(claimed)
+
+        final = self.store.get(job["id"])
+        self.assertEqual(mock_run.call_count, 1)
+        self.assertEqual(observed["before_events"]["status"], "running")
+        self.assertEqual(observed["after_events"]["stage"], "Running quality checks")
+        self.assertEqual(observed["after_events"]["progress"], 99)
+        self.assertEqual(observed["after_events"]["detected_language"], "tr")
+        self.assertEqual(final["status"], "completed")
+        self.assertEqual(final["stage"], "COMPLETED")
+        self.assertEqual(final["progress"], 100)
+        self.assertEqual(atomic_write.call_count, 2)
+        self.assertEqual(
+            (self.media_root / "Show" / "S01E01.en.srt").read_text(encoding="utf-8"),
+            "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+        )
+        self.assertEqual(len(final["outputs"]), 2)
+
     def test_completed_job_commits_both_outputs(self):
         job = self.store.create("Show/S01E01.mkv", "tr")
         with patch.object(worker_mod.pipeline, "run") as mock_run:
@@ -1135,3 +1173,22 @@ class ProgressThrottlingTests(WorkerTestCase):
         events = [("SRT_TRANSLATION_PROGRESS", {"done": d, "total": 7}) for d in range(1, 8)]
         row, _ = self._run(events)
         self.assertAlmostEqual(row["progress"], 90)
+
+    def test_phase_progress_records_duration_and_uses_its_own_throughput_for_eta(self):
+        job = self.store.create_srt_translation(video_path="", source_srt_path="in.srt",
+                                                destination_srt_path="in.en.srt",
+                                                source_lang="tr", target_lang="en")
+        claimed = self.store.claim()
+        on_event = self.worker._build_on_event(claimed["id"], "srt_translation")
+        on_event("SRT_PARSE_STARTED", {})
+        time.sleep(0.01)
+        on_event("TRANSLATION_STARTED", {})
+        time.sleep(0.01)
+        on_event("SRT_TRANSLATION_PROGRESS", {"done": 2, "total": 10})
+        self.assertGreater(self.store.get(claimed["id"])["eta_seconds"], 0)
+        time.sleep(0.01)
+        on_event("QC_COMPLETED", {})
+        row = self.store.get(claimed["id"])
+        self.assertGreater(row["phase_durations"]["Parsing SRT"], 0)
+        self.assertGreater(row["phase_durations"]["Translating"], 0)
+        self.assertIsNone(row["eta_seconds"])

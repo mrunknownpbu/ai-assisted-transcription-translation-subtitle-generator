@@ -77,9 +77,10 @@ API (`8099` in `compose.yml`):
 **Live progress.** A job's `stage` and `progress` advance through the real
 pipeline milestones (e.g. *Transcribing* → *Translating* → *Writing
 output*), with ASR and translation interpolating smoothly within their
-share of the bar. The percentages are a directional heuristic (ASR is the
-dominant cost of a video job), not a wall-clock promise; the ETA is a
-linear extrapolation and is not shown below 2%.
+share of the bar. Completed phase durations are retained on each job. When
+the active ASR or translation phase reports real work units, its ETA is
+estimated from that phase's observed throughput; milestone-only phases show
+no ETA rather than a misleading whole-job extrapolation.
 
 **Reviewing and fixing subtitles.** A completed job has an *Edit
 subtitles* panel that edits the target `.en.srt` in place: text only
@@ -414,7 +415,7 @@ Cleanup problems are logged and never change a job's result.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `SUBTITLE_AI_API_KEY` | unset (open; intended for a LAN) | When set, endpoints that queue work, upload subtitles, perform audio-stream analysis, or mutate job/glossary/subtitle state require a matching `X-API-Key` header. When unset, cross-origin browser requests to those mutation endpoints are rejected using `Origin`/Fetch Metadata; headerless non-browser clients remain usable. Read-only endpoints stay open. |
+| `SUBTITLE_AI_API_KEY` | unset (open; intended for a LAN) | When set, all API endpoints except `/api/health` require a matching `X-API-Key` header, including job data, subtitles, and live events. When unset, cross-origin browser requests to mutation endpoints are rejected using `Origin`/Fetch Metadata; headerless non-browser clients remain usable. |
 | `SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS` | `24` | How long a failed job's scratch directory is kept (see below). |
 | `SUBTITLE_AI_ASR_HOTWORDS` | off | `on` feeds glossary names to Whisper as hotwords (see "ASR decoding defaults"). |
 | `FAILURE_WEBHOOK_URL` | unset | A plain JSON POST is sent to this URL when a job fails (works with anything that accepts one, or a relay in front of it). |

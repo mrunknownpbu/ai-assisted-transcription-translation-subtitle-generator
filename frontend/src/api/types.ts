@@ -75,6 +75,8 @@ export interface Job {
   log: LogEntry[];
   tvdb_id: number | null;
   elapsed_seconds: number;
+  phase_durations: Record<string, number>;
+  eta_seconds: number | null;
   // Count of high-confidence QC findings (entity_error/hallucination
   // categories, or any finding >=0.7 confidence) worth a human's
   // attention -- advisory only, never blocks completion. See

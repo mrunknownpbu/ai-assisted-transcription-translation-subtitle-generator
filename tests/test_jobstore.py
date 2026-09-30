@@ -1,10 +1,13 @@
+import json
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
 
-from jobstore import JobStore, JobStoreError
+from jobstore import (MAX_AUTOMATIC_RECOVERIES, MAX_JOB_LOG_ENTRIES,
+                      MAX_JOB_LOG_MESSAGE_CHARS, ORPHANED_RECOVERY_EXHAUSTED,
+                      JobStore, JobStoreError)
 
 
 class JobStoreTestCase(unittest.TestCase):
@@ -183,6 +186,11 @@ class SchemaMigrationTests(unittest.TestCase):
             self.assertIsNone(job["selected_audio_stream"])
             self.assertEqual(job["stream_selection_mode"], "AUTO")
             self.assertIsNone(job["tvdb_id"])
+            self.assertEqual(job["recovery_count"], 0)
+            self.assertIsNone(job["last_recovery_reason"])
+            self.assertIsNone(job["last_recovered_at"])
+            self.assertEqual(job["claim_count"], 0)
+            self.assertIsNone(job["last_claimed_at"])
             # And new jobs on the migrated database work normally.
             new_job = store.create("Show/S01E02.mkv")
             self.assertEqual(new_job["source_lang"], "auto")
@@ -626,6 +634,11 @@ class OrphanRecoveryTests(JobStoreTestCase):
         after = self.store.get(job["id"])
         self.assertEqual(after["status"], "queued")
         self.assertIsNone(after["started_at"])
+        self.assertEqual(after["recovery_count"], 1)
+        self.assertIn("automatically requeued (1/", after["last_recovery_reason"])
+        self.assertIsNotNone(after["last_recovered_at"])
+        self.assertEqual(after["claim_count"], 1)
+        self.assertIsNotNone(after["last_claimed_at"])
 
     def test_multiple_orphaned_jobs_all_recovered(self):
         self.store.create("Show/S01E01.mkv", "tr")
@@ -690,6 +703,60 @@ class OrphanRecoveryTests(JobStoreTestCase):
         recovered = self.store.recover_orphaned_jobs()
         self.assertEqual(recovered, [job["id"]])
         self.assertEqual(self.store.get(job["id"])["status"], "queued")
+
+    def test_repeated_orphans_eventually_fail_but_manual_retry_remains_available(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        for recovery_number in range(1, MAX_AUTOMATIC_RECOVERIES + 1):
+            self.store.claim()
+            self.assertEqual(self.store.recover_orphaned_jobs(), [job["id"]])
+            recovered = self.store.get(job["id"])
+            self.assertEqual(recovered["recovery_count"], recovery_number)
+            self.assertIn(f"({recovery_number}/{MAX_AUTOMATIC_RECOVERIES})",
+                          recovered["last_recovery_reason"])
+
+        self.store.claim()
+        self.assertEqual(self.store.recover_orphaned_jobs(), [])
+        exhausted = self.store.get(job["id"])
+        self.assertEqual(exhausted["status"], "failed")
+        self.assertEqual(exhausted["error_category"], ORPHANED_RECOVERY_EXHAUSTED)
+        self.assertIn("Use Retry", exhausted["error"])
+        self.assertEqual(exhausted["recovery_count"], MAX_AUTOMATIC_RECOVERIES)
+        retry = self.store.retry(job["id"])
+        self.assertEqual(retry["status"], "queued")
+
+
+class JobLogRetentionTests(JobStoreTestCase):
+    def test_append_log_retains_only_the_newest_bounded_entries(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        for index in range(MAX_JOB_LOG_ENTRIES + 1):
+            self.store.append_log(job["id"], f"entry {index}")
+
+        log = self.store.get(job["id"])["log"]
+        self.assertEqual(len(log), MAX_JOB_LOG_ENTRIES)
+        self.assertEqual(log[0]["message"], "entry 1")
+        self.assertEqual(log[-1]["message"], f"entry {MAX_JOB_LOG_ENTRIES}")
+
+    def test_append_log_bounds_individual_message_size(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        self.store.append_log(job["id"], "x" * (MAX_JOB_LOG_MESSAGE_CHARS + 1))
+        message = self.store.get(job["id"])["log"][0]["message"]
+        self.assertTrue(message.endswith("… [truncated]"))
+        self.assertLessEqual(len(message), MAX_JOB_LOG_MESSAGE_CHARS)
+
+    def test_opening_an_existing_database_trims_legacy_oversized_log(self):
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        oversized_log = [
+            {"time": index, "message": f"entry {index}"}
+            for index in range(MAX_JOB_LOG_ENTRIES + 1)
+        ]
+        with self.store._immediate() as conn:
+            conn.execute("UPDATE jobs SET log=? WHERE id=?",
+                         (json.dumps(oversized_log), job["id"]))
+
+        reopened = JobStore(self.store.db_path)
+        log = reopened.get(job["id"])["log"]
+        self.assertEqual(len(log), MAX_JOB_LOG_ENTRIES)
+        self.assertEqual(log[0]["message"], "entry 1")
 
 
 class SrtTranslationJobCreationTests(JobStoreTestCase):

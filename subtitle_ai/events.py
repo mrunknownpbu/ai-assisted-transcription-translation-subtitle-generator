@@ -16,6 +16,37 @@ from __future__ import annotations
 import asyncio
 
 
+class _CoalescingQueue(asyncio.Queue):
+    """A bounded queue which retains at most one pending event per job."""
+
+    def __init__(self, maxsize: int) -> None:
+        super().__init__(maxsize=maxsize)
+        self._pending_job_ids: set[str] = set()
+
+    def put_nowait(self, event: dict) -> None:
+        job_id = event.get("job_id")
+        if job_id is not None and job_id in self._pending_job_ids:
+            return
+        if self.full():
+            discarded = self._get()
+            self._unfinished_tasks -= 1
+            if self._unfinished_tasks == 0:
+                self._finished.set()
+            discarded_job_id = discarded.get("job_id")
+            if discarded_job_id is not None:
+                self._pending_job_ids.discard(discarded_job_id)
+        if job_id is not None:
+            self._pending_job_ids.add(job_id)
+        super().put_nowait(event)
+
+    def get_nowait(self) -> dict:
+        event = super().get_nowait()
+        job_id = event.get("job_id")
+        if job_id is not None:
+            self._pending_job_ids.discard(job_id)
+        return event
+
+
 class EventBus:
     """publish() is called from worker.py's background `threading.Thread`
     (Worker(threading.Thread), see worker.py), never from the asyncio
@@ -26,15 +57,20 @@ class EventBus:
     inside the running event loop (a FastAPI startup hook), before any
     publish() call from the worker thread can be delivered."""
 
-    def __init__(self) -> None:
-        self._subscribers: set[asyncio.Queue] = set()
+    def __init__(self, *, subscriber_queue_size: int = 100,
+                 max_subscribers: int = 25) -> None:
+        self._subscriber_queue_size = subscriber_queue_size
+        self._max_subscribers = max_subscribers
+        self._subscribers: set[_CoalescingQueue] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
 
-    def subscribe(self) -> asyncio.Queue:
-        queue: asyncio.Queue = asyncio.Queue()
+    def subscribe(self) -> asyncio.Queue | None:
+        if len(self._subscribers) >= self._max_subscribers:
+            return None
+        queue = _CoalescingQueue(self._subscriber_queue_size)
         self._subscribers.add(queue)
         return queue
 
@@ -45,7 +81,7 @@ class EventBus:
         if self._loop is None:
             return  # no loop bound yet (e.g. in a sync unit test) -- no subscribers can exist either
         # put_nowait: a slow/stuck subscriber must never block the
-        # publisher -- each subscriber queue is unbounded, so this never
-        # raises QueueFull.
+        # publisher. Queues are bounded and coalesce pending changes for
+        # each job, so a disconnected client cannot accumulate work.
         for queue in list(self._subscribers):
             self._loop.call_soon_threadsafe(queue.put_nowait, event)

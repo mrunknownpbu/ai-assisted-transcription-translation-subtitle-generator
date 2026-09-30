@@ -56,7 +56,9 @@ function withApiKey(headers: HeadersInit | undefined): HeadersInit {
 
 // One prompt per 401, then one retry. A wrong key is forgotten so the next
 // action asks again instead of failing silently forever.
-async function fetchWithApiKey(path: string, init: RequestInit): Promise<Response> {
+/** Performs one API request with the browser-stored key, including the
+ * interactive one-time 401 recovery used by ordinary requests and SSE. */
+export async function fetchWithApiKey(path: string, init: RequestInit): Promise<Response> {
   const res = await fetch(path, { ...init, headers: withApiKey(init.headers) });
   if (res.status !== 401) return res;
   storeApiKey(null);

@@ -41,7 +41,8 @@ export function JobDetailPage() {
       </div>
       <div className="option-row">
         <span>Progress</span>
-        <ProgressBar progress={job.progress} status={job.status} elapsedSeconds={job.elapsed_seconds} />
+        <ProgressBar progress={job.progress} status={job.status} elapsedSeconds={job.elapsed_seconds}
+                     etaSeconds={job.eta_seconds} />
       </div>
       <div className="option-row">
         <span>Elapsed</span>

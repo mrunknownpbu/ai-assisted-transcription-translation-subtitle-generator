@@ -1,10 +1,11 @@
-import { fmtEta } from "../format";
+import { fmtDuration } from "../format";
 import type { JobStatus } from "../api/types";
 
 interface Props {
   progress: number;
   status: JobStatus;
   elapsedSeconds: number;
+  etaSeconds: number | null;
 }
 
 // IMPROVEMENT_PLAN.md 4.3: job.progress now moves through real
@@ -13,9 +14,11 @@ interface Props {
 // bare percentage text, plus a best-effort ETA (see fmtEta()'s own
 // docstring for why it's deliberately conservative about when to show
 // one at all).
-export function ProgressBar({ progress, status, elapsedSeconds }: Props) {
+export function ProgressBar({ progress, status, elapsedSeconds: _elapsedSeconds, etaSeconds }: Props) {
   const pct = Math.max(0, Math.min(100, progress));
-  const eta = status === "running" ? fmtEta(elapsedSeconds, progress) : null;
+  const eta = status === "running" && etaSeconds != null && etaSeconds > 0
+    ? `~${fmtDuration(etaSeconds)} left`
+    : null;
   return (
     <div className="progress-cell">
       <div
