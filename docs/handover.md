@@ -69,6 +69,9 @@ same as `CLAUDE.md`.
   a series that failed the evidence gate on its first check (too few
   episodes yet) can stay unprotected for a month even after enough episodes
   exist. See `docs/cast-enrichment-staleness-handoff.md`.
+  - RESOLVED 2026-09-30, Uncommitted (`git status`: cast enrichment,
+    worker, cast tests, and documentation modified). See CLAUDE.md
+    ("Cast enrichment retries when subtitle evidence grows").
 - 2026-09-29 — OPEN, lower priority, not yet scoped: short Spanish clauses
   in "If You Love" (2023) S01E01's cold open (e.g. "Senor, si, kien es?")
   are too short to reach the 3-clause code-switch corroboration threshold
@@ -80,6 +83,13 @@ same as `CLAUDE.md`.
 
 ## Change log
 
+- 2026-09-30 — Added a bounded early cast-enrichment retry when a prior
+  report missed only the multi-episode evidence gate and source-subtitle
+  episode count grows. Paths: `subtitle_ai/cast_enrichment.py`,
+  `subtitle_ai/worker.py`, `tests/test_cast_enrichment.py`,
+  `docs/cast-enrichment-staleness-handoff.md`, `CLAUDE.md`. Uncommitted
+  (`git status`: cast refresh implementation, tests, and docs modified).
+  Targeted tests: 96 passed, 10 subtests.
 - 2026-09-30 — Added explicit, vowel-harmonized Turkish case-suffix
   protection for opted-in entities and enabled it for `Ateş`; measured 14
   expected source changes and no unrelated changes across 49 Turkish SRTs.

@@ -1,4 +1,14 @@
-## Problem
+## Resolved (2026-09-30)
+
+`needs_evidence_refresh()` now causes an early idle-time enrichment only when
+the prior report was blocked by the multi-episode evidence gate and the
+filename-only count of source-subtitle episodes has increased. The normal
+staleness cadence remains unchanged for reports that had enough evidence or
+found no usable name evidence. Targeted cast/worker tests pass (96 tests, 10
+subtests); see `CLAUDE.md` for the job-history measurement and implementation
+details.
+
+## Historical problem
 
 `subtitle_ai/cast_enrichment.py` automatically protects real character names (sourced from IMDb/TMDB/TVDB/nfo credits) against literal mistranslation, but only once there's enough real transcript evidence: `MIN_NAME_LINES = 5` and `name_episodes >= 2` (see `_enrich()`, `subtitle_ai/cast_enrichment.py:224-267`). The next check for a series is gated purely by a flat time interval — `cast_enrichment.is_stale()` (`subtitle_ai/cast_enrichment.py:395-401`) is just `now - checked_at > refresh_days() * 86400`, `refresh_days()` defaulting to 30 — regardless of *why* the previous check didn't protect anything.
 
@@ -36,10 +46,12 @@ If the right tradeoff isn't clear from measurement (e.g. checking more often mea
 
 ## Acceptance criteria
 
-- [ ] A series whose evidence gate wasn't met on its first check gets re-checked automatically once enough new episode data exists, without waiting the full 30-day interval.
-- [ ] No increase in IMDb dataset downloads / external API calls for series that are NOT in this "insufficient evidence, more data since arrived" state.
-- [ ] Full test suite passes with no regressions.
-- [ ] `CLAUDE.md` updated with a dated entry describing the problem, the chosen fix (and why alternatives were rejected, if measurement ruled them out), and verification evidence.
+- [x] A series with a report blocked by the evidence gate is re-checked when
+  more source-subtitle episodes arrive, without waiting 30 days.
+- [x] Reports not blocked by that gate retain the normal cadence, so they do
+  not trigger new IMDb/API work.
+- [x] Full test suite passes with no regressions (1217 tests, 48 subtests).
+- [x] `CLAUDE.md` records the measurement, selected trigger, and verification.
 
 ## Relevant files
 

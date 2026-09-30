@@ -114,6 +114,28 @@ def source_subtitles(series_root: Path, *, movie: bool = False) -> tuple[str | N
     return (lang if texts else None), texts
 
 
+def source_subtitle_episode_count(series_root: Path) -> int:
+    """Cheap upper bound for new source-subtitle evidence.
+
+    This deliberately reads filenames only: it runs during every idle cast
+    sweep for reports that missed the multi-episode evidence gate, while
+    parsing and language-validating subtitle text belongs to enrichment
+    itself. A mislabeled new file can cause one extra enrichment, never a
+    repeated external refresh once its report is saved.
+    """
+    by_lang: dict[str, set[tuple[int, int]]] = {}
+    for path in series_root.rglob("*.srt"):
+        parts = [part.lower() for part in path.name.split(".")]
+        if len(parts) < 3 or not (2 <= len(parts[-2]) <= 3) or not parts[-2].isalpha():
+            continue
+        if parts[-2] in _SUBTITLE_MODIFIERS and len(parts) >= 4 and 2 <= len(parts[-3]) <= 3:
+            continue
+        episode = glossary_profile.find_episode(path.name)
+        if parts[-2] != "en" and episode is not None:
+            by_lang.setdefault(parts[-2], set()).add(episode)
+    return max((len(episodes) for episodes in by_lang.values()), default=0)
+
+
 def _text_language(cues) -> str:
     from srt_translation import _detect_source_language
     detected, _probability = _detect_source_language(cues)
@@ -399,3 +421,25 @@ def is_stale(key, now: float | None = None) -> bool:
         return False
     report = load_report(key)
     return report is None or ((now or time.time()) - report.get("checked_at", 0)) > days * 86400
+
+
+def needs_evidence_refresh(key, series_root: Path, now: float | None = None) -> bool:
+    """Whether newly arrived subtitle episodes justify an early re-check.
+
+    Only reports that were blocked by the recurrence gate qualify. This keeps
+    the normal 30-day cadence for reports that already had enough evidence,
+    including ones that simply found no mistranslation worth protecting.
+    """
+    if is_stale(key, now):
+        return True
+    report = load_report(key)
+    if not report:
+        return True
+    candidates = report.get("candidates") or []
+    insufficient = any(
+        candidate.get("decision") == "skip"
+        and candidate.get("name_lines", 0) >= MIN_NAME_LINES
+        and candidate.get("name_episodes", 0) < MIN_NAME_EPISODES
+        for candidate in candidates
+    )
+    return insufficient and source_subtitle_episode_count(series_root) > report.get("episodes_with_subtitles", 0)

@@ -239,6 +239,26 @@ class StalenessTests(unittest.TestCase):
             with patch.dict("os.environ", {"SUBTITLE_AI_CAST_REFRESH_DAYS": "0"}):
                 self.assertFalse(ce.is_stale(8))
 
+    def test_new_episode_retries_only_an_insufficient_evidence_report(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(cm, "CACHE_DIR", Path(tmp)):
+            root = _series(Path(tmp), {1: ["Merhaba."], 2: ["Merhaba."]})
+            report = {
+                "tvdb_id": 7, "checked_at": 1000.0, "episodes_with_subtitles": 1,
+                "candidates": [{"decision": "skip", "name_lines": 8, "name_episodes": 1}],
+            }
+            ce.save_report(report)
+            self.assertTrue(ce.needs_evidence_refresh(7, root, now=1001.0))
+            report["candidates"][0]["name_episodes"] = 2
+            ce.save_report(report)
+            self.assertFalse(ce.needs_evidence_refresh(7, root, now=1001.0))
+
+    def test_new_episode_does_not_retry_a_report_without_evidence_gate_skip(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(cm, "CACHE_DIR", Path(tmp)):
+            root = _series(Path(tmp), {1: ["Merhaba."], 2: ["Merhaba."]})
+            ce.save_report({"tvdb_id": 7, "checked_at": 1000.0, "episodes_with_subtitles": 1,
+                            "candidates": [{"decision": "skip", "name_lines": 0, "name_episodes": 0}]})
+            self.assertFalse(ce.needs_evidence_refresh(7, root, now=1001.0))
+
 
 if __name__ == "__main__":
     unittest.main()

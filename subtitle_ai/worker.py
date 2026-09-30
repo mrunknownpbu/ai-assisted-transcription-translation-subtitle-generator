@@ -370,12 +370,12 @@ class Worker(threading.Thread):
         try:
             for series in self.store.list_series():
                 tvdb_id = series["tvdb_id"]
-                if tvdb_id is None or not cast_enrichment.is_stale(tvdb_id, now):
+                if tvdb_id is None:
                     continue
                 video_path = self.store.latest_video_path(tvdb_id)
                 root = glossary_profile.find_series_root(str(Path(self.media_root) / video_path)) \
                     if video_path else None
-                if root is None:
+                if root is None or not cast_enrichment.needs_evidence_refresh(tvdb_id, root, now):
                     continue
                 try:
                     report = cast_enrichment.enrich_series(tvdb_id, root, Path(self.glossary_dir))
