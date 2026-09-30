@@ -94,6 +94,53 @@ same as `CLAUDE.md`.
 
 ## Change log
 
+- 2026-09-30 — Reran audio transcription and English translation for Love Is
+  In The Air (2020) S02E01–E03 and Queen of Tears (2025) S01E01–E03; all six
+  jobs completed. Saved each old `.tr.srt`/`.en.srt` as
+  `.pre-rerun-20260930T1701.srt`; regenerated files parsed successfully.
+- 2026-09-30 — Refined uncovered-gap evidence so nearby source timestamps no
+  longer claim proven timing drift. Hammer Session! S01E01 now classifies 8
+  vocalizations (18.7s), 4 brief reactions (8.0s), 49 nearby-boundary
+  candidates (120.3s), 18 isolated ASR gaps (46.1s), 4 between-cue gaps
+  (12.6s), and 19 non-dialogue references (69.5s). Paths: human-reference
+  evaluator, its tests, and handover. Uncommitted (`git status`: measurement
+  scripts, tests, and handover). Focused tests: 18 passed.
+- 2026-09-30 — Redeployed the current workspace and ran the new read-only
+  analyzers against production-library files. Hammer Session! S01E01:
+  102/756 (13.5%) human cues uncovered — timing drift 58 (140.4s), isolated
+  ASR gaps 21 (52.7s), between-cue gaps 4 (12.6s), non-dialogue 19 (69.5s);
+  Love Is In The Air S01E02 produced zero two-clause code-switch candidates.
+  Analyzer scripts are intentionally copied into the container ad hoc (the
+  image follows the existing evaluation-script convention and does not ship
+  `scripts/`). Service health passed with a current worker heartbeat.
+  Uncommitted (`git status`: measurement scripts, tests, and handover).
+- 2026-09-30 — Added four measurement-only analysis tools: proper-name ASR
+  recall, hand-annotated speaker-turn scoring, pre-generated
+  translation-context candidate comparison, and transparent QC review-priority
+  ranking. Paths: `scripts/analyze_proper_name_recall.py`,
+  `scripts/eval_turn_ground_truth.py`,
+  `scripts/eval_translation_context_candidates.py`,
+  `scripts/analyze_qc_review_priority.py`, and matching tests. Uncommitted
+  (`git status`: measurement scripts, tests, and handover modified). Combined
+  focused tests: 18 passed; no production behavior changed.
+- 2026-09-30 — Added `scripts/analyze_short_code_switches.py` to report
+  review-only short foreign-language candidate runs and repeated-text
+  false-positive risk from source SRTs; production code-switch thresholds are
+  unchanged. Paths: analyzer and `tests/test_analyze_short_code_switches.py`.
+  Uncommitted (`git status`: ASR/code-switch analysis, tests, and handover
+  modified). Focused tests: 17 passed.
+- 2026-09-30 — Added observable uncovered-ASR-gap classification to
+  `scripts/eval_against_human_en_reference.py`: timing drift, between-cue
+  gap, isolated ASR gap, and non-dialogue reference cues, with JSON summary
+  output. It deliberately does not infer hallucination/root cause from timing
+  alone. Paths: evaluator and `tests/test_eval_against_human_en_reference.py`.
+  Uncommitted (`git status`: ASR-gap analysis, tests, and handover modified).
+  Focused tests: 16 passed.
+- 2026-09-30 — Committed and pushed the reliability, API-key, telemetry,
+  CI, and authenticated-SSE changes as `344b56f`
+  (`feat: harden job reliability and live updates`), then rebuilt and
+  redeployed local `subtitle-ai`. `GET /api/health` passed with a current
+  worker heartbeat. Uncommitted (`git status`: this handover update only).
 - 2026-09-30 — Replaced headerless `EventSource` live updates with an
   authenticated `fetch()` SSE reader so browser API-key mode also receives
   job-change signals. Paths: `frontend/src/api/client.ts`,

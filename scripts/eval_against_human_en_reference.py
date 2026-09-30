@@ -20,6 +20,11 @@ output.PROTECTED_SUFFIXES) two ways:
   PRODUCED English subtitle is to a human one, not a re-translation
   through a different code path.
 
+Uncovered reference cues are additionally classified from the observable
+timing shape. This identifies likely timing drift versus an empty ASR window
+without pretending timing alone can diagnose a hallucination or decoder
+failure; those remain manual investigation categories.
+
 Run inside the app container (no GPU needed -- this only reads existing
 .srt files):
 
@@ -40,6 +45,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from eval_translation import chrf, chrf_stats, clean_reference, pair_cues  # noqa: E402
 
+DEFAULT_GAP_CONTEXT_SECONDS = 5.0
+DEFAULT_TIMING_DRIFT_SECONDS = 2.0
+
 
 def parse_episodes(spec: str) -> list[int]:
     out: list[int] = []
@@ -49,7 +57,9 @@ def parse_episodes(spec: str) -> list[int]:
     return out
 
 
-def gap_coverage(source_cues, reference_cues, min_overlap_frac: float = 0.1) -> list[dict]:
+def gap_coverage(source_cues, reference_cues, min_overlap_frac: float = 0.1,
+                 context_seconds: float = DEFAULT_GAP_CONTEXT_SECONDS,
+                 timing_drift_seconds: float = DEFAULT_TIMING_DRIFT_SECONDS) -> list[dict]:
     """Reference cues (human) with essentially no overlapping source
     (our own ASR) cue -- i.e. real content the pipeline produced nothing
     for. min_overlap_frac guards against tiny edge-of-cue overlaps
@@ -64,17 +74,96 @@ def gap_coverage(source_cues, reference_cues, min_overlap_frac: float = 0.1) -> 
                 covered += overlap
         if covered < min_overlap_frac * dur:
             flagged.append({"start": round(ref.start, 1), "end": round(ref.end, 1),
-                            "text": clean_reference(ref.text)[:120]})
+                            "text": clean_reference(ref.text)[:120],
+                            **classify_uncovered_gap(
+                                ref, source_cues, context_seconds=context_seconds,
+                                timing_drift_seconds=timing_drift_seconds)})
     return flagged
 
 
+def gap_summary(gaps: list[dict]) -> dict[str, dict[str, float | int]]:
+    """Count and total reference duration by observable uncovered-gap shape."""
+    summary: dict[str, dict[str, float | int]] = {}
+    for gap in gaps:
+        category = gap["classification"]
+        row = summary.setdefault(category, {"count": 0, "duration_seconds": 0.0})
+        row["count"] += 1
+        row["duration_seconds"] += gap["end"] - gap["start"]
+    for row in summary.values():
+        row["duration_seconds"] = round(row["duration_seconds"], 1)
+    return summary
+
+
 _SENTENCE_END = re.compile(r"[.!?…。！？]['\"」』)\]]*$")
+_REFERENCE_WORDS = re.compile(r"[a-z]+")
+_VOCALIZATION_WORDS = frozenset({"ah", "aah", "eh", "ha", "hah", "heh", "hmm", "hm", "mm", "oh", "uh", "um"})
+_BRIEF_UTTERANCES = frozenset({"ouch", "ow", "amen", "wow", "huh", "hey"})
 SHORT_CUE_CHARS = 10
 
 
 def _is_song_or_sound(text: str) -> bool:
     stripped = text.lstrip("-( ")
     return stripped.startswith(("\"", "“", "♪")) or not clean_reference(text)
+
+
+def _reference_words(text: str) -> list[str]:
+    return _REFERENCE_WORDS.findall(clean_reference(text).casefold())
+
+
+def _is_vocalization(text: str) -> bool:
+    """Human-reference laughter/fillers are not reliable ASR dialogue misses."""
+    words = _reference_words(text)
+    return bool(words) and all(word in _VOCALIZATION_WORDS for word in words)
+
+
+def _is_brief_utterance(text: str) -> bool:
+    """Keep short voiced reactions separate from substantive dialogue gaps."""
+    words = _reference_words(text)
+    return len(words) <= 1 and bool(words) and words[0] in _BRIEF_UTTERANCES
+
+
+def classify_uncovered_gap(ref, source_cues, *, context_seconds: float = DEFAULT_GAP_CONTEXT_SECONDS,
+                           timing_drift_seconds: float = DEFAULT_TIMING_DRIFT_SECONDS) -> dict:
+    """Classify one uncovered human cue using only observable cue timing.
+
+    `nearby_source_boundary` means an adjacent source cue ends/starts close
+    enough to warrant alignment review; it does NOT establish timing drift or
+    semantic equivalence across languages. `reference_vocalization` and
+    `brief_reference_utterance` keep human-reference reactions separate from
+    substantive dialogue candidates.
+    `between_source_cues` and `isolated_asr_gap` are candidates for ASR/VAD
+    investigation. None prove why audio was missed: especially, a
+    hallucination replacement needs the cached transcript/audio to establish.
+    """
+    before = max((cue for cue in source_cues if cue.end <= ref.start),
+                 key=lambda cue: cue.end, default=None)
+    after = min((cue for cue in source_cues if cue.start >= ref.end),
+                key=lambda cue: cue.start, default=None)
+    before_distance = ref.start - before.end if before else None
+    after_distance = after.start - ref.end if after else None
+    distances = [d for d in (before_distance, after_distance) if d is not None]
+
+    if _is_song_or_sound(ref.text):
+        kind = "reference_non_dialogue"
+    elif _is_vocalization(ref.text):
+        kind = "reference_vocalization"
+    elif _is_brief_utterance(ref.text):
+        kind = "brief_reference_utterance"
+    elif any(distance <= timing_drift_seconds for distance in distances):
+        kind = "nearby_source_boundary"
+    elif before_distance is not None and after_distance is not None and (
+            before_distance <= context_seconds and after_distance <= context_seconds):
+        kind = "between_source_cues"
+    else:
+        kind = "isolated_asr_gap"
+
+    return {
+        "classification": kind,
+        "before_distance_seconds": round(before_distance, 2) if before_distance is not None else None,
+        "after_distance_seconds": round(after_distance, 2) if after_distance is not None else None,
+        "before_source": before.text[:120] if before else None,
+        "after_source": after.text[:120] if after else None,
+    }
 
 
 def fragmentation(cues, reference_cues) -> dict:
@@ -119,6 +208,10 @@ def main() -> int:
     ap.add_argument("--season", required=True, help="folder holding <stem>SxxEyy.{ja,en,en.hi}.srt")
     ap.add_argument("--episodes", default="1", help="e.g. 1-5 or 1,3,5")
     ap.add_argument("--source-lang", default="ja")
+    ap.add_argument("--gap-context-seconds", type=float, default=DEFAULT_GAP_CONTEXT_SECONDS,
+                    help="nearby-source window for uncovered-gap classification")
+    ap.add_argument("--timing-drift-seconds", type=float, default=DEFAULT_TIMING_DRIFT_SECONDS,
+                    help="adjacent-source distance classified as likely timing drift")
     ap.add_argument("--worst", type=int, default=0,
                     help="also print the N lowest-chrF EN pairs (ours vs human, with timestamps)")
     ap.add_argument("--json")
@@ -153,7 +246,8 @@ def main() -> int:
                   f"mid-sentence ends={f['mid_sentence_end_rate']} | mean {f['ours']['mean_duration']}s/"
                   f"{f['ours']['mean_chars']}ch vs human {f['human']['mean_duration']}s/{f['human']['mean_chars']}ch")
 
-        gaps = gap_coverage(source_cues, ref_cues)
+        gaps = gap_coverage(source_cues, ref_cues, context_seconds=args.gap_context_seconds,
+                            timing_drift_seconds=args.timing_drift_seconds)
         for g in gaps:
             g["episode"] = f"E{number:02d}"
         all_gaps.extend(gaps)
@@ -169,6 +263,8 @@ def main() -> int:
         print(f"E{number:02d}: {len(ref_cues)} human cues, {len(gaps)} with no source coverage "
               f"({100 * len(gaps) / max(len(ref_cues), 1):.1f}%) | "
               f"{len(pairs)} EN pairs scored, chrF={ep_chrf if ep_chrf is None else round(ep_chrf, 2)}")
+        if gaps:
+            print(f"  uncovered-gap shapes: {gap_summary(gaps)}")
         per_episode.append({"episode": f"E{number:02d}", "human_cues": len(ref_cues),
                             "uncovered_gaps": len(gaps), "en_pairs": len(pairs),
                             "chrf": round(ep_chrf, 2) if ep_chrf is not None else None,
@@ -177,6 +273,8 @@ def main() -> int:
     overall_chrf = chrf([chrf_stats(h, r) for h, r in chrf_pairs]) if chrf_pairs else None
     print(f"\nOverall: {len(all_gaps)} uncovered gaps across all episodes, "
           f"chrF={overall_chrf if overall_chrf is None else round(overall_chrf, 2)} over {len(chrf_pairs)} pairs")
+    if all_gaps:
+        print(f"Uncovered-gap shapes: {gap_summary(all_gaps)}")
     if all_gaps:
         print("\nWorst gaps (no source-language coverage at all):")
         for g in sorted(all_gaps, key=lambda g: g["end"] - g["start"], reverse=True)[:15]:
@@ -192,9 +290,11 @@ def main() -> int:
         Path(args.json).write_text(json.dumps({
             "season": str(season), "episodes": per_episode,
             "overall_chrf": round(overall_chrf, 2) if overall_chrf is not None else None,
-            "total_uncovered_gaps": len(all_gaps), "gaps": all_gaps,
+            "total_uncovered_gaps": len(all_gaps), "gap_summary": gap_summary(all_gaps),
+            "gaps": all_gaps,
             "metric": "gap coverage vs .en.hi.srt human reference timing; "
-                     "chrF (char 1-6, beta 2) of production .en.srt vs cleaned human reference"},
+                     "chrF (char 1-6, beta 2) of production .en.srt vs cleaned human reference; "
+                     "uncovered-gap classifications are timing/context signals, not root-cause proof"},
             indent=2), encoding="utf-8")
         print(f"\nwrote {args.json}")
     return 0

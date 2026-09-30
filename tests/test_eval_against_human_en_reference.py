@@ -52,6 +52,48 @@ class GapCoverageTests(unittest.TestCase):
         flagged = ev.gap_coverage(source, reference)
         self.assertEqual(flagged[0]["text"], "Actual dialogue")
 
+    def test_adjacent_source_cue_is_a_boundary_candidate_not_proven_drift(self):
+        source = [SrtCue(0.0, 9.0, "nearby source")]
+        reference = [SrtCue(10.0, 12.0, "human line")]
+        flagged = ev.gap_coverage(source, reference)
+        self.assertEqual(flagged[0]["classification"], "nearby_source_boundary")
+        self.assertEqual(flagged[0]["before_source"], "nearby source")
+        self.assertEqual(flagged[0]["before_distance_seconds"], 1.0)
+
+    def test_gap_between_nearby_source_cues_is_distinguished_from_isolation(self):
+        source = [SrtCue(0.0, 8.0, "before"), SrtCue(14.0, 20.0, "after")]
+        reference = [SrtCue(10.5, 11.5, "missing dialogue")]
+        flagged = ev.gap_coverage(source, reference, timing_drift_seconds=1)
+        self.assertEqual(flagged[0]["classification"], "between_source_cues")
+        self.assertEqual(flagged[0]["after_source"], "after")
+
+    def test_sound_reference_is_not_counted_as_an_asr_gap(self):
+        source = []
+        reference = [SrtCue(10.0, 12.0, "♪ music ♪")]
+        flagged = ev.gap_coverage(source, reference)
+        self.assertEqual(flagged[0]["classification"], "reference_non_dialogue")
+
+    def test_laughter_is_classified_as_a_vocalization_not_timing_drift(self):
+        source = [SrtCue(0.0, 9.8, "nearby source")]
+        reference = [SrtCue(10.0, 12.0, "Ha ha ha...")]
+        flagged = ev.gap_coverage(source, reference)
+        self.assertEqual(flagged[0]["classification"], "reference_vocalization")
+
+    def test_brief_reaction_is_separate_from_substantive_dialogue(self):
+        source = [SrtCue(0.0, 9.8, "nearby source")]
+        reference = [SrtCue(10.0, 11.0, "Ouch!")]
+        flagged = ev.gap_coverage(source, reference)
+        self.assertEqual(flagged[0]["classification"], "brief_reference_utterance")
+
+    def test_isolated_gap_and_summary_are_reported(self):
+        source = [SrtCue(0.0, 1.0, "far before")]
+        reference = [SrtCue(20.0, 23.0, "missing dialogue")]
+        flagged = ev.gap_coverage(source, reference)
+        self.assertEqual(flagged[0]["classification"], "isolated_asr_gap")
+        self.assertEqual(ev.gap_summary(flagged), {
+            "isolated_asr_gap": {"count": 1, "duration_seconds": 3.0},
+        })
+
 
 class FragmentationTests(unittest.TestCase):
     def test_real_three_way_split_counts_three_cues_per_human_cue(self):
