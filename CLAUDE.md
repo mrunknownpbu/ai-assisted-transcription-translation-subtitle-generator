@@ -414,7 +414,7 @@ demonstrably loses it unprotected. What passes is written as a
 `source: metadata`, `case_sensitive: true`, episode-scoped entry with its
 evidence and committed to the glossary repo; entries a person wrote are
 never edited (the report only flags them). The worker re-checks each
-series every `SUBTITLE_AI_CAST_REFRESH_DAYS` (30) while idle;
+series every `SUBTITLE_AI_CAST_REFRESH_DAYS` (12 hours) while idle;
 `scripts/refresh_cast.py` runs it on demand. First run (Love Is In The
 Air): 8 names protected, each with real mistranslations behind it (Kiraz ->
 "Cherry" 30/30 lines, Balca -> "The hammer", Melek -> "The angel", Sevda ->
@@ -1678,3 +1678,12 @@ normal 30-day cadence.
 Tests cover the positive growth case and the zero-name-evidence control that
 must not retry merely because a new subtitle exists. Targeted cast/worker
 tests: 96 passed, 10 subtests. Full backend suite: 1217 passed, 48 subtests.
+
+## Cast metadata refresh default: 12 hours (2026-09-30)
+
+`SUBTITLE_AI_CAST_REFRESH_DAYS` now defaults to `0.5` (12 hours), rather
+than 30 days. This makes ordinary cast-metadata discovery more responsive
+while retaining idle-only, one-series-per-tick execution; `0` still disables
+automatic checks. The unchecked-Series UI, README, and `.env.example` state
+the same default. Tests: 22 cast-enrichment tests and 3 CastReportPanel
+frontend tests passed.

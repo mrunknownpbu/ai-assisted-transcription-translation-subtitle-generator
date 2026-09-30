@@ -83,6 +83,14 @@ same as `CLAUDE.md`.
 
 ## Change log
 
+- 2026-09-30 — Changed the default cast-metadata refresh interval from 30
+  days to 12 hours (`0.5` days), including the Series UI, environment
+  template, and README. Paths: `subtitle_ai/cast_enrichment.py`,
+  `frontend/src/components/CastReportPanel.tsx`,
+  `frontend/src/components/CastReportPanel.test.tsx`,
+  `tests/test_cast_enrichment.py`, `.env.example`, `README.md`, `CLAUDE.md`.
+  Uncommitted (`git status`: refresh configuration, tests, and docs modified).
+  Focused tests: 22 backend and 3 frontend passed.
 - 2026-09-30 — Added a bounded early cast-enrichment retry when a prior
   report missed only the multi-episode evidence gate and source-subtitle
   episode count grows. Paths: `subtitle_ai/cast_enrichment.py`,

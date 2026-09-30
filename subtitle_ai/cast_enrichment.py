@@ -406,12 +406,12 @@ def load_report(key) -> dict | None:
 
 
 def refresh_days() -> float:
-    """SUBTITLE_AI_CAST_REFRESH_DAYS (default 30; 0 disables automatic runs)."""
+    """SUBTITLE_AI_CAST_REFRESH_DAYS (default 0.5 / 12 hours; 0 disables automatic runs)."""
     raw = os.environ.get("SUBTITLE_AI_CAST_REFRESH_DAYS", "").strip()
     try:
-        return max(0.0, float(raw)) if raw else 30.0
+        return max(0.0, float(raw)) if raw else 0.5
     except ValueError:
-        return 30.0
+        return 0.5
 
 
 def is_stale(key, now: float | None = None) -> bool:

@@ -6,7 +6,7 @@ import { CastReportPanel } from "./CastReportPanel";
 describe("CastReportPanel", () => {
   it("explains an unchecked series", () => {
     render(<CastReportPanel report={null} />);
-    expect(screen.getByText(/Not checked yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Not checked yet.*every 12 hours by default/)).toBeInTheDocument();
   });
 
   it("lists protected candidates first with their evidence", () => {

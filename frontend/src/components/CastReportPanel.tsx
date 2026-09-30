@@ -7,7 +7,7 @@ export function CastReportPanel({ report }: { report: CastReport | null | undefi
   if (!report) {
     return (
       <p className="lang-info">
-        Not checked yet. The worker checks each series while idle (every 30 days by default).
+        Not checked yet. The worker checks each series while idle (every 12 hours by default).
       </p>
     );
   }

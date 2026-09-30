@@ -234,8 +234,8 @@ class StalenessTests(unittest.TestCase):
             with patch.dict("os.environ", {"SUBTITLE_AI_CAST_REFRESH_DAYS": ""}):
                 self.assertTrue(ce.is_stale(7, now=1000.0))
                 ce.save_report({"tvdb_id": 7, "checked_at": 1000.0})
-                self.assertFalse(ce.is_stale(7, now=1000.0 + 29 * 86400))
-                self.assertTrue(ce.is_stale(7, now=1000.0 + 31 * 86400))
+                self.assertFalse(ce.is_stale(7, now=1000.0 + 11 * 3600))
+                self.assertTrue(ce.is_stale(7, now=1000.0 + 13 * 3600))
             with patch.dict("os.environ", {"SUBTITLE_AI_CAST_REFRESH_DAYS": "0"}):
                 self.assertFalse(ce.is_stale(8))
 

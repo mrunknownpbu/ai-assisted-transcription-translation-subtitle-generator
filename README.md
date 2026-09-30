@@ -422,7 +422,7 @@ Cleanup problems are logged and never change a job's result.
 | `TMDB_API_KEY` | unset | Optional TMDB access: per-episode cast and guest stars. With TVDB and IMDb's free datasets, this feeds automatic name protection (below). |
 | `SONARR_URL`, `SONARR_API_KEY`, `RADARR_URL`, `RADARR_API_KEY` | unset | Sonarr and Radarr identify the series or movie a file belongs to, including its TVDB/TMDB/IMDb/TVmaze IDs and original language. They're used before `{tvdb-…}` folder tags. Movies need Radarr to get their own glossary. |
 | `PLEX_URL`, `PLEX_TOKEN`, `JELLYFIN_URL`, `JELLYFIN_API_KEY` | unset | After a job writes subtitles, Plex rescans just that folder and Jellyfin is told about just those files. A server that's down never fails a job. `SUBTITLE_AI_MEDIA_REFRESH=off` turns this off. |
-| `SUBTITLE_AI_CAST_REFRESH_DAYS` | `30` | How often the idle worker re-checks each series' cast metadata. `0` turns automatic checks off. |
+| `SUBTITLE_AI_CAST_REFRESH_DAYS` | `0.5` (12 hours) | How often the idle worker re-checks each series' cast metadata. `0` turns automatic checks off. |
 | `SUBTITLE_AI_SAMPLE_MODEL` | `small` | Whisper model the library's "Analyze" button uses. |
 | `SUBTITLE_AI_VRAM_MARGIN_GB` | `3.2` | Free VRAM the pre-flight check waits for before loading a large model. Must be a number. |
 | `SUBTITLE_AI_NAME_CORRECTION` | on | After transcription, fixes character names Whisper mishears as a near-identical name ("Aydın" → "Aydan"), using the episode's cast. `off` disables it. |
