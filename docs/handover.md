@@ -1,0 +1,98 @@
+# Handover Log
+
+## Purpose
+
+This is the first file to read at the start of a session and the last file
+to update before ending one. It is a short, chronological ledger, newest
+first — **not** a replacement for `CLAUDE.md`'s detailed, evidence-based
+writeups. Every entry here should be 1-3 lines and link out to the full
+detail (a `CLAUDE.md` section for something shipped, a `docs/*-handoff.md`
+file for something open) rather than duplicating it.
+
+**Every agent or session working in this repo must log here:**
+
+1. **Every change you make** that isn't a purely trivial edit (a typo fix,
+   a comment). One line, with the commit hash and a pointer to the full
+   `CLAUDE.md` entry if one exists.
+2. **Every issue or gap you identify but do not fix** — whether it was out
+   of scope for your task, deliberately deferred, or just noticed in
+   passing. If it's substantial enough to need its own acceptance criteria,
+   write a `docs/<short-name>-handoff.md` (see the two existing examples
+   below for the expected shape) and link it here; if it's small, describe
+   it inline.
+
+Do not end a session that changed anything or found anything unresolved
+without updating this file. That is the definition of "handover" here.
+
+## How to log an entry
+
+**A change you made:**
+```
+- YYYY-MM-DD — <what changed and why, one line>. Commit `<hash>`.
+  Full detail: CLAUDE.md ("<section title>").
+```
+
+**An issue you found but didn't fix:**
+```
+- YYYY-MM-DD — OPEN: <the problem, one line>. <link to
+  docs/<name>-handoff.md, or enough detail to act on inline if it's small>.
+```
+
+**Resolving a previously logged open issue:** don't delete or rewrite the
+original line — append a resolution note under it:
+```
+- YYYY-MM-DD — OPEN: ...
+  - RESOLVED YYYY-MM-DD, commit `<hash>`, see CLAUDE.md ("<section>").
+```
+
+Never edit or delete another session's entry other than to append a
+RESOLVED note to one of its OPEN lines. This file is additive history, the
+same as `CLAUDE.md`.
+
+## Open issues
+
+- 2026-09-30 — OPEN: protected character names in `glossary.py`'s
+  `protect()` don't match when a Turkish case suffix is glued directly onto
+  the name with no apostrophe (`Ateşi`, `Ateşin` still translate as "Fire"
+  even though bare `Ateş` is protected). See
+  `docs/glossary-suffix-protection-handoff.md`.
+- 2026-09-30 — OPEN: `cast_enrichment.py`'s per-series staleness interval
+  (flat 30 days) doesn't react to new episodes finishing transcription, so
+  a series that failed the evidence gate on its first check (too few
+  episodes yet) can stay unprotected for a month even after enough episodes
+  exist. See `docs/cast-enrichment-staleness-handoff.md`.
+- 2026-09-29 — OPEN, lower priority, not yet scoped: short Spanish clauses
+  in "If You Love" (2023) S01E01's cold open (e.g. "Senor, si, kien es?")
+  are too short to reach the 3-clause code-switch corroboration threshold
+  in `langid.py` and still get translated using the Turkish tokenizer.
+  Disclosed, accepted limitation — see CLAUDE.md's "Code-switched dialogue
+  mistranslated" entry for why `min_run=3` is correct and shouldn't be
+  lowered without new evidence. No handoff doc yet; would need its own
+  measurement pass if picked up.
+
+## Change log
+
+- 2026-09-30 — Re-ran `cast_enrichment.enrich_series()` for "If You Love"
+  (2023) (tvdb-435293) now that all 6 episodes have transcripts; protected
+  10 real credited character names (`Ateş`, `Leyla`, `Füsun`, `İlter`,
+  `Yakup`, `Meryem`, `Umut`, `Onur`, `Barış`, `Bige`) that were previously
+  translated as ordinary Turkish words. Regenerated all 6 episodes'
+  `.tr.srt`/`.en.srt` and verified the fix in the real output (backups kept
+  before regenerating). Config-only change (`glossary/tvdb-435293.yaml`),
+  no code touched. Full detail: CLAUDE.md ("'If You Love' (2023): lead
+  character's name translated as 'Fire'").
+- 2026-09-30 — Added `docs/product-requirements.md`, `docs/architecture.md`,
+  `docs/design-system.md`, `docs/agents.md` accuracy pass: filled in 6
+  backend modules missing from `architecture.md`'s component table
+  (`auto_glossary.py`, `langid.py`, `turns.py`, `hallucination.py`,
+  `name_correction.py`, split `glossary.py`/`glossary_profile.py`), added a
+  "Feature toggles" note (code existing != shipped-on-by-default), and gave
+  all four docs a consistent "See also"/handover pointer chain. Commit
+  `39dea24` covers the earlier CLAUDE.md + handoff-doc portion of this
+  session; this doc pass and this file were not yet committed as of writing
+  this entry.
+- 2026-09-30 — Drafted `docs/glossary-suffix-protection-handoff.md` and
+  `docs/cast-enrichment-staleness-handoff.md` (Copilot-coding-agent-ready
+  issue format) for the two residual gaps found while verifying the "If You
+  Love" fix above. Not posted as GitHub issues yet — drafts only. Commit
+  `39dea24`.
