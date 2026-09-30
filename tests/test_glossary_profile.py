@@ -29,6 +29,7 @@ entities:
   - canonical: Eda Yıldız
     type: character
     protected: true
+    turkish_case_suffixes: true
     aliases:
       - Eda Yildiz
       - Eda
@@ -71,6 +72,7 @@ class LoadProfileTests(unittest.TestCase):
         eda = next(e for e in profile.entities if e.canonical == "Eda Yıldız")
         self.assertIn("Eda", eda.surface_forms)
         self.assertIn("Eda Yildiz", eda.surface_forms)
+        self.assertTrue(eda.turkish_case_suffixes)
 
     def test_sources_recorded(self):
         profile = load_profile(self.dir, tvdb_id=383383)

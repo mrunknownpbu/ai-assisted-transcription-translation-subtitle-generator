@@ -225,7 +225,8 @@ def load_profile(glossary_dir: str | Path, tvdb_id: int | None = None, *,
     entities = [Entity(canonical=e["canonical"], surface_forms=[e["canonical"], *(e.get("aliases") or [])],
                        episodes=([str(x) for x in e["episodes"]] if isinstance(e.get("episodes"), list)
                                  else [str(e["episodes"])] if e.get("episodes") else None),
-                       source=e.get("source"), case_sensitive=bool(e.get("case_sensitive")))
+                       source=e.get("source"), case_sensitive=bool(e.get("case_sensitive")),
+                       turkish_case_suffixes=bool(e.get("turkish_case_suffixes")))
                for e in by_canonical.values()
                if e.get("protected")
                and (all_episodes or in_scope(parse_episode_scope(e.get("episodes")), episode))]

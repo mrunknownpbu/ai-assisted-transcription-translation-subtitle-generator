@@ -15,33 +15,29 @@ when something has changed since they were last updated.
 
 ## Picking up where another session left off
 
-Start every session by reading **`docs/handover.md`** — a short, chronological
-change/issue log that a prior session is required to have updated before
-ending. It is the fastest path to current state and links out to full detail
-rather than duplicating it. If it's missing, stale, or you're not confident it
-reflects reality, rebuild the same picture from primary sources — not from a
-prior session's summary, and not from a leftover plan file, both of which can
-go stale the moment work actually ships. Concrete example: a plan-mode file
-for a five-step "natural dialogue" effort can still be sitting in a plan-mode
-history after all five steps were designed, measured, and committed across
-`9f36e7c`..`5455c2c` — trust `git log`, not the plan file, to know whether
-something is still to do.
+Use this order at the start of every session:
 
-1. `git log --oneline -30` — what actually shipped most recently. If a
+1. `README.md` — the product, architecture, workflows, and current
+   user-facing behavior.
+2. **`docs/handover.md`** — a short, chronological change/issue index. It
+   points to the detailed record rather than duplicating it. If it is missing,
+   stale, or not credible, rebuild the picture from the primary sources below
+   rather than trusting a prior session summary or leftover plan file.
+3. `git log --oneline -30` — what actually shipped most recently. If a
    commit's one-line summary doesn't tell you enough, `git show <hash>` or
    read its `CLAUDE.md` entry.
-2. The tail of `CLAUDE.md` (`grep -n '^## ' CLAUDE.md | tail -20`, then read
+4. The tail of `CLAUDE.md` (`grep -n '^## ' CLAUDE.md | tail -20`, then read
    the newest entries in full) — dated, evidence-based records of what was
    built, measured, shipped, shipped-but-off, or deliberately deferred. This
    is the actual source of truth for current behavior and defaults, ranked
    above this guide, the README, and any other document when they disagree.
-3. `docs/*-handoff.md` — explicitly flagged, not-yet-picked-up work items
+5. `docs/*-handoff.md` — explicitly flagged, not-yet-picked-up work items
    with acceptance criteria, left by a prior session specifically so a new
    agent or session (Claude Code or otherwise) can act on them without
    re-deriving context. Treat one as done once its acceptance criteria are
    met and a corresponding `CLAUDE.md` entry exists; delete or update it then
    rather than leaving a completed handoff doc looking open.
-4. README's "Tuning knobs" table — current default/on/off state for every
+6. README's "Tuning knobs" table — current default/on/off state for every
    `SUBTITLE_AI_*` feature toggle. Several real features exist in code but
    ship **off** by default because their own measurement didn't clear the bar
    (e.g. `SUBTITLE_AI_TURN_DETECTION`, `SUBTITLE_AI_ASR_STYLE`) — "the code
@@ -53,17 +49,18 @@ Code-specific, and CLAUDE.md's naming is historical, not a scope restriction
 on who should read it.
 
 **Before ending your session**, update `docs/handover.md`: log every change
-you made (one line, commit hash, pointer to its full `CLAUDE.md` entry) and
-every issue or gap you noticed but didn't fix, even if it was out of scope for
-what you were asked to do. See that file's own "How to log an entry" section
-for the exact format. A session that ships a fix but leaves no trace in the
-handover log has not actually handed over — the next session pays for it by
+you made (affected paths, committed hash when available or an uncommitted
+status summary, and a pointer to its full `CLAUDE.md` entry) and every issue
+or gap you noticed but didn't fix, even if it was out of scope for what you
+were asked to do. See that file's own "How to log an entry" section for the
+exact format. A session that ships a fix but leaves no trace in the handover
+log has not actually handed over — the next session pays for it by
 re-discovering the same thing from scratch.
 
 ## Working principles
 
-1. **Read before changing.** Start with `README.md`, then the relevant module,
-   tests, and the applicable section of `CLAUDE.md`.
+1. **Read before changing.** Follow the session-start order above, then read
+   the relevant module and tests.
 2. **Preserve workflow boundaries.** Do not make Workflow B behave as though
    it has audio or ASR data, and do not use existing subtitles as transcription
    input for Workflow A.

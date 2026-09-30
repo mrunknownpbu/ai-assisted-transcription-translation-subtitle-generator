@@ -1,4 +1,15 @@
-## Problem
+## Resolved (2026-09-30)
+
+`Entity.turkish_case_suffixes` now enables direct, vowel-harmonized Turkish
+case matching only for explicitly opted-in entities. `Ateş` is the sole
+enabled entry in `tvdb-435293.yaml`; generic names do not gain the matcher.
+The full backend suite passes (1215 tests, 48 subtests), and a scan of all 49
+locally available Turkish subtitles found exactly 14 newly protected `Ateş`
+forms across four episodes, with no unrelated changed lines. See
+`CLAUDE.md`'s "Turkish glued case-suffix protection" entry for the measured
+suffix distribution and design rationale.
+
+## Historical problem
 
 Protected character names in `subtitle_ai/glossary.py` don't survive translation when a Turkish case suffix is glued directly onto the name with no apostrophe. Confirmed real examples from "If You Love" (2023) S01:
 
@@ -38,10 +49,13 @@ There is related but non-identical prior art: `subtitle_ai/auto_glossary.py`'s `
 
 ## Acceptance criteria
 
-- [ ] Both real example sentences above translate with `Ateş` preserved as the name, not `Fire`.
-- [ ] Full test suite passes with no regressions (existing glossary/protection tests, especially any covering case-sensitive matching and Turkish `İ` casefold handling already in `tests/test_glossary.py`).
-- [ ] No new false-positive matches introduced (verify against the real Turkish subtitle corpus, not just the two motivating examples).
-- [ ] `CLAUDE.md` updated with a dated entry describing the root cause, fix, and verification evidence, matching the file's existing style.
+- [x] Both real example sentences protect `Ateş` as a placeholder and restore
+  it with the suffix intact, preventing NLLB from seeing the literal word
+  "fire".
+- [x] Full test suite passes with no regressions (1215 passed, 48 subtests).
+- [x] No new false-positive matches introduced: the 49-file Turkish-corpus
+  comparison changed only the 14 measured `Ateş` case forms.
+- [x] `CLAUDE.md` includes the dated root-cause, fix, and verification record.
 
 ## Relevant files
 

@@ -22,10 +22,40 @@ from dataclasses import dataclass
 # (e.g. not matching "Cenk" inside "Cenkiz") is unchanged, since ASCII
 # letters are still in the class on both sides.
 _ASCII_WORD = "[A-Za-z0-9_]"
+_TURKISH_LOWERCASE = "[a-zçğıöşü]"
+_TURKISH_VOWELS = "aeıioöuü"
+_VOICELESS_TURKISH_CONSONANTS = frozenset("fıstıkçı şhp".replace(" ", ""))
 
 
 def _bounded(pattern: str) -> str:
     return rf"(?<!{_ASCII_WORD}){pattern}(?!{_ASCII_WORD})"
+
+
+def _turkish_case_suffix_pattern(form: str) -> str | None:
+    """Direct, vowel-harmonized Turkish case endings for one proper name.
+
+    This deliberately excludes productive derivation, possession, and
+    kinship/diminutive endings. A name must opt in via Entity below because a
+    character name can also be an ordinary word (for example, ``Canın``).
+    """
+    letters = [char.casefold() for char in form if char.casefold() in _TURKISH_VOWELS]
+    if not letters:
+        return None
+    last_vowel = letters[-1]
+    high = {"a": "ı", "ı": "ı", "o": "u", "u": "u",
+            "e": "i", "i": "i", "ö": "ü", "ü": "ü"}[last_vowel]
+    low = "a" if last_vowel in "aıou" else "e"
+    ends_with_vowel = form[-1:].casefold() in _TURKISH_VOWELS
+    d_or_t = "t" if form[-1:].casefold() in _VOICELESS_TURKISH_CONSONANTS else "d"
+    accusative = f"y?{high}" if ends_with_vowel else high
+    dative = f"y?{low}" if ends_with_vowel else low
+    genitive = f"n{high}" if ends_with_vowel else f"{high}n"
+    instrumental = f"yl{low}" if ends_with_vowel else f"l{low}"
+    return rf"(?:{genitive}|{accusative}|{dative}|{d_or_t}{low}n?|{instrumental})"
+
+
+def _turkish_case_suffixed(pattern: str, suffix_pattern: str) -> str:
+    return rf"(?<!{_ASCII_WORD}){pattern}(?={suffix_pattern}(?!{_TURKISH_LOWERCASE}))"
 
 
 @dataclass
@@ -43,6 +73,10 @@ class Entity:
     # are names and lowercase when they are words, and protecting the
     # lowercase word turned "deniz kenarında" into "the edge of Deniz".
     case_sensitive: bool = False
+    # Match direct Turkish case endings attached without an apostrophe. This
+    # is per-entity because a protected name can also begin ordinary words;
+    # see _turkish_case_suffix_pattern().
+    turkish_case_suffixes: bool = False
 
 
 class GlossaryMap(dict):
@@ -52,6 +86,7 @@ class GlossaryMap(dict):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.case_sensitive: set[str] = set()
+        self.turkish_case_suffixes: dict[str, str] = {}
 
 
 @dataclass
@@ -119,21 +154,33 @@ def build_glossary(entities: list[Entity]) -> dict[str, tuple[str, str]]:
                 glossary[form] = (_placeholder(counter), entity.canonical)
                 if getattr(entity, "case_sensitive", False):
                     glossary.case_sensitive.add(form)
+                if getattr(entity, "turkish_case_suffixes", False):
+                    suffix_pattern = _turkish_case_suffix_pattern(form)
+                    if suffix_pattern is not None:
+                        glossary.turkish_case_suffixes[form] = suffix_pattern
                 counter += 1
     return glossary
 
 
 def protect(text: str, glossary: dict[str, tuple[str, str]]) -> str:
     exact = getattr(glossary, "case_sensitive", ())
+    suffixes = getattr(glossary, "turkish_case_suffixes", {})
     for form, (placeholder, _canonical) in sorted(glossary.items(), key=lambda kv: -len(kv[0])):
         text = re.sub(_bounded(re.escape(form)), placeholder, text,
                       flags=0 if form in exact else re.IGNORECASE)
+        if form in suffixes:
+            text = re.sub(_turkish_case_suffixed(re.escape(form), suffixes[form]), placeholder, text,
+                          flags=0 if form in exact else re.IGNORECASE)
     return text
 
 
 def restore(text: str, glossary: dict[str, tuple[str, str]]) -> str:
-    for _form, (placeholder, canonical) in glossary.items():
+    suffixes = getattr(glossary, "turkish_case_suffixes", {})
+    for form, (placeholder, canonical) in glossary.items():
         text = re.sub(_bounded(re.escape(placeholder)), canonical, text, flags=re.IGNORECASE)
+        if form in suffixes:
+            text = re.sub(_turkish_case_suffixed(re.escape(placeholder), suffixes[form]), canonical, text,
+                          flags=re.IGNORECASE)
     return text
 
 

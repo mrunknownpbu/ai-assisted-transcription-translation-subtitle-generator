@@ -126,6 +126,37 @@ class TurkishCapitalDottedITests(unittest.TestCase):
         self.assertIn("İstanbul", restore(protected, g))
 
 
+class TurkishCaseSuffixProtectionTests(unittest.TestCase):
+    def setUp(self):
+        self.glossary = build_glossary([
+            Entity("Ateş", ["Ateş"], case_sensitive=True, turkish_case_suffixes=True),
+            Entity("Can", ["Can"], case_sensitive=True),
+        ])
+
+    def test_real_accusative_and_genitive_forms_protect_and_restore(self):
+        for text in (
+            "özür dilerim Ateşi bana tercih ettiğini",
+            "Ateşin hayatımıza getirdiği olumlu tek şey olabilir.",
+        ):
+            with self.subTest(text=text):
+                protected = protect(text, self.glossary)
+                self.assertNotIn("Ateş", protected)
+                self.assertEqual(restore(protected, self.glossary), text)
+
+    def test_measured_direct_case_forms_protect_and_restore(self):
+        for text in ("Ateşe söyledim.", "Ateşten haber aldım.", "Ateşle konuştum."):
+            with self.subTest(text=text):
+                self.assertEqual(restore(protect(text, self.glossary), self.glossary), text)
+
+    def test_derivational_and_affectionate_forms_are_not_matched(self):
+        for text in ("Ateşli bir gün.", "Ateşler yandı.", "Ateşciğim, bekle."):
+            with self.subTest(text=text):
+                self.assertEqual(protect(text, self.glossary), text)
+
+    def test_non_opted_name_does_not_gain_ascii_case_suffix_matching(self):
+        self.assertEqual(protect("Cani gördüm.", self.glossary), "Cani gördüm.")
+
+
 class BuildPhraseMapTests(unittest.TestCase):
     """PhraseEntry/build_phrase_map (added 2026-09-19): a forced whole-
     segment translation, distinct from Entity's name-protection -- see

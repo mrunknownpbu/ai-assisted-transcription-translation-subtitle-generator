@@ -2,18 +2,20 @@
 
 ## Purpose
 
-This is the first file to read at the start of a session and the last file
-to update before ending one. It is a short, chronological ledger, newest
-first — **not** a replacement for `CLAUDE.md`'s detailed, evidence-based
-writeups. Every entry here should be 1-3 lines and link out to the full
-detail (a `CLAUDE.md` section for something shipped, a `docs/*-handoff.md`
-file for something open) rather than duplicating it.
+Read this after `README.md` at the start of a session and update it before
+ending one when there is work to hand over. It is a short, chronological
+ledger, newest first — **not** a replacement for `CLAUDE.md`'s detailed,
+evidence-based writeups. Every entry here should be 1-3 lines and link out to
+the full detail (a `CLAUDE.md` section for something shipped, a
+`docs/*-handoff.md` file for something open) rather than duplicating it.
 
-**Every agent or session working in this repo must log here:**
+**Every agent or session working in this repo should log here:**
 
 1. **Every change you make** that isn't a purely trivial edit (a typo fix,
-   a comment). One line, with the commit hash and a pointer to the full
-   `CLAUDE.md` entry if one exists.
+   a comment). One line, with the affected paths, a commit hash if the work
+   was committed, or an `Uncommitted` marker plus the relevant `git status`
+   summary otherwise. Include a pointer to the full `CLAUDE.md` entry if one
+   exists.
 2. **Every issue or gap you identify but do not fix** — whether it was out
    of scope for your task, deliberately deferred, or just noticed in
    passing. If it's substantial enough to need its own acceptance criteria,
@@ -28,7 +30,9 @@ without updating this file. That is the definition of "handover" here.
 
 **A change you made:**
 ```
-- YYYY-MM-DD — <what changed and why, one line>. Commit `<hash>`.
+- YYYY-MM-DD — <what changed and why, one line>. Paths:
+  `<path>`, `<path>`. Commit `<hash>` / Uncommitted (`git status`:
+  `<summary>`).
   Full detail: CLAUDE.md ("<section title>").
 ```
 
@@ -42,7 +46,8 @@ without updating this file. That is the definition of "handover" here.
 original line — append a resolution note under it:
 ```
 - YYYY-MM-DD — OPEN: ...
-  - RESOLVED YYYY-MM-DD, commit `<hash>`, see CLAUDE.md ("<section>").
+  - RESOLVED YYYY-MM-DD, commit `<hash>` / Uncommitted (`git status`:
+    `<summary>`), see CLAUDE.md ("<section>").
 ```
 
 Never edit or delete another session's entry other than to append a
@@ -56,6 +61,9 @@ same as `CLAUDE.md`.
   the name with no apostrophe (`Ateşi`, `Ateşin` still translate as "Fire"
   even though bare `Ateş` is protected). See
   `docs/glossary-suffix-protection-handoff.md`.
+  - RESOLVED 2026-09-30, Uncommitted (`git status`: glossary matcher,
+    profile loader, glossary tests, `tvdb-435293.yaml`, and documentation
+    modified). See CLAUDE.md ("Turkish glued case-suffix protection").
 - 2026-09-30 — OPEN: `cast_enrichment.py`'s per-series staleness interval
   (flat 30 days) doesn't react to new episodes finishing transcription, so
   a series that failed the evidence gate on its first check (too few
@@ -72,6 +80,18 @@ same as `CLAUDE.md`.
 
 ## Change log
 
+- 2026-09-30 — Added explicit, vowel-harmonized Turkish case-suffix
+  protection for opted-in entities and enabled it for `Ateş`; measured 14
+  expected source changes and no unrelated changes across 49 Turkish SRTs.
+  Paths: `subtitle_ai/glossary.py`, `subtitle_ai/glossary_profile.py`,
+  `tests/test_glossary.py`, `tests/test_glossary_profile.py`,
+  `docs/glossary-suffix-protection-handoff.md`, `CLAUDE.md`; glossary repo:
+  `tvdb-435293.yaml`. Uncommitted (`git status`: matcher, tests, glossary
+  data, and docs modified). Full backend suite: 1215 passed, 48 subtests.
+- 2026-09-30 — Aligned session-start guidance with the existing README-first
+  project convention and updated handover templates to support uncommitted
+  work. Paths: `docs/handover.md`, `docs/agents.md`. Uncommitted (`git
+  status`: modified handover and agent guides).
 - 2026-09-30 — Re-ran `cast_enrichment.enrich_series()` for "If You Love"
   (2023) (tvdb-435293) now that all 6 episodes have transcripts; protected
   10 real credited character names (`Ateş`, `Leyla`, `Füsun`, `İlter`,
