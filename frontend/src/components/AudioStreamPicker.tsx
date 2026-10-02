@@ -64,7 +64,7 @@ export function AudioStreamPicker({ path, media, selectedIndex, onSelectIndex }:
             ` — alternates: ${data.alternates.map((a) => `#${a.index} (${a.language ?? "?"})`).join(", ")}`}
         </div>
       )}
-      <label style={{ display: "block", marginTop: 10, fontSize: 13 }}>
+      <label className="stream-select">
         Selected audio stream{" "}
         <select
           value={selectedIndex ?? ""}
