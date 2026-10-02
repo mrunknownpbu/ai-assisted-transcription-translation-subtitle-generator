@@ -52,6 +52,9 @@ PROBE_LINES = 30
 SCOPE_MARGIN = 3          # episodes after the last credit that stay protected
 REGULAR_SHARE = 0.6       # credited in >= 60% of known episodes -> series-wide
 _LETTER = r"A-Za-zÇĞİÖŞÜÂÎÛçğıöşüâîû"
+_CJK_CHAR = re.compile(r"[぀-ヿ㐀-䶿一-鿿豈-﫿ｦ-ﾟ가-힯]")
+_KATAKANA = re.compile(r"^[ァ-ンー]+$")
+_HANGUL = re.compile(r"^[가-힣]+$")
 _SUBTITLE_MODIFIERS = {"hi", "sdh", "cc", "forced"}
 _SENTENCE_START = re.compile(r"(^|[.!?…\"“”\-–—:]\s*)$")
 
@@ -144,6 +147,16 @@ def _text_language(cues) -> str:
 
 def name_shaped(text: str, form: str) -> bool:
     """True if `form` occurs in `text` as a name (see module docstring)."""
+    if not form or not text:
+        return False
+    if _CJK_CHAR.search(form):
+        if _KATAKANA.match(form):
+            return bool(re.search(rf"(?<![ァ-ンー]){re.escape(form)}(?![ァ-ンー])", text))
+        elif _HANGUL.match(form):
+            return bool(re.search(rf"(?<![가-힣]){re.escape(form)}", text))
+        else:
+            return form in text
+
     pattern = re.compile(rf"(?<![{_LETTER}]){re.escape(form)}(?![{_LETTER}])")
     for m in pattern.finditer(text):
         after = text[m.end():m.end() + 2]
@@ -272,7 +285,7 @@ def _enrich(key_field: str, key: int, report_key: str, book, lang, subtitles, gl
                     f"{entry.get('canonical')}: protected series-wide, but cast metadata credits it only "
                     f"to {', '.join(cand.scope)} -- consider adding that `episodes:` scope")
             continue
-        forms = [f for f in cand.forms if f[:1].isupper()]
+        forms = [f for f in cand.forms if f[:1].isupper() or any(ord(c) > 127 for c in f)]
         for episode, lines in subtitles.items():
             if not _in(cand.scope, episode):
                 continue

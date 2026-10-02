@@ -280,3 +280,67 @@ class MislabelledSubtitleTests(unittest.TestCase):
             Path(tmp, "Show S01E01.tr.srt").write_text(turkish, encoding="utf-8")
             lang, subs = ce.source_subtitles(Path(tmp))
         self.assertEqual((lang, list(subs)), ("tr", [(1, 1)]))
+
+
+class NonLatinCastEnrichmentTests(unittest.TestCase):
+    def test_parse_character_with_non_latin_parentheses_and_titles(self):
+        self.assertEqual(cm.parse_character("Tachibana (立花)"), ("Tachibana", "Tachibana", ["立花"]))
+        self.assertEqual(cm.parse_character("Kanako (カナコ)"), ("Kanako", "Kanako", ["カナコ"]))
+        # Hyphenated honorifics stay attached (word-boundary stripping only);
+        # spaced ones are stripped via _SUFFIX_TITLES.
+        self.assertEqual(cm.parse_character("Tanaka san"), ("Tanaka", "Tanaka", []))
+        self.assertEqual(cm.parse_character("Lee nim"), ("Lee", "Lee", []))
+
+    def test_name_shaped_non_latin_scripts(self):
+        # Katakana in Japanese dialogue
+        self.assertTrue(ce.name_shaped("カナコ、早く来て！", "カナコ"))
+        self.assertTrue(ce.name_shaped("(ｶﾅｺ) え？", "ｶﾅｺ"))
+        # Katakana substring within longer katakana word should not match
+        self.assertFalse(ce.name_shaped("チョコレート", "チョコレ"))
+        
+        # Hangul in Korean dialogue
+        self.assertTrue(ce.name_shaped("태수 씨, 어디 가요?", "태수"))
+        
+        # Hanzi in Chinese dialogue
+        self.assertTrue(ce.name_shaped("长庚，你快走！", "长庚"))
+
+    def test_enrich_series_protects_non_latin_cast(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            glossary = tmp_path / "glossary"
+            glossary.mkdir()
+            
+            # Series root with Japanese subtitles
+            root = tmp_path / "Show {tvdb-99}"
+            root.mkdir()
+            for ep in (1, 2):
+                lines = [
+                    "カナコ、スマイルに行こう。",
+                    "カナコが待っている。",
+                    "カナコはどこ？",
+                    "カナコ、早く！",
+                    "カナコを探して。",
+                ]
+                cues = "".join(
+                    f"{i}\n00:00:{i:02d},000 --> 00:00:{i:02d},900\n{line}\n\n"
+                    for i, line in enumerate(lines, 1)
+                )
+                (root / f"Show S01E{ep:02d}.ja.srt").write_text(cues, encoding="utf-8")
+            
+            book = cm.CastBook()
+            book.add("Kanako (カナコ)", "tmdb", (1, 1))
+            book.add("Kanako (カナコ)", "tmdb", (1, 2))
+            
+            # Probe simulation: unprotected translation loses the name (translates to "she" or misses it)
+            def probe(lines, lang):
+                return ["Let's go to smile." for _ in lines]
+            
+            with patch.object(ce.glossary_files, "commit", return_value=True), \
+                 patch.object(ce, "_text_language", return_value="ja"):
+                report = ce.enrich_series(99, root, glossary, probe=probe, book=book)
+            
+            self.assertEqual(report["added"], ["Kanako"])
+            entry = yaml.safe_load((glossary / "tvdb-99.yaml").read_text())["entities"][0]
+            self.assertEqual(entry["canonical"], "Kanako")
+            self.assertIn("カナコ", entry["aliases"])
+            self.assertTrue(entry["protected"])

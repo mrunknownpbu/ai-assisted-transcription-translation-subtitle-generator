@@ -64,7 +64,7 @@ _PREFIX_TITLES = {"chef", "dr", "dr.", "doctor", "mr", "mr.", "mrs", "mrs.", "ms
                   # -- protecting "Şef", "chef/boss", would break the word).
                   "şef", "doktor", "hemşire", "komiser", "avukat", "müdür", "bay", "bayan",
                   "sayın", "hoca", "prens", "prenses", "kaptan", "profesör", "öğretmen"}
-_SUFFIX_TITLES = {"bey", "hanım", "hanim", "abla", "abi", "ağabey", "teyze", "amca", "hoca", "efendi"}
+_SUFFIX_TITLES = {"bey", "hanım", "hanim", "abla", "abi", "ağabey", "teyze", "amca", "hoca", "efendi", "san", "kun", "chan", "sama", "sensei", "senpai", "ssi", "nim"}
 _NOT_CHARACTERS = {"", "self", "himself", "herself", "themselves", "narrator", "voice", "guest",
                    "host", "various", "unknown", "extra", "additional voices"}
 _PAREN_ANNOTATIONS = {"voice", "uncredited", "archive", "footage", "young", "younger", "child", "teen",
@@ -110,7 +110,8 @@ def parse_character(raw: str | None) -> tuple[str, str, list[str]] | None:
     # sources use them for annotations ("(voice)", "(uncredited)").
     for inner in re.findall(r"\(([^)]*)\)", name):
         words = inner.split()
-        if (1 <= len(words) <= 2 and words[0][:1].isupper()
+        if (1 <= len(words) <= 2
+                and (words[0][:1].isupper() or any(ord(c) > 127 for c in words[0]))
                 and not set(w.casefold() for w in words) & _PAREN_ANNOTATIONS):
             nicknames.append(inner.strip())
     name = re.sub(r"\([^)]*\)", " ", name)
