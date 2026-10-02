@@ -415,7 +415,9 @@ Cleanup problems are logged and never change a job's result.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `SUBTITLE_AI_API_KEY` | unset (open; intended for a LAN) | When set, all API endpoints except `/api/health` require a matching `X-API-Key` header, including job data, subtitles, and live events. When unset, cross-origin browser requests to mutation endpoints are rejected using `Origin`/Fetch Metadata; headerless non-browser clients remain usable. |
+| `SUBTITLE_AI_API_KEY` | unset (see `SUBTITLE_AI_ALLOW_INSECURE`) | When set, all API endpoints except `/api/health` require a matching `X-API-Key` header, including job data, subtitles, and live events. When unset, cross-origin browser requests to mutation endpoints are rejected using `Origin`/Fetch Metadata; headerless non-browser clients remain usable. |
+| `SUBTITLE_AI_ALLOW_INSECURE` | unset | The server refuses to start when it listens on a non-loopback address (the container always does) with no `SUBTITLE_AI_API_KEY`. Set the key, or set this to `1` to knowingly run an open API on a trusted network. Loopback binds never need it. |
+| `SUBTITLE_AI_BIND_HOST` | unset | The address the startup check assumes the server listens on. By default it reads `--host` from the uvicorn command line, else assumes `127.0.0.1`; set this only for a launcher that doesn't pass `--host`. |
 | `SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS` | `24` | How long a failed job's scratch directory is kept (see below). |
 | `SUBTITLE_AI_ASR_HOTWORDS` | off | `on` feeds glossary names to Whisper as hotwords (see "ASR decoding defaults"). |
 | `FAILURE_WEBHOOK_URL` | unset | A plain JSON POST is sent to this URL when a job fails (works with anything that accepts one, or a relay in front of it). |

@@ -99,6 +99,13 @@ same as `CLAUDE.md`.
 
 ## Change log
 
+- 2026-10-02 — Server now refuses to start on a non-loopback address with no
+  `SUBTITLE_AI_API_KEY` unless `SUBTITLE_AI_ALLOW_INSECURE=1`. **A deployment
+  with neither (the current `.env`) will exit on next restart.** Paths:
+  `subtitle_ai/{startup_guard.py,main.py}`, `compose.yml`, `.env.example`,
+  `README.md`, `tests/test_startup_guard.py`. Full detail:
+  `docs/decisions/2026-10-02-refuse-open-api-beyond-loopback.md`.
+
 - 2026-10-01 — Added conservative final-cue re-segmentation and centralized
   subtitle constraints: incomplete sub-0.5s fragments merge only across a
   short non-turn/non-pause boundary; target pieces merge when their audio

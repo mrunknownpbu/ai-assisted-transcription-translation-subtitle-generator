@@ -40,3 +40,4 @@ Dated, evidence-based records of what was built, measured, shipped, shipped-but-
 | 2026-09-30 | [Turkish glued case-suffix protection: explicit, measured opt-in (2026-09-30)](2026-09-30-turkish-glued-case-suffix-protection-explicit-measured-opt-i.md) |
 | 2026-09-30 | [Cast enrichment retries when subtitle evidence grows (2026-09-30)](2026-09-30-cast-enrichment-retries-when-subtitle-evidence-grows.md) |
 | 2026-09-30 | [Cast metadata refresh default: 12 hours (2026-09-30)](2026-09-30-cast-metadata-refresh-default-12-hours.md) |
+| 2026-10-02 | [Refuse to start an open API beyond loopback (2026-10-02)](2026-10-02-refuse-open-api-beyond-loopback.md) |

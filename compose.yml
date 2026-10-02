@@ -79,6 +79,10 @@ services:
       # (see api.py's require_api_key()) -- unset by default, matching
       # this deployment's confirmed LAN-only status.
       SUBTITLE_AI_API_KEY: ${SUBTITLE_AI_API_KEY:-}
+      # The container listens on 0.0.0.0, so without a key it refuses to
+      # start unless this acknowledges an open API on a trusted network.
+      SUBTITLE_AI_ALLOW_INSECURE: ${SUBTITLE_AI_ALLOW_INSECURE:-}
+      SUBTITLE_AI_BIND_HOST: ${SUBTITLE_AI_BIND_HOST:-}
       # Empty = defaults (24h failed-job scratch retention; ASR hotwords
       # off). See .env.example for what each does.
       SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS: ${SUBTITLE_AI_FAILED_WORK_RETENTION_HOURS:-}

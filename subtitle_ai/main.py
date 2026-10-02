@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 
 import api
+import startup_guard
 import translate
 import workdir
 from worker import Worker
@@ -23,6 +25,10 @@ from worker import Worker
 # JSON formatter now would be speculative complexity with nothing to
 # consume it yet.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+# Fail fast, before any model/DB/worker setup, rather than serve an open API
+# beyond loopback by accident -- see startup_guard.py.
+startup_guard.check_bind_safety(sys.argv, os.environ)
 
 DB_PATH = os.environ.get("SUBTITLE_AI_DB", "/cache/jobs.db")
 MEDIA_ROOT = os.environ.get("SUBTITLE_AI_MEDIA_ROOT", "/data")
