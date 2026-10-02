@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from jobstore import JobStore
-from projection import ProjectedCue
 from qc.types import JobQc, QcResult, QcStage
 import worker as worker_mod
 from worker import Worker

@@ -99,6 +99,13 @@ same as `CLAUDE.md`.
 
 ## Change log
 
+- 2026-10-02 — Added ruff (correctness rules: E4/E7/E9/F) and mypy to CI, config
+  in `pyproject.toml`; removed 22 unused imports. mypy excludes 12 modules with
+  68 existing errors (list in `[[tool.mypy.overrides]]`) -- OPEN: burn that
+  list down. Paths: `.github/workflows/test.yml`, `pyproject.toml`,
+  `CLAUDE.md`, plus unused-import removals in `subtitle_ai/{pipeline,translate}.py`,
+  `scripts/compare_turn_detectors.py` and several tests. Suite: 1281 passed.
+
 - 2026-10-02 — Server now refuses to start on a non-loopback address with no
   `SUBTITLE_AI_API_KEY` unless `SUBTITLE_AI_ALLOW_INSECURE=1`. **A deployment
   with neither (the current `.env`) will exit on next restart.** Paths:

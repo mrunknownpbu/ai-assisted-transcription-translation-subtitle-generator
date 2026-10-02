@@ -8,7 +8,7 @@ from qc import entity_qc, output_qc, readability_qc, timing_qc, transcription_qc
 from qc.types import JobQc, QcCategory, QcFinding, QcResult, QcStage
 from segmentation_target import TargetCue
 from srt import render
-from transcript import Segment, Word
+from transcript import Segment
 
 
 def seg(index, avg_logprob=-0.2, no_speech_prob=0.05, compression_ratio=1.3):

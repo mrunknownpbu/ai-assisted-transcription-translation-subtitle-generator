@@ -239,7 +239,6 @@ class SampleModelNameTests(unittest.TestCase):
 
     def test_default_is_small(self):
         import os
-        from unittest.mock import patch
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("SUBTITLE_AI_SAMPLE_MODEL", None)
             self.assertEqual(audio_streams._sample_model_name(), "small")
@@ -267,14 +266,13 @@ class DefaultSamplerModelResolutionTests(unittest.TestCase):
         # runs and waits (then fails) whenever something else is using the
         # card -- seen 2026-09-28 while a benchmark held 7.4GB. CI has no
         # CUDA, so it never noticed. test_vram_preflight.py covers the check.
-        from unittest.mock import patch
         patcher = patch("gpu.preflight_vram_check")
         patcher.start()
         self.addCleanup(patcher.stop)
 
     def test_explicit_model_name_is_used(self):
         """Passing model_name="base" overrides the env var."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
         from pathlib import Path
 
         fake_wav = Path("/fake/sample.wav")
@@ -301,7 +299,7 @@ class DefaultSamplerModelResolutionTests(unittest.TestCase):
         """If the env-var model (small) raises on load, the sampler falls back
         to large-v3 and still returns a valid result -- no exception escapes."""
         import os
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
         from pathlib import Path
 
         fake_wav = Path("/fake/sample.wav")
@@ -334,7 +332,7 @@ class DefaultSamplerModelResolutionTests(unittest.TestCase):
         """When SUBTITLE_AI_SAMPLE_MODEL=large-v3, skip the try/except path
         entirely and load large-v3 directly -- no spurious fallback log."""
         import os
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
         from pathlib import Path
 
         fake_wav = Path("/fake/sample.wav")
@@ -370,7 +368,7 @@ class PreflightVramWiringTests(unittest.TestCase):
 
     def test_lightweight_attempt_checks_a_small_margin(self):
         import os
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         fake_wav = Path("/fake/sample.wav")
 
@@ -394,7 +392,7 @@ class PreflightVramWiringTests(unittest.TestCase):
 
     def test_fallback_attempt_checks_the_full_default_margin(self):
         import os
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         fake_wav = Path("/fake/sample.wav")
 
@@ -424,7 +422,7 @@ class PreflightVramWiringTests(unittest.TestCase):
         """A failed lightweight-margin check must propagate immediately --
         never attempt large-v3, which needs MORE headroom, not less."""
         import os
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         import gpu
         fake_wav = Path("/fake/sample.wav")

@@ -12,7 +12,6 @@ real episode was verified separately against real hardware.
 
 from __future__ import annotations
 
-import contextlib
 import tempfile
 import unittest
 import wave

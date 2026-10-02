@@ -39,8 +39,6 @@ def main() -> int:
     ap.add_argument("--json")
     args = ap.parse_args()
 
-    import glossary_profile
-    import hallucination
     import normalize
     import turns
     from srt import parse_lines

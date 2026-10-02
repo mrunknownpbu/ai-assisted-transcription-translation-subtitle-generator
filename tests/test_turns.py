@@ -5,7 +5,6 @@ model/network needed) and use synthetic tones instead of real speech."""
 from __future__ import annotations
 
 import math
-import struct
 import tempfile
 import unittest
 import wave

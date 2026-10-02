@@ -63,9 +63,9 @@ FAILED_WORK_RETENTION_HOURS = workdir.parse_retention_hours(
 
 # Warm the Sonarr/Radarr index in the background so the first job
 # submission never waits on it (arr_client.py; no-op when unconfigured).
-import threading as _threading
+import threading as _threading  # noqa: E402
 
-import arr_client
+import arr_client  # noqa: E402
 
 if arr_client.configured():
     _threading.Thread(target=lambda: [arr_client.all_items(k) for k in ("series", "movie")],

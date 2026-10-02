@@ -4,7 +4,6 @@ after output (media_servers), and movies in cast-name protection
 servers see /data/media/... exactly as this app does; 3 Sonarr series have
 broken {tvdb-} tags and 6 have tags that disagree with Sonarr."""
 
-import json
 import os
 import tempfile
 import unittest

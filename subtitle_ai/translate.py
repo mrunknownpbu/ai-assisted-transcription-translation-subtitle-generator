@@ -22,7 +22,7 @@ from glossary import (_phrase_key, bare_entity_translation,
                       split_into_sentences, split_multi_speaker_dash_lines)
 from langid import detect_language_overrides
 from output import TARGET_LANG
-from transcript import BoundaryReason, MERGEABLE_BOUNDARIES, Segment
+from transcript import BoundaryReason, Segment
 
 REMOTE_TIMEOUT_SECONDS = 60.0
 

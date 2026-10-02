@@ -7,6 +7,19 @@ on:
     branches: [master]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
+
+      - name: Ruff
+        run: uvx ruff@0.16.10 check subtitle_ai scripts tests
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -47,6 +60,11 @@ jobs:
           # dependencies were installed from uv.lock above.
           uv pip install --python .venv/bin/python --no-deps \
             --index-url https://download.pytorch.org/whl/cpu "torch==2.5.1+cpu"
+
+      - name: Type check
+        # Uses the synced environment so third-party types resolve as they do
+        # locally. Modules with a known baseline are listed in pyproject.toml.
+        run: uvx mypy@2.4.0 --python-executable .venv/bin/python
 
       - name: Run tests
         working-directory: subtitle_ai

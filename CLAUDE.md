@@ -25,6 +25,16 @@ already has the right interpreter on `PATH` and deps installed (see
 `.github/workflows/test.yml` for the exact CPU-only CI setup) -- the
 `uv run` form above is the one that reliably works from a fresh shell.
 
+Lint and types (both run in CI; config in `pyproject.toml`):
+
+```bash
+uvx ruff@0.16.10 check subtitle_ai scripts tests
+uvx mypy@2.4.0 --python-executable .venv/bin/python
+```
+
+mypy skips the 12 modules listed under `[[tool.mypy.overrides]]` (known
+errors when it was added, 2026-10-02); fix one and remove it from the list.
+
 Baseline as of 2026-09-28: 1065 passing, 0 failures (plus 89 frontend
 tests -- `cd frontend && npm test -- --run`; up from 939 after the
 natural-dialogue plan's five steps -- see the segmentation-naturalness,

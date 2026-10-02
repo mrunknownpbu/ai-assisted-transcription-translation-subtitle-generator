@@ -4,9 +4,6 @@ Air "Deniz" is a character in S01E29-E37 and the word for "sea" elsewhere;
 Kiraz (cherry), Balca, Melek (angel) and Sevda (love) were all mistranslated
 as words when unprotected."""
 
-import json
-import shutil
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path

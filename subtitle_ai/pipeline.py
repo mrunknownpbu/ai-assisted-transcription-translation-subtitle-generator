@@ -24,8 +24,8 @@ import srt
 import translate
 import turns
 from asr import AsrConfig, PIPELINE_VERSION, asr_style_prompt, hotwords_enabled, transcribe as asr_transcribe, vad_parameters
-from output import TARGET_LANG, write_srt_atomic, resolve_output_path
-from projection import ProjectedCue, SourceGroup, merge_groups, project, validate_coverage
+from output import TARGET_LANG, write_srt_atomic
+from projection import SourceGroup, merge_groups, project, validate_coverage
 from qc import entity_qc, output_qc, readability_qc, timing_qc, transcription_qc, translation_qc
 from qc.types import JobQc
 from transcript import (NO_SPACE_LANGUAGES, CanonicalTranscript, ModelInfo, Segment, auto_lookup_key,
