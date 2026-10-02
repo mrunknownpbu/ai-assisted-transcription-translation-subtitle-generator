@@ -35,6 +35,29 @@ class NormaliseTests(unittest.TestCase):
         self.assertEqual(ev.normalise("Valla abicim baya"), ev.normalise("Vallahi abiciğim bayağı"))
 
 
+class LanguageNormaliseTests(unittest.TestCase):
+    """--lang selects the tokenisation: characters for unspaced scripts."""
+
+    def setUp(self):
+        self.addCleanup(setattr, ev, "LANGUAGE", ev.LANGUAGE)
+
+    def test_japanese_is_per_character_and_ignores_kana_script_and_punctuation(self):
+        ev.LANGUAGE = "ja"
+        self.assertEqual(ev.normalise("（笑）今日は、いい天気ですね！"), list("今日はいい天気ですね"))
+        self.assertEqual(ev.normalise("カナコ"), ev.normalise("かなこ"))
+
+    def test_chinese_and_thai_are_per_character_with_tags_removed(self):
+        ev.LANGUAGE = "zh"
+        self.assertEqual(ev.normalise("{\\an8}你好，世界！"), list("你好世界"))
+        ev.LANGUAGE = "th"
+        self.assertEqual(ev.normalise("<i>สวัสดี</i> ครับ"), list("สวัสดีครับ"))
+
+    def test_other_languages_are_per_word_without_turkish_rules(self):
+        ev.LANGUAGE = "ms"
+        self.assertEqual(ev.normalise("Saya nak pergi, KE sana!"), ["saya", "nak", "pergi", "ke", "sana"])
+        self.assertEqual(ev.normalise("10 valla"), ["10", "valla"])
+
+
 class AlignTests(unittest.TestCase):
     def test_counts_each_error_type(self):
         s, d, i, subs = ev.align(["serkan", "eve", "geldi"], ["sarkan", "geldi"])

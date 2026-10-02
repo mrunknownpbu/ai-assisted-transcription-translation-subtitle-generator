@@ -86,8 +86,24 @@ def turkish_number(n: int) -> list[str]:
     return words
 
 
+# Languages written without spaces between words. A "word" error rate is
+# meaningless there, so each character is a token and WER becomes CER.
+UNSPACED = {"ja", "zh", "th"}
+LANGUAGE = "tr"       # set from --lang; the Turkish rules below apply only to "tr"
+
+
 def normalise(text: str) -> list[str]:
-    text = re.sub(r"\([^)]*\)|\[[^\]]*\]|<[^>]+>|[♪♫]", " ", text)
+    text = re.sub(r"\([^)]*\)|\[[^\]]*\]|<[^>]+>|\{[^}]*\}|（[^）]*）|[♪♫]", " ", text)
+    if LANGUAGE in UNSPACED:
+        import unicodedata
+        text = unicodedata.normalize("NFKC", text).lower()
+        if LANGUAGE == "ja":     # katakana -> hiragana: spelling choice, not a mishearing
+            text = "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in text)
+        return [c for c in text if unicodedata.category(c)[0] in "LMN"]   # M: Thai vowel and tone marks
+    if LANGUAGE != "tr":
+        import unicodedata
+        text = unicodedata.normalize("NFKC", text).lower()
+        return re.sub(r"[^\w\s]", " ", text).split()
     text = text.replace("I", "ı").replace("İ", "i").lower()
     text = text.replace("â", "a").replace("î", "i").replace("û", "u")
     text = re.sub(r"['’]", "", text)                  # Serkan'ın == Serkanın
@@ -460,11 +476,18 @@ def main() -> int:
     ap.add_argument("--glossary-dir", default="/glossary")
     ap.add_argument("--json")
     ap.add_argument("--top", type=int, default=15)
+    ap.add_argument("--reference-dir",
+                    help="read references from DIR/<--reference-prefix>-E<nn>.srt instead of "
+                         "<episode>.<lang>.srt beside the video (e.g. a subtitle track extracted "
+                         "from the container; evaluation input only, never fed to ASR)")
+    ap.add_argument("--reference-prefix", default=None)
     ap.add_argument("--segmentation", action="store_true",
                     help="also report cue-boundary/turn/layout/interjection naturalness "
                          "vs the human cues (segmentation_source.build_cues rebuilt from "
                          "each system's kept words; no extra GPU work)")
     args = ap.parse_args()
+    global LANGUAGE
+    LANGUAGE = args.lang
 
     from srt import parse, parse_lines
     season = Path(args.season)
@@ -472,7 +495,11 @@ def main() -> int:
     episodes = []
     for number in parse_episodes(args.episodes):
         video = next(iter(sorted(season.glob(f"*E{number:02d}.mkv")) + sorted(season.glob(f"*E{number:02d}.mp4"))), None)
-        ref = next(iter(season.glob(f"*E{number:02d}.{args.lang}.srt")), None)
+        if args.reference_dir:
+            ref = Path(args.reference_dir) / f"{args.reference_prefix or args.lang}-E{number:02d}.srt"
+            ref = ref if ref.is_file() else None
+        else:
+            ref = next(iter(season.glob(f"*E{number:02d}.{args.lang}.srt")), None)
         if not video or not ref:
             print(f"E{number:02d}: skipped (no video or no .{args.lang}.srt)")
             continue
@@ -514,7 +541,9 @@ def main() -> int:
                 import asr as _asr
                 overrides["initial_prompt"] = _asr.ASR_STYLE_PRESETS.get(v)
             else:
-                overrides[k] = type(getattr(__import__("asr").AsrConfig(), k))(v) if v not in ("None",) else None
+                default = getattr(__import__("asr").AsrConfig(), k)
+                # A field whose default is None (language, hotwords) is a string.
+                overrides[k] = (type(default) if default is not None else str)(v) if v not in ("None",) else None
         per_episode, all_windows = {}, {}
         agg_subs, agg_ref, agg_hit = collections.Counter(), collections.Counter(), collections.Counter()
         tot = collections.Counter()
