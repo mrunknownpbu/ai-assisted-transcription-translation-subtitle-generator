@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import cast_metadata
 import glossary_files
@@ -336,6 +337,7 @@ def _enrich(key_field: str, key: int, report_key: str, book, lang, subtitles, gl
     if changed and not dry_run:
         with glossary_files.edit_lock(glossary_dir):
             series_path = glossary_profile.find_glossary_path(glossary_dir, key_field, key)
+            series_data: dict[str, Any]
             if series_path is None:
                 series_path = glossary_dir / f"{report_key}.yaml"
                 series_data = {key_field: key, "title": None, "entities": []}

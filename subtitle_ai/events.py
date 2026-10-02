@@ -29,9 +29,11 @@ class _CoalescingQueue(asyncio.Queue):
             return
         if self.full():
             discarded = self._get()
-            self._unfinished_tasks -= 1
-            if self._unfinished_tasks == 0:
-                self._finished.set()
+            # asyncio.Queue's bookkeeping isn't in typeshed; dropping an item
+            # without a task_done() call must still balance join().
+            self._unfinished_tasks -= 1  # type: ignore[attr-defined]
+            if self._unfinished_tasks == 0:  # type: ignore[attr-defined]
+                self._finished.set()  # type: ignore[attr-defined]
             discarded_job_id = discarded.get("job_id")
             if discarded_job_id is not None:
                 self._pending_job_ids.discard(discarded_job_id)

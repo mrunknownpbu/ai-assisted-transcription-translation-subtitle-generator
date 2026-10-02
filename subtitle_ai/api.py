@@ -15,6 +15,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import yaml
@@ -99,7 +100,7 @@ def get_store() -> JobStore:
     # Overridable in tests via app.dependency_overrides is unnecessary
     # here -- api.py exposes create_app() for real wiring; this module-
     # level singleton is convenient for the default run path only.
-    global _store
+    assert _store is not None, "create_app() has not been called"
     return _store
 
 
@@ -262,7 +263,7 @@ def health() -> dict | JSONResponse:
     result: dict = {"ok": True, "queue": "sqlite", "status": "ok"}
     reasons: list[str] = []
     try:
-        _store.ping()
+        get_store().ping()
         result["db_ok"] = True
     except Exception:
         result["db_ok"] = False
@@ -336,7 +337,7 @@ def browse(path: str = Query(""), file_type: str = Query("video", pattern=r"^(vi
         raise HTTPException(status_code=400, detail="not a directory")
     root = Path(get_media_root()).resolve()
     wanted_suffix = ".srt" if file_type == "srt" else None
-    entries = []
+    entries: list[dict[str, Any]] = []
     # Per-request cache of directory-name sets: a video's siblings live in
     # ITS resolved parent (which differs from `directory` for a symlinked
     # video), and every video in one folder shares the same set.
@@ -626,6 +627,7 @@ def create_srt_translation_job(request: SrtTranslationRequest) -> dict:
             raise HTTPException(status_code=400, detail=f"source_upload_id: {exc}") from exc
         source_root = Path(upload_dir).resolve()
     else:
+        assert request.source_srt_path is not None  # exactly-one check above
         try:
             source = resolve_media_path(get_media_root(), request.source_srt_path, must_exist=True)
         except OutputSafetyError as exc:
@@ -687,8 +689,9 @@ def _series_title(tvdb_id: int | None) -> str | None:
     series never has to show as a bare "Series #<id>"."""
     if tvdb_id is None:
         return None
-    if get_glossary_dir():
-        title = glossary_profile.load_profile(get_glossary_dir(), tvdb_id=tvdb_id).title
+    glossary_dir = get_glossary_dir()
+    if glossary_dir:
+        title = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id).title
         if title:
             return title
     path = get_store().latest_video_path(tvdb_id)
@@ -708,12 +711,13 @@ def series_detail(tvdb_id: int) -> dict:
     to show for a job with no series identity."""
     jobs = get_store().list_by_tvdb_id(tvdb_id)
     manual_entities = []
-    if get_glossary_dir():
-        profile = glossary_profile.load_profile(get_glossary_dir(), tvdb_id=tvdb_id, all_episodes=True)
+    glossary_dir = get_glossary_dir()
+    if glossary_dir:
+        profile = glossary_profile.load_profile(glossary_dir, tvdb_id=tvdb_id, all_episodes=True)
         manual_entities = [{"canonical": e.canonical, "surface_forms": e.surface_forms,
                                  "episodes": e.episodes, "source": e.source}
                            for e in profile.entities]
-    suggestions = []
+    suggestions: list[dict] = []
     suggestions_dir = get_glossary_suggestions_dir()
     if suggestions_dir:
         path = Path(suggestions_dir) / f"{tvdb_id}.yaml"
@@ -1013,10 +1017,13 @@ def update_job_srt(job_id: str, request: SrtEditRequest) -> dict:
 @app.post("/api/jobs/{job_id}/cancel", dependencies=[Depends(require_api_key)])
 def cancel_job(job_id: str) -> dict:
     try:
-        return get_store().request_cancel(job_id)
+        job = get_store().request_cancel(job_id)
     except JobStoreError as exc:
         code = 404 if "not found" in str(exc) else 409
         raise HTTPException(status_code=code, detail=str(exc)) from exc
+    if job is None:  # deleted between the cancel and the re-read
+        raise HTTPException(status_code=404, detail="job not found")
+    return job
 
 
 @app.post("/api/jobs/{job_id}/retry", status_code=201, dependencies=[Depends(require_api_key)])
@@ -1058,8 +1065,9 @@ def delete_job(job_id: str) -> dict:
     except JobStoreError as exc:
         code = 404 if "not found" in str(exc) else 409
         raise HTTPException(status_code=code, detail=str(exc)) from exc
-    if get_work_root():
-        workdir.cleanup_work_dir(get_work_root(), job_id)  # best-effort, never raises
+    work_root = get_work_root()
+    if work_root:
+        workdir.cleanup_work_dir(work_root, job_id)  # best-effort, never raises
     return {"deleted": job_id}
 
 

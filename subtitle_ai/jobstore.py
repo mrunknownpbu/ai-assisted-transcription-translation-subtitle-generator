@@ -20,6 +20,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import glossary_profile
 from output import TARGET_LANG
@@ -111,6 +112,11 @@ def _elapsed(row: dict) -> float:
 
 class JobStoreError(Exception):
     pass
+
+
+_StrList = list[str]
+_AnyList = list
+_DictList = list[dict]
 
 
 class JobStore:
@@ -337,7 +343,7 @@ class JobStore:
                              created_at=now, updated_at=now, retry_of_job_id=retry_of_job_id,
                              attempt=attempt, tvdb_id=tvdb_id)
         self._notify(job_id)
-        return self.get(job_id)
+        return self._require(job_id)
 
     def create_srt_translation(self, source_srt_path: str, destination_srt_path: str, *,
                                source_lang: str | None = "auto", target_lang: str = "en",
@@ -394,7 +400,13 @@ class JobStore:
                              destination_srt_path=destination_srt_path,
                              source_is_uploaded=source_is_uploaded)
         self._notify(job_id)
-        return self.get(job_id)
+        return self._require(job_id)
+
+    def _require(self, job_id: str) -> dict:
+        """A row this method just wrote must exist."""
+        row = self.get(job_id)
+        assert row is not None, job_id
+        return row
 
     def get(self, job_id: str) -> dict | None:
         with self._connect() as conn:
@@ -441,7 +453,7 @@ class JobStore:
             counts["ALL"] += r["n"]
         return counts
 
-    def list_series(self) -> list[dict]:
+    def list_series(self) -> _DictList:
         """One summary row per distinct tvdb_id, plus a single row for
         `tvdb_id IS NULL` (jobs whose video_path carries no `{tvdb-<id>}`
         tag) -- every job lands in exactly one bucket, mirroring
@@ -486,7 +498,7 @@ class JobStore:
                 "AND source_srt_path IS NOT NULL").fetchall()
         return {row["source_srt_path"] for row in rows}
 
-    def list_by_tvdb_id(self, tvdb_id: int | None) -> list[dict]:
+    def list_by_tvdb_id(self, tvdb_id: int | None) -> _DictList:
         # video_path sorts naturally today because every real filename in
         # this deployment's library is zero-padded (S01E01, S01E02, ...,
         # S01E10) -- see media naming convention throughout this project.
@@ -517,7 +529,7 @@ class JobStore:
         self._notify(row["id"])
         return self.get(row["id"])
 
-    def recover_orphaned_jobs(self) -> list[str]:
+    def recover_orphaned_jobs(self) -> _StrList:
         """Call once at startup, after _migrate() and before the worker
         starts claiming. Real gap this closes (2026-09-19 audit): a
         `running` row means "a worker thread in SOME process is actively
@@ -625,8 +637,8 @@ class JobStore:
         self._notify(job_id)
 
     def finish(self, job_id: str, status: str, *, error: str | None = None,
-              error_category: str | None = None, outputs: list | None = None,
-              qc: dict | None = None, needs_review: int | None = None) -> dict:
+              error_category: str | None = None, outputs: _AnyList | None = None,
+              qc: dict | None = None, needs_review: int | None = None) -> dict | None:
         if status not in TERMINAL_STATUSES:
             raise JobStoreError(f"finish() requires a terminal status, got {status!r}")
         now = time.time()
@@ -652,7 +664,7 @@ class JobStore:
             conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
         self._notify(job_id)
 
-    def request_cancel(self, job_id: str) -> dict:
+    def request_cancel(self, job_id: str) -> dict | None:
         with self._immediate() as conn:
             job = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
             if not job:
@@ -678,9 +690,9 @@ class JobStore:
         job = self.get(job_id)
         return bool(job and job["cancel_requested"])
 
-    def retry(self, job_id: str, *, overwrite_original: bool | str = "unset",
-             overwrite_english: bool | str = "unset", source_lang: str | None = None,
-             audio_stream_index: int | None = "unset") -> dict:
+    def retry(self, job_id: str, *, overwrite_original: bool | str | None = "unset",
+             overwrite_english: bool | str | None = "unset", source_lang: str | None = None,
+             audio_stream_index: int | str | None = "unset") -> dict:
         """Creates a NEW job row -- never mutates the original. The
         original's terminal timestamps/status remain exactly as they
         were; only the new row's `retry_of_job_id` links them.
@@ -713,23 +725,24 @@ class JobStore:
             raise JobStoreError("job not found")
         if original["status"] not in TERMINAL_STATUSES:
             raise JobStoreError(f"cannot retry a non-terminal job (status={original['status']})")
-        overwrite_original = (original["overwrite_original"] if overwrite_original == "unset"
-                              else overwrite_original)
-        overwrite_english = (original["overwrite_english"] if overwrite_english == "unset"
-                             else overwrite_english)
+        # "unset" -> inherit; anything else (including None) is the caller's value.
+        new_overwrite_original: Any = (original["overwrite_original"] if overwrite_original == "unset"
+                                       else overwrite_original)
+        new_overwrite_english: Any = (original["overwrite_english"] if overwrite_english == "unset"
+                                      else overwrite_english)
         if original["job_type"] == "srt_translation":
             return self.create_srt_translation(
                 original["source_srt_path"], _english_destination(original),
                 source_lang=source_lang or original["source_lang"],
                 target_lang=TARGET_LANG,
                 video_path=original["video_path"] or None,
-                overwrite_original=overwrite_original, overwrite_english=overwrite_english,
+                overwrite_original=new_overwrite_original, overwrite_english=new_overwrite_english,
                 source_is_uploaded=original["source_is_uploaded"],
                 retry_of_job_id=job_id, attempt=original["attempt"] + 1)
-        stream_override = (original.get("requested_audio_stream") if audio_stream_index == "unset"
-                          else audio_stream_index)
+        stream_override: Any = (original.get("requested_audio_stream") if audio_stream_index == "unset"
+                                else audio_stream_index)
         return self.create(original["video_path"], source_lang or original["source_lang"],
                            target_lang=TARGET_LANG,
                            audio_stream_index=stream_override,
-                           overwrite_original=overwrite_original, overwrite_english=overwrite_english,
+                           overwrite_original=new_overwrite_original, overwrite_english=new_overwrite_english,
                            retry_of_job_id=job_id, attempt=original["attempt"] + 1)

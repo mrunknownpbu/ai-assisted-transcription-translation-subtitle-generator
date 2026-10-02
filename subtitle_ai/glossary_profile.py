@@ -207,10 +207,10 @@ def load_profile(glossary_dir: str | Path, tvdb_id: int | None = None, *,
 
     ordered = layered + ([series_layer] if series_layer else [])
     for path in ordered:
-        data, entities = _load_yaml_entities(path)
+        data, file_entities = _load_yaml_entities(path)
         if path == series_layer:
-            title = data.get("title")
-        for e in entities:
+            title = data.get("title") if data else None
+        for e in file_entities:
             by_canonical[e["canonical"]] = e
         # A file's `language:` key (if any) applies to every phrase it
         # declares -- a whole file IS "the Turkish glossary", not

@@ -453,11 +453,11 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     # incapable of inventing new semantic content (see its docstring).
     entity_recovered = 0
     if glossary_map:
-        for i, (protected_source, candidate) in enumerate(zip(protected_sentences, translations)):
-            shortfall = glossary_mod.entity_occurrence_report(protected_source, candidate, glossary_map)
+        for i, (protected_source, candidate_text) in enumerate(zip(protected_sentences, translations)):
+            shortfall = glossary_mod.entity_occurrence_report(protected_source, candidate_text, glossary_map)
             if any(src > tgt for src, tgt in shortfall.values()):
                 translations[i] = glossary_mod.recover_dropped_entities(
-                    protected_source, candidate, glossary_map)
+                    protected_source, candidate_text, glossary_map)
                 entity_recovered += 1
     if entity_recovered:
         _emit(on_event, events, "ENTITY_RECOVERY_APPLIED", sentences=entity_recovered)

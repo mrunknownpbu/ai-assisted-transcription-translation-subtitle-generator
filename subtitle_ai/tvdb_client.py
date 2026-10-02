@@ -81,8 +81,11 @@ def _login() -> str:
 
 def _token() -> str:
     if not _token_cache.valid():
-        _token_cache.token = _login()
+        token = _login()
+        _token_cache.token = token
         _token_cache.obtained_at = time.time()
+        return token
+    assert _token_cache.token is not None  # valid() implies a token
     return _token_cache.token
 
 

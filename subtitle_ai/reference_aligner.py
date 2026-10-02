@@ -248,7 +248,9 @@ def align(gen_cues: list[Cue], ref_cues: list[Cue],
     i, j = n, m
     blocks: list[tuple[int, int, int, int]] = []
     while i > 0 or j > 0:
-        a, b = choice[i][j]
+        step = choice[i][j]
+        assert step is not None  # every reachable cell past (0, 0) was assigned a step
+        a, b = step
         blocks.append((i - a, i, j - b, j))
         i, j = i - a, j - b
     blocks.reverse()

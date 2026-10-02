@@ -79,13 +79,3 @@ mypy_path = "subtitle_ai"
 explicit_package_bases = true
 ignore_missing_imports = true
 
-# Baseline: these modules had type errors when mypy was introduced
-# (2026-10-02) and are excluded so CI is green and every OTHER module is
-# checked. Fix a module, then delete it from this list.
-[[tool.mypy.overrides]]
-module = [
-    "api", "cast_enrichment", "cast_metadata", "events", "glossary_profile",
-    "jobstore", "pipeline", "reference_aligner", "srt_translation",
-    "translate", "tvdb_client", "worker",
-]
-ignore_errors = true

@@ -14,6 +14,8 @@ import os
 import re
 import threading
 from dataclasses import dataclass, field
+from collections.abc import Sequence
+from typing import Any, cast
 
 from glossary import (_phrase_key, bare_entity_translation,
                       entity_occurrence_report, is_unpunctuated_run_on,
@@ -324,7 +326,9 @@ def build_context_spans(cues: list[Segment], real_boundaries: frozenset = frozen
     alone). Independent of segmentation_source.py's *display* cue
     boundaries: a real acoustic gap always forces a new span even under
     MAX_SPAN_GAP; a display-only boundary never does."""
-    spans, cur, chars = [], [], 0
+    spans: list[list[int]] = []
+    cur: list[int] = []
+    chars = 0
     for i, cue in enumerate(cues):
         provenance_break = bool(cur) and cue.boundary_before in real_boundaries
         gap_break = bool(cur) and (cue.start - cues[cur[-1]].end) > MAX_SPAN_GAP
@@ -637,7 +641,7 @@ def translate_batch(model, tok, bos: int, sentences: list[str], device: str,
             free_gpu(device)
         if on_progress:
             on_progress(done, len(sentences))
-    return out
+    return cast(list[str], out)  # every index was filled above
 
 
 # Kept in sync with build_context_spans()'s own default -- both need the
@@ -684,7 +688,7 @@ def orphan_context_padding_enabled() -> bool:
         "off", "0", "false", "no"}
 
 
-def _find_orphan_spans(cues: list[Segment], spans: list[list[int]]) -> dict[int, tuple[int, bool]]:
+def _find_orphan_spans(cues: Sequence[Any], spans: list[list[int]]) -> dict[int, tuple[int, bool]]:
     """Maps span index -> (context_span_index, context_before) for every
     single-cue, single-word span immediately adjacent to EXACTLY ONE real
     acoustic-gap boundary.
@@ -760,7 +764,7 @@ def _strip_anchor_affix(padded_translation: str, anchor_translation: str, *,
     return residual_text or None
 
 
-def _pad_orphan_context(cues: list[Segment], spans: list[list[int]], result: list[str], src_lang: str,
+def _pad_orphan_context(cues: Sequence[Any], spans: list[list[int]], result: list[str], src_lang: str,
                         glossary_map: dict[str, tuple[str, str]] | None,
                         phrase_map: dict[str, str] | None, config: TranslationConfig | None,
                         model, tok, bos, remote_url: str | None) -> list[str]:
@@ -820,10 +824,10 @@ def _pad_orphan_context(cues: list[Segment], spans: list[list[int]], result: lis
     return result
 
 
-def translate_spans(cues: list[Segment], spans: list[list[int]], src_lang: str,
+def translate_spans(cues: Sequence[Any], spans: list[list[int]], src_lang: str,
                     glossary_map: dict[str, tuple[str, str]] | None = None,
                     phrase_map: dict[str, str] | None = None,
-                    config: TranslationConfig | None = None, model=None, tok=None, bos: int = None,
+                    config: TranslationConfig | None = None, model=None, tok=None, bos: int | None = None,
                     remote_url: str | None = None, on_progress=None) -> list[str]:
     """One translated string per span, entity-protected if a glossary is
     supplied. `model`/`tok`/`bos` injectable so pipeline.py controls model
@@ -955,13 +959,13 @@ def _translate_flat_sentences(flat_sentences: list[str], src_lang: str,
                                               bos=None, remote_url=remote_url, on_progress=None)
         for i, text in zip(idx, translated):
             result[i] = text
-    return result
+    return cast(list[str], result)  # every index got a translation or its own text
 
 
 def _translate_sentences(sentences: list[str], src_lang: str,
                          glossary_map: dict[str, tuple[str, str]] | None = None,
                          phrase_map: dict[str, str] | None = None,
-                         config: TranslationConfig | None = None, model=None, tok=None, bos: int = None,
+                         config: TranslationConfig | None = None, model=None, tok=None, bos: int | None = None,
                          remote_url: str | None = None, on_progress=None) -> list[str]:
     """The actual translation pipeline for a flat list of sentence
     strings -- everything translate_spans() did before dash-line
@@ -1075,6 +1079,7 @@ def _translate_sentences(sentences: list[str], src_lang: str,
                     # asr.py: a failed load_model() must still reach `finally`.
                     model, tok, bos = (_resident.acquire(config, NLLB_LANG[src_lang]) if resident
                                        else load_model(config, NLLB_LANG[src_lang]))
+                assert bos is not None  # set by the caller or by load_model/acquire above
                 translations = translate_batch(model, tok, bos, payload, config.device, config,
                                                batch_size=config.batch_size, on_progress=on_progress)
                 if run_on_positions:
@@ -1100,4 +1105,4 @@ def _translate_sentences(sentences: list[str], src_lang: str,
         result[i] = t
     for i, t in resolved.items():
         result[i] = t
-    return result
+    return cast(list[str], result)  # nllb_idx and resolved together cover every sentence

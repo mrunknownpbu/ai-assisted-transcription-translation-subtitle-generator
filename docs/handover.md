@@ -99,6 +99,19 @@ same as `CLAUDE.md`.
 
 ## Change log
 
+- 2026-10-02 — Cleared the mypy baseline: all 12 excluded modules now pass and the
+  override list is gone from `pyproject.toml`. Fixes are annotations, `Optional`
+  narrowing, and `assert x is not None` where an invariant already held (those
+  turn a would-be `TypeError` into an `AssertionError`, nothing else). Behaviour
+  changes, all small: `POST /api/jobs/{id}/cancel` returns 404 instead of a 500
+  if the job vanishes mid-cancel; the idle movie cast refresh skips a Radarr
+  movie with no path instead of logging a failed attempt; a glossary file that
+  parses to nothing no longer raises when read for its title. One
+  `# type: ignore[attr-defined]` set in `events.py` for asyncio.Queue internals.
+  Paths: `subtitle_ai/{api,worker,jobstore,translate,pipeline,cast_enrichment,
+  cast_metadata,glossary_profile,events,reference_aligner,tvdb_client}.py`,
+  `pyproject.toml`, `CLAUDE.md`. Suite: 1290 passed; ruff and mypy clean.
+
 - 2026-10-02 — `/api/health` now checks the database and worker thread (503 if
   either is down; `status`/`db_ok`/`worker_alive`/`reasons` fields added), and
   logging moved to `logging_setup.py`: job id on every line logged during a

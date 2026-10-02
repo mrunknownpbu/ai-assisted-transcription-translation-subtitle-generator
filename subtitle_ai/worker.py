@@ -398,18 +398,21 @@ class Worker(threading.Thread):
         """Movies this app has worked on (jobs with no TVDB series) that
         Radarr knows: one stale one per idle tick, like series."""
         import arr_client
+        glossary_dir = self.glossary_dir
+        if not glossary_dir:
+            return False
         seen = set()
         for job in self.store.list_by_tvdb_id(None):
             movie = arr_client.lookup(job.get("video_path") or "", ("movie",)) if job.get("video_path") else None
             tmdb_id = movie.ids.get("tmdb") if movie else None
-            if not tmdb_id or tmdb_id in seen:
+            if movie is None or not movie.path or not tmdb_id or tmdb_id in seen:
                 continue
             seen.add(tmdb_id)
             key = f"movie-{tmdb_id}"
             if not cast_enrichment.is_stale(key, now):
                 continue
             try:
-                report = cast_enrichment.enrich_movie(tmdb_id, Path(movie.path), Path(self.glossary_dir),
+                report = cast_enrichment.enrich_movie(tmdb_id, Path(movie.path), Path(glossary_dir),
                                                       imdb_id=movie.ids.get("imdb"))
                 logger.info("cast metadata for movie %s: protected %s", tmdb_id, report.get("added") or "nothing new")
             except Exception as exc:  # noqa: BLE001
@@ -586,6 +589,7 @@ class Worker(threading.Thread):
             # under media_root regardless: output goes into the real
             # library no matter where the input came from.
             source_root = self.srt_upload_dir if job.get("source_is_uploaded") else self.media_root
+            assert source_root is not None, "SRT upload directory is not configured"
             source_path = resolve_media_path(source_root, job["source_srt_path"], must_exist=True)
             work_dir = self.work_root / job_id
             on_event = self._build_on_event(job_id, "srt_translation")
@@ -643,6 +647,7 @@ class Worker(threading.Thread):
             # English source) -- exactly one output file, not two racing to
             # the same path (see _process_video's identical comment).
             if source_language_path is not None and source_language_path != destination_path:
+                assert result.source_language_srt_path is not None
                 content = Path(result.source_language_srt_path).read_text(encoding="utf-8")
                 if write_srt_atomic(source_language_path, content,
                                     allow_overwrite=job["overwrite_original"]):
@@ -651,6 +656,7 @@ class Worker(threading.Thread):
                 else:
                     self.store.append_log(job_id, f"KEEP: {source_language_path.name} already exists")
 
+            assert result.target_srt_path is not None
             content = Path(result.target_srt_path).read_text(encoding="utf-8")
             if write_srt_atomic(destination_path, content, allow_overwrite=job["overwrite_english"]):
                 outputs.append(str(destination_path))
@@ -786,6 +792,7 @@ class Worker(threading.Thread):
                 # overwrite_original/overwrite_english meaningless. Use
                 # the fully-processed target content and the target's own
                 # overwrite flag, since that's the pipeline's final output.
+                assert result.target_srt_path is not None
                 content = Path(result.target_srt_path).read_text(encoding="utf-8")
                 if write_srt_atomic(target_path, content, allow_overwrite=job["overwrite_english"]):
                     outputs.append(str(target_path))
@@ -803,6 +810,7 @@ class Worker(threading.Thread):
             # allow_overwrite=False silently declines an existing file
             # (KEEP) rather than raising, so both outputs are always
             # attempted and each one's own overwrite flag governs it.
+            assert result.source_srt_path is not None
             content = Path(result.source_srt_path).read_text(encoding="utf-8")
             if write_srt_atomic(source_path, content, allow_overwrite=job["overwrite_original"]):
                 outputs.append(str(source_path))
@@ -810,6 +818,7 @@ class Worker(threading.Thread):
             else:
                 self.store.append_log(job_id, f"KEEP: {source_path.name} already exists")
 
+            assert result.target_srt_path is not None
             content = Path(result.target_srt_path).read_text(encoding="utf-8")
             if write_srt_atomic(target_path, content, allow_overwrite=job["overwrite_english"]):
                 outputs.append(str(target_path))

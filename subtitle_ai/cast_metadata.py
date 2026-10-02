@@ -348,7 +348,7 @@ def nfo_ids(series_root: Path) -> dict[str, str]:
         root = ET.parse(series_root / "tvshow.nfo").getroot()
     except (OSError, ET.ParseError):
         return {}
-    return {u.get("type"): (u.text or "").strip() for u in root.iter("uniqueid") if u.get("type")}
+    return {t: (u.text or "").strip() for u in root.iter("uniqueid") if (t := u.get("type"))}
 
 
 def fetch_cast(tvdb_id: int, series_root: Path | None = None, *,

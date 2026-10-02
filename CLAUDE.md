@@ -32,8 +32,8 @@ uvx ruff@0.16.10 check subtitle_ai scripts tests
 uvx mypy@2.4.0 --python-executable .venv/bin/python
 ```
 
-mypy skips the 12 modules listed under `[[tool.mypy.overrides]]` (known
-errors when it was added, 2026-10-02); fix one and remove it from the list.
+mypy checks every module in `subtitle_ai/` with no exclusions (the 12-module
+baseline from when it was added was cleared 2026-10-02); new code must pass.
 
 Baseline as of 2026-09-28: 1065 passing, 0 failures (plus 89 frontend
 tests -- `cd frontend && npm test -- --run`; up from 939 after the
