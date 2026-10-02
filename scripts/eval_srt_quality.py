@@ -56,9 +56,46 @@ def readability(cues: list) -> dict:
             "cues_under_min_duration": sum(c.end - c.start < MIN_CUE_DURATION for c in cues)}
 
 
-def timing(reference: list, candidate: list) -> dict:
-    # Pair only overlapping cues.  Midpoints measure origin/timeline shifts
-    # without requiring identical subtitle segmentation.
+MIN_ANCHOR_WORDS = 3
+
+
+def _timed_words(cues: list) -> tuple[list[str], list[float]]:
+    """Every word with an interpolated time (its position inside its cue)."""
+    tokens, times = [], []
+    for cue in cues:
+        cue_words = words(cue.text)
+        for k, word in enumerate(cue_words):
+            tokens.append(word)
+            times.append(cue.start + (cue.end - cue.start) * (k + 0.5) / len(cue_words))
+    return tokens, times
+
+
+def _anchor_offsets(reference: list, candidate: list) -> list[tuple[float, float]]:
+    """(candidate time - reference time, candidate time) for every word in
+    a run of >= MIN_ANCHOR_WORDS identical words the two transcripts share.
+
+    Aligning on words rather than cues keeps the measurement honest when the
+    two files are segmented differently: pairing by time overlap picks the
+    wrong neighbour as soon as the shift exceeds a cue's length (a 5 s shift
+    against 3 s cues), and pairing by whole-cue text fails once either side
+    splits or merges cues."""
+    ref_words, ref_times = _timed_words(reference)
+    cand_words, cand_times = _timed_words(candidate)
+    matcher = difflib.SequenceMatcher(None, ref_words, cand_words, autojunk=False)
+    offsets = []
+    for block in matcher.get_matching_blocks():
+        if block.size < MIN_ANCHOR_WORDS:
+            continue
+        for k in range(block.size):
+            cand_time = cand_times[block.b + k]
+            offsets.append((cand_time - ref_times[block.a + k], cand_time))
+    return offsets
+
+
+def _cue_offsets(reference: list, candidate: list) -> list[tuple[float, float]]:
+    # Fallback for transcripts too different to anchor on words (e.g. very
+    # short cues). Pair only overlapping cues; midpoints measure
+    # origin/timeline shifts without requiring identical segmentation.
     offsets = []
     for cue in candidate:
         # Text equality is the strongest pairing signal and remains useful
@@ -70,8 +107,16 @@ def timing(reference: list, candidate: list) -> dict:
         if matches:
             nearest = min(matches, key=lambda ref: abs((ref.start + ref.end - cue.start - cue.end) / 2))
             offsets.append(((cue.start + cue.end - nearest.start - nearest.end) / 2, (cue.start + cue.end) / 2))
+    return offsets
+
+
+def timing(reference: list, candidate: list) -> dict:
+    offsets = _anchor_offsets(reference, candidate)
+    pairing = "words"
     if len(offsets) < 2:
-        return {"matched_cues": len(offsets), "mean_time_offset": None, "median_time_offset": None,
+        offsets, pairing = _cue_offsets(reference, candidate), "cues"
+    if len(offsets) < 2:
+        return {"matched_cues": len(offsets), "pairing": pairing, "mean_time_offset": None, "median_time_offset": None,
                 "p95_time_offset": None, "estimated_drift": None, "classification": "insufficient_matches"}
     values = [x[0] for x in offsets]
     mean_x = statistics.mean(x[1] for x in offsets); mean_y = statistics.mean(values)
@@ -81,7 +126,7 @@ def timing(reference: list, candidate: list) -> dict:
     p95 = sorted(values)[int(.95 * (len(values) - 1))]
     spread = statistics.pstdev(values)
     classification = "constant_offset" if abs(slope) < 0.001 and spread < 0.25 else "drift_or_nonlinear"
-    return {"matched_cues": len(offsets), "mean_time_offset": statistics.mean(values),
+    return {"matched_cues": len(offsets), "pairing": pairing, "mean_time_offset": statistics.mean(values),
             "median_time_offset": statistics.median(values), "p95_time_offset": p95,
             "estimated_drift": slope, "residual_p95": sorted(abs(x) for x in residuals)[int(.95 * (len(residuals) - 1))],
             "classification": classification}

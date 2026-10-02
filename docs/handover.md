@@ -99,6 +99,19 @@ same as `CLAUDE.md`.
 
 ## Change log
 
+- 2026-10-02 — Regression fixture for the ~5.1 s human/AI offset, and a fix to
+  the evaluator it exposed: `scripts/eval_srt_quality.py` paired cues by time
+  overlap, which pairs every cue with the wrong neighbour once the shift
+  exceeds a cue's length and the two files are segmented differently (a 5.1 s
+  shift read as a 2.5 s mean and "drift"). It now aligns on shared word runs
+  (>= 3 words), falling back to the old cue pairing only when none exist, and
+  reports `pairing: words|cues`. `tests/srt_offset_fixtures.py` builds a
+  synthetic reference and shifted / re-segmented / stepped / drifting
+  candidates with a known offset; `tests/test_eval_srt_quality.py` pins the
+  verdicts (5 of the 7 new tests fail on the old evaluator). The original
+  OPEN item below still stands: the real pair is still needed to say whether
+  the production pipeline has an offset. Suite: 1297 passed.
+
 - 2026-10-02 — Cleared the mypy baseline: all 12 excluded modules now pass and the
   override list is gone from `pyproject.toml`. Fixes are annotations, `Optional`
   narrowing, and `assert x is not None` where an invariant already held (those
