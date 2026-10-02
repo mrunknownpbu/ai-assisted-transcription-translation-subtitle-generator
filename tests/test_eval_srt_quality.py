@@ -95,3 +95,22 @@ class ReportedOffsetRegressionTests(unittest.TestCase):
         t = self._timing([srt.SrtCue(c.start + 5.0, c.end + 5.0, c.text.split()[0])
                           for c in self.reference])
         self.assertEqual(t["pairing"], "cues")
+
+
+class WindowMedianRangeTests(unittest.TestCase):
+    def _offsets(self, n, offset_at):
+        return [(offset_at(t), float(t)) for t in range(n)]
+
+    def test_constant_shift_with_noise_has_a_small_range(self):
+        import random
+        rng = random.Random(3)
+        offsets = [(5.1 + rng.uniform(-1.0, 1.0), float(t)) for t in range(600)]
+        self.assertLess(quality.window_median_range(offsets), 0.5)
+
+    def test_step_has_a_range_of_the_step(self):
+        offsets = self._offsets(600, lambda t: 0.0 if t < 300 else 5.1)
+        self.assertAlmostEqual(quality.window_median_range(offsets), 5.1, places=6)
+
+    def test_too_few_anchors_gives_no_range(self):
+        self.assertIsNone(quality.window_median_range(self._offsets(59, lambda t: 1.0)))
+

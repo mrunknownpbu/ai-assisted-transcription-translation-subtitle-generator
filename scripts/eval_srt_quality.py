@@ -110,6 +110,31 @@ def _cue_offsets(reference: list, candidate: list) -> list[tuple[float, float]]:
     return offsets
 
 
+WINDOWS = 6
+MIN_ANCHORS_PER_WINDOW = 10
+# Largest tolerated spread between windows' median offsets for a timeline to
+# count as one constant shift. Measured 2026-10-02 on four real episodes (the
+# pipeline's ASR timeline against the human subtitle): 0.04-0.10 s. A shift of
+# interest (the reported ~5.1 s) is fifty times that.
+MAX_WINDOW_MEDIAN_RANGE = 0.5
+MAX_CONSTANT_DRIFT = 0.001   # seconds of offset change per second of programme
+
+
+def window_median_range(offsets: list[tuple[float, float]]) -> float | None:
+    """Spread of the median offset across equal-count windows in time order.
+
+    Per-word offsets are noisy (words are placed by interpolation inside cues
+    that are segmented differently), so their standard deviation says little
+    about whether the timeline is shifted uniformly. Window medians remove
+    that noise: they agree for a constant shift and diverge for a step."""
+    if len(offsets) < WINDOWS * MIN_ANCHORS_PER_WINDOW:
+        return None
+    ordered = sorted(offsets, key=lambda item: item[1])
+    size = len(ordered) // WINDOWS
+    medians = [statistics.median(y for y, _ in ordered[i * size:(i + 1) * size]) for i in range(WINDOWS)]
+    return max(medians) - min(medians)
+
+
 def timing(reference: list, candidate: list) -> dict:
     offsets = _anchor_offsets(reference, candidate)
     pairing = "words"
@@ -124,11 +149,13 @@ def timing(reference: list, candidate: list) -> dict:
     slope = sum((x - mean_x) * (y - mean_y) for y, x in offsets) / denominator if denominator else 0.0
     residuals = [y - (mean_y + slope * (x - mean_x)) for y, x in offsets]
     p95 = sorted(values)[int(.95 * (len(values) - 1))]
-    spread = statistics.pstdev(values)
-    classification = "constant_offset" if abs(slope) < 0.001 and spread < 0.25 else "drift_or_nonlinear"
+    window_range = window_median_range(offsets)
+    # Too few anchors for windows (tiny files): fall back to the plain spread.
+    steady = window_range < MAX_WINDOW_MEDIAN_RANGE if window_range is not None else statistics.pstdev(values) < 0.25
+    classification = "constant_offset" if abs(slope) < MAX_CONSTANT_DRIFT and steady else "drift_or_nonlinear"
     return {"matched_cues": len(offsets), "pairing": pairing, "mean_time_offset": statistics.mean(values),
             "median_time_offset": statistics.median(values), "p95_time_offset": p95,
-            "estimated_drift": slope, "residual_p95": sorted(abs(x) for x in residuals)[int(.95 * (len(residuals) - 1))],
+            "estimated_drift": slope, "window_median_range": window_range, "residual_p95": sorted(abs(x) for x in residuals)[int(.95 * (len(residuals) - 1))],
             "classification": classification}
 
 

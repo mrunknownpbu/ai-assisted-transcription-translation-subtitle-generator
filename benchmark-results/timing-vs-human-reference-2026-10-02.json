@@ -1,0 +1,33 @@
+{
+ "date": "2026-10-02",
+ "question": "Does the pipeline's own ASR timeline sit at a constant offset from a human subtitle, on real data?",
+ "method": "scripts/eval_srt_quality.py (word-anchored) comparing the newest production-settings cached transcript (rendered as cues) with the human .tr.srt of Love Is In The Air (2020) S01E01-E04; plus ffprobe start_time of the 36 distinct videos the video jobs processed",
+ "result": {
+  "E01": {
+   "median_offset_s": -0.121,
+   "window_median_range_s": 0.094,
+   "drift_s_per_s": 1e-05
+  },
+  "E02": {
+   "median_offset_s": -0.179,
+   "window_median_range_s": 0.043,
+   "drift_s_per_s": 0.0
+  },
+  "E03": {
+   "median_offset_s": -0.176,
+   "window_median_range_s": 0.098,
+   "drift_s_per_s": 1e-05
+  },
+  "E04": {
+   "median_offset_s": -0.128,
+   "window_median_range_s": 0.064,
+   "drift_s_per_s": -3e-05
+  }
+ },
+ "container_start_times": {
+  "videos": 36,
+  "nonzero_start_time_over_50ms": 1,
+  "largest_s": 0.062
+ },
+ "interpretation": "Negative offset = candidate earlier than reference. All four classify constant_offset, ~0.12-0.18 s, far from 5.1 s. These are source-language ASR cues against a human reference of the same release; the English output was not measured. The reported ~5.1 s pair is a different file and is still missing."
+}
