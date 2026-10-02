@@ -103,9 +103,12 @@ design system; new agent guide, testing, deployment and troubleshooting docs.
 
 ## Required validation (still open)
 
-- Recreate the LIVE container from a fresh image (`./scripts/deploy.sh`) and repeat the health, API
-  and frontend checks. It was not recreated: `.env` has neither `SUBTITLE_AI_API_KEY` nor
-  `SUBTITLE_AI_ALLOW_INSECURE=1`, so the new image would refuse to start. That is the owner's call.
+- ~~Recreate the live container.~~ Done 2026-10-02 after the owner asked: `SUBTITLE_AI_API_KEY` was set in
+  `.env` (was empty) and `./scripts/deploy.sh` rebuilt and recreated the container. Verified: healthy,
+  health shows the new fields, 401 without or with a wrong key (including `POST /api/srt-translations`),
+  200 with the key, frontend 200, CUDA available, 413 jobs intact, no tracebacks. Rollback image:
+  `subtitle-ai:previous`; the old `.env` is `.env.bak-before-api-key` (both local, git-ignored). A real
+  job has not yet been run on the live container.
 - A real rescan against Plex or Jellyfin.
 - Re-run Workflow A on the Malay film to see the unsuppressed hallucinations again after any signature work.
 - Re-check CI after pushing.
