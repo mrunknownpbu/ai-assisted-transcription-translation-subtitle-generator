@@ -25,8 +25,22 @@ and route-level screens in `frontend/src/pages/`.
    QC is advisory; UI copy must not describe either as a guarantee.
 6. **Retain user work.** Failed queue actions stay selected, and form state
    should survive recoverable request failures.
+7. **Operational, not decorative.** Information-dense but readable; minimal
+   visual noise; predictable interactions; consistent spacing.
+8. **Keyboard-friendly and accessible.** Native controls first, visible focus,
+   text alongside colour, sufficient contrast, layouts that wrap on narrow screens.
 
 ## Information hierarchy
+
+Each screen answers one question and does not mix operations with configuration:
+
+| Screen | Question it answers |
+|---|---|
+| Library | What media needs subtitle processing? |
+| Jobs | What is happening now, and what needs attention? |
+| Job detail | What exactly was generated, and what needs correction? |
+| Series | What terminology and metadata govern this series? |
+| Translate Subtitle | How do I translate an existing subtitle? |
 
 | Surface | Primary information | Secondary information |
 |---|---|---|
@@ -35,6 +49,47 @@ and route-level screens in `frontend/src/pages/`.
 | Jobs | Status, stage, progress, and review count | Timing, language, concise event summary |
 | Job detail | Final state, QC findings, logs, and output | Text-only subtitle editor for completed jobs |
 | Series | Series identity and glossary state | Mined suggestions and cast-enrichment evidence |
+
+## Tokens
+
+`frontend/src/styles/tokens.css` is the only place raw colours, scales and
+durations are defined. `global.css` and components use the variables. A test
+(`styles/tokens.test.ts`) fails on a hex or `rgb()` colour anywhere else and on an
+inline `style` other than the progress-bar width.
+
+**Colour semantics**
+
+| Token | Meaning | Used for |
+|---|---|---|
+| `--color-success` | success | completed, confirmed |
+| `--color-warning` | needs attention | flagged cues, review count |
+| `--color-error` | failure | failed jobs, error toasts |
+| `--color-info` | informational / interactive | links, active nav, primary actions |
+| `--color-neutral` | inert | muted text, idle |
+| `--color-running` | job is running | = info |
+| `--color-queued` | job is waiting | = neutral |
+| `--color-cancelled` | job was cancelled | = neutral |
+| `--tint-*` | row backgrounds | selected, subtle highlight, flagged |
+| `--color-surface`, `-hover`, `--color-border` | surfaces | panels, rows, rules |
+| `--color-text`, `-muted`, `-on-accent` | text | |
+
+Status is never conveyed by colour alone: every badge and stage shows its text.
+
+**Scales**
+
+| Group | Tokens |
+|---|---|
+| Spacing (4 px base) | `--space-1` 4, `-2` 8, `-3` 12, `-4` 16, `-5` 24, `-6` 32 |
+| Radius | `--radius-sm` 4, `-md` 6, `-lg` 8, `-badge` 10, `-pill` 14 |
+| Type | `--font-sans`; sizes `--font-size-xs` 11, `-sm` 12, `-md` 13, `-base` 14, `-lg` 18; `--line-height-base` 1.5 |
+| Elevation | flat; only floating layers use `--shadow-floating` |
+| Motion | `--motion-progress` (progress bar width); no other animation |
+| Breakpoint | 800 px (the two-column workspace collapses). CSS variables cannot be used in media queries, so it is repeated literally. |
+| Component sizing | rows and controls size to content with `--space-*` padding; no fixed heights |
+
+Existing declarations in `global.css` still use literal spacing, radius and font
+sizes that match the scale; they migrate to the tokens when a rule is touched. The
+colour rule is enforced; the spacing and type rules are not.
 
 ## Components and behavior
 
@@ -85,10 +140,27 @@ and route-level screens in `frontend/src/pages/`.
 - Keep UI copy aligned with actual backend semantics, especially overwrite,
   advisory QC, and job terminal states.
 
+## Component catalogue
+
+What exists in `frontend/src/components/` and what each is for. Add a shared
+component only when a second use appears.
+
+| Component | Purpose |
+|---|---|
+| `JobStatusBadge` | The one rendering of job state (text + colour). |
+| `ProgressBar` | Server-provided stage and progress. No client-invented progress. |
+| `JobTable`, `ManualGlossaryTable`, `GlossarySuggestionsTable` | Operational tables with row actions beside the item. |
+| `MediaBrowser`, `AudioStreamPicker` | Library navigation and audio-stream choice. |
+| `SrtEditor` | Text-only cue editing. |
+| `QcFindingsList`, `CastReportPanel` | QC and cast-evidence views. |
+| `Toast` | Request feedback. |
+
+Not built yet (tracked in the handover, build when a screen needs them): a
+dialog, a tabs component (tabs are CSS-only today), a shared empty/error/loading
+state, and a job timeline.
+
 ## See also
 
-`docs/handover.md` (start here — the current session-to-session log),
-`docs/architecture.md` for the API/data shapes these components render,
-`CLAUDE.md` for dated records of UI-affecting backend decisions (e.g. what a
-status or QC field can actually contain), and `docs/agents.md`'s handover
-section for how to reconstruct current state at the start of a session.
+`docs/architecture.md` (frontend layers), `docs/api.md` (the shapes these
+components render), `docs/product-requirements.md` (what the screens must
+answer), `docs/handover.md`.
