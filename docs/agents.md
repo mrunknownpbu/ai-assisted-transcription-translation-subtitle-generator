@@ -8,10 +8,11 @@ in Subtitle AI. It's one of four durable-intent documents in `docs/`
 that describe what the system is and should do; `README.md` is the
 deployment- and API-facing reference (it has its own, overlapping
 "Architecture" section — where the two disagree on a structural detail,
-prefer `docs/architecture.md` and fix the drift); `CLAUDE.md` is the one place
-that records what actually happened — operational constraints, real-data
-measurements, and dated historical decisions — and wins over all of the above
-when something has changed since they were last updated.
+prefer `docs/architecture.md` and fix the drift); `CLAUDE.md` holds the standing
+rules and commands, and `docs/decisions/` (indexed in its `README.md`) is the
+one place that records what actually happened — real-data measurements and
+dated historical decisions; together with `docs/operations.md` they win over
+all of the above when something has changed since they were last updated.
 
 ## Picking up where another session left off
 
@@ -26,8 +27,9 @@ Use this order at the start of every session:
 3. `git log --oneline -30` — what actually shipped most recently. If a
    commit's one-line summary doesn't tell you enough, `git show <hash>` or
    read its `CLAUDE.md` entry.
-4. The tail of `CLAUDE.md` (`grep -n '^## ' CLAUDE.md | tail -20`, then read
-   the newest entries in full) — dated, evidence-based records of what was
+4. `CLAUDE.md`, then the newest rows of `docs/decisions/README.md` (read those
+   entries in full; a `CLAUDE.md ("<title>")` reference elsewhere means the
+   entry with that title there) — dated, evidence-based records of what was
    built, measured, shipped, shipped-but-off, or deliberately deferred. This
    is the actual source of truth for current behavior and defaults, ranked
    above this guide, the README, and any other document when they disagree.
