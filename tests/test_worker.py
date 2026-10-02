@@ -463,6 +463,40 @@ class LanguageDetectionFailureTests(WorkerTestCase):
         self.assertEqual(final["error_category"], "UNSUPPORTED_LANGUAGE")
 
 
+class FreshTranscriptionTests(WorkerTestCase):
+    """Every job transcribes afresh unless reuse is explicitly enabled."""
+
+    def _run_job(self, env=None, retry=False):
+        worker = Worker(self.store, str(self.media_root), str(self.work_root),
+                        transcript_cache_dir=str(Path(self.tmp.name) / "transcripts"))
+        job = self.store.create("Show/S01E01.mkv", "tr")
+        if retry:
+            self.store.finish(job["id"], "failed", error="x")
+            job = self.store.retry(job["id"])
+        with patch.dict("os.environ", env or {}, clear=False), \
+             patch.object(worker_mod.pipeline, "run") as mock_run:
+            mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
+            worker._process(self.store.claim())
+        return mock_run.call_args.kwargs
+
+    def test_default_is_fresh_but_the_cache_is_still_written(self):
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("SUBTITLE_AI_REUSE_TRANSCRIPT_CACHE", None)
+            kwargs = self._run_job()
+        self.assertFalse(kwargs["reuse_cached_transcript"])
+        self.assertTrue(kwargs["transcript_cache_dir"].endswith("transcripts"))
+
+    def test_reuse_can_be_enabled_explicitly(self):
+        kwargs = self._run_job({"SUBTITLE_AI_REUSE_TRANSCRIPT_CACHE": "on"})
+        self.assertTrue(kwargs["reuse_cached_transcript"])
+
+    def test_a_retry_never_reuses_even_when_enabled(self):
+        kwargs = self._run_job({"SUBTITLE_AI_REUSE_TRANSCRIPT_CACHE": "on"}, retry=True)
+        self.assertFalse(kwargs["reuse_cached_transcript"])
+        self.assertTrue(kwargs["transcript_cache_dir"].endswith("transcripts"))
+
+
 class ConfigSnapshotTests(WorkerTestCase):
     def test_a_started_job_records_the_configuration_it_ran_with(self):
         self.store.create("Show/S01E01.mkv", "tr")

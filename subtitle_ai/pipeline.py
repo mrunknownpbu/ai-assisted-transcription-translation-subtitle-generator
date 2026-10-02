@@ -186,6 +186,7 @@ def run(video_path: str, media_root: str, work_dir: str, *,
        whisper_model=None, translation_model=None, translation_tok=None, translation_bos=None,
        translate_remote_url: str | None = None,
        stream_sampler=None, transcript_cache_dir: str | None = None,
+       reuse_cached_transcript: bool = True,
        write_output: bool = True, allow_overwrite: bool = False,
        low_confidence_threshold: float = DEFAULT_LOW_CONFIDENCE_THRESHOLD,
        low_confidence_action: str = DEFAULT_LOW_CONFIDENCE_ACTION,
@@ -304,7 +305,7 @@ def run(video_path: str, media_root: str, work_dir: str, *,
             lookup_key = cache_key(media_hash, audio_stream_index, selected_stream.codec,
                                    source_lang, estimated_model, None, PIPELINE_VERSION)
         cache_path = Path(transcript_cache_dir) / f"{lookup_key}.json"
-        if cache_path.exists():
+        if reuse_cached_transcript and cache_path.exists():
             try:
                 candidate = CanonicalTranscript.load(cache_path)
             except (OSError, ValueError, KeyError):

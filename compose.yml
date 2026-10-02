@@ -84,6 +84,8 @@ services:
       # Log format (text|json) and level; see logging_setup.py.
       SUBTITLE_AI_LOG_FORMAT: ${SUBTITLE_AI_LOG_FORMAT:-}
       SUBTITLE_AI_LOG_LEVEL: ${SUBTITLE_AI_LOG_LEVEL:-}
+      # Off (empty) = every job transcribes afresh; on = reuse a cached transcript.
+      SUBTITLE_AI_REUSE_TRANSCRIPT_CACHE: ${SUBTITLE_AI_REUSE_TRANSCRIPT_CACHE:-}
       SUBTITLE_AI_ALLOW_INSECURE: ${SUBTITLE_AI_ALLOW_INSECURE:-}
       SUBTITLE_AI_BIND_HOST: ${SUBTITLE_AI_BIND_HOST:-}
       # Empty = defaults (24h failed-job scratch retention; ASR hotwords

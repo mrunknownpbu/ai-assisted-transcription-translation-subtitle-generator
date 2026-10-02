@@ -66,8 +66,9 @@ docker compose logs -f subtitle-ai
 ```
 
 Recreating the container interrupts a running job; on start the store re-queues
-interrupted jobs (up to 3 automatic recoveries) and a cached transcript makes the
-re-run cheap. Check the queue is idle first (`curl localhost:8099/api/queue`).
+interrupted jobs (up to 3 automatic recoveries); each re-run transcribes afresh
+(`SUBTITLE_AI_REUSE_TRANSCRIPT_CACHE` is off), so a recovered job pays its full
+transcription time again. Check the queue is idle first (`curl localhost:8099/api/queue`).
 
 Rollback: keep the previous image before building (`docker tag subtitle-ai:dev
 subtitle-ai:previous`), and re-tag and `docker compose up -d` to go back. The job

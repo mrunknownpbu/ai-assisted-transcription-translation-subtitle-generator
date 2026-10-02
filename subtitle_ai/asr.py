@@ -100,6 +100,16 @@ def hotwords_enabled() -> bool:
     return os.environ.get("SUBTITLE_AI_ASR_HOTWORDS", "").strip().lower() in {"on", "1", "true", "yes"}
 
 
+def reuse_cached_transcripts() -> bool:
+    """SUBTITLE_AI_REUSE_TRANSCRIPT_CACHE=on|1|true|yes lets a job reuse a
+    cached transcript of the same media, stream, model and settings. Off by
+    default: every job transcribes the audio afresh. Transcripts are still
+    WRITTEN to the cache either way (name correction's series vocabulary reads
+    them); only reuse is switched off."""
+    import os
+    return os.environ.get("SUBTITLE_AI_REUSE_TRANSCRIPT_CACHE", "").strip().lower() in {"on", "1", "true", "yes"}
+
+
 # Natural-dialogue plan step 5 (gated, off by default): a short sample of
 # ordinary sentence-case Turkish dialogue, WITH the punctuation and
 # interjections real dialogue has, in the hope Whisper's decoder leans

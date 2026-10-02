@@ -139,7 +139,7 @@ Plex/Jellyfin (rescan), a failure webhook.
 | Correctness | No text is invented: suppressed hallucinations never reach the translation. | Hallucination QC and signature tests; coverage on real corpora is `TBD - requires measurement`. |
 | Reliability | A failed, cancelled or crashed job leaves any existing subtitle byte-identical. | Atomic-write tests. |
 | Reliability | A restart recovers interrupted jobs; a bounded number of automatic re-runs, then a typed failure. | Job-store recovery tests. |
-| Determinism | The same audio, configuration and models give the same transcript and subtitle. | Transcript cache keyed by media, stream, model and pipeline version; bit-for-bit repeatability on GPU is `TBD - requires measurement`. |
+| Determinism | Every job transcribes the audio afresh (transcript reuse is opt-in), so a result reflects the current models and settings, not an earlier run. | Reuse is off by default (`SUBTITLE_AI_REUSE_TRANSCRIPT_CACHE`); run-to-run repeatability of GPU decoding is `TBD - requires measurement` (observed 2026-10-02: the same episode gave 192 then 147 transcription QC findings). |
 | Reproducibility | A job records the configuration it ran with. | `config_snapshot` on every started job. |
 | Observability | Every job log line carries the job ID; a failure names the stage and a stable error code. | Log and error tests. |
 | Security | See section 6. | |

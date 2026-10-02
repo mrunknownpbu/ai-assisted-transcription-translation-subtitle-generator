@@ -19,6 +19,7 @@ import traceback
 from pathlib import Path
 
 import api
+import asr
 import auto_glossary
 import errors
 import cast_enrichment
@@ -724,7 +725,11 @@ class Worker(threading.Thread):
             # overwrite_original/overwrite_english KEEP/REPLACE flags,
             # which govern only the final on-disk SRT write, below --
             # neither one substitutes for the other.
-            cache_dir = None if job.get("retry_of_job_id") else self.transcript_cache_dir
+            # Reuse is off by default (asr.reuse_cached_transcripts): every job
+            # transcribes afresh, and a retry never reuses one regardless. The
+            # cache directory is passed either way so the fresh transcript is
+            # stored and name correction can read the series' other transcripts.
+            reuse_cache = asr.reuse_cached_transcripts() and not job.get("retry_of_job_id")
             glossary_profile_obj = self._load_glossary_profile(job["video_path"])
             glossary_entities = glossary_profile_obj.entities
             glossary_phrases = glossary_profile_obj.phrases
@@ -771,7 +776,8 @@ class Worker(threading.Thread):
                     source_lang=source_lang, audio_stream_index=job.get("requested_audio_stream"),
                     glossary_entities=glossary_entities,
                     glossary_phrases=glossary_phrases,
-                    transcript_cache_dir=cache_dir,
+                    transcript_cache_dir=self.transcript_cache_dir,
+                    reuse_cached_transcript=reuse_cache,
                     translate_remote_url=self.translate_server_url,
                     write_output=True, allow_overwrite=True,   # scratch dir only -- always safe to overwrite
                     name_correction_context=name_context,

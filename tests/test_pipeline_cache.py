@@ -86,6 +86,23 @@ class TranscriptCacheTests(unittest.TestCase):
         self.assertEqual(asr_mock.call_count, 1, "second identical run must reuse the cache, not call ASR again")
         self.assertEqual(result2.detected_source_language, "tr")
 
+    def test_reuse_off_runs_asr_again_and_replaces_the_cache_entry(self):
+        first = unittest.mock.Mock(return_value=self._fake_transcript("tr", 0.95))
+        self._run(first, source_lang="auto")
+        entries = list(self.cache_dir.glob("*.json"))
+        self.assertEqual(len(entries), 1)
+        before = entries[0].read_bytes()
+        events = []
+        second = unittest.mock.Mock(return_value=self._fake_transcript("tr", 0.99))
+        self._run(second, source_lang="auto", reuse_cached_transcript=False,
+                  on_event=lambda name, data: events.append(name))
+        self.assertEqual(second.call_count, 1, "reuse off must transcribe again despite a cache hit")
+        self.assertNotIn("ASR_CACHE_HIT", events)
+        self.assertIn("ASR_CACHE_STORED", events)
+        after = list(self.cache_dir.glob("*.json"))
+        self.assertEqual(len(after), 1)
+        self.assertNotEqual(after[0].read_bytes(), before, "the fresh transcript replaces the cached one")
+
     def test_manual_mode_cache_hit_and_miss(self):
         asr_mock = unittest.mock.Mock(return_value=self._fake_transcript("ja", 1.0))
         self._run(asr_mock, source_lang="ja")
