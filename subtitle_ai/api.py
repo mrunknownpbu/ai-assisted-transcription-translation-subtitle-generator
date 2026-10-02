@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import alerting
@@ -140,6 +140,7 @@ _store: JobStore | None = None
 _media_root: str = "/data"
 _glossary_dir: str | None = None
 _glossary_suggestions_dir: str | None = None
+_HEARTBEAT_STALE_SECONDS = 3600.0
 _worker = None  # registered via register_worker() -- see its docstring
 _srt_upload_dir: str | None = None
 _work_root: str | None = None
@@ -256,9 +257,16 @@ class RetryRequest(BaseModel):
     audio_stream_index: int | None = Field(default=None, ge=0)
 
 
-@app.get("/api/health")
-def health() -> dict:
-    result = {"ok": True, "queue": "sqlite"}
+@app.get("/api/health", response_model=None)
+def health() -> dict | JSONResponse:
+    result: dict = {"ok": True, "queue": "sqlite", "status": "ok"}
+    reasons: list[str] = []
+    try:
+        _store.ping()
+        result["db_ok"] = True
+    except Exception:
+        result["db_ok"] = False
+        reasons.append("database unreachable")
     # Real gap this closes (production-readiness audit, 2026-09-21): a
     # wedged-but-not-crashed worker thread previously still reported the
     # API as healthy, since this endpoint only ever reflected the API
@@ -266,8 +274,29 @@ def health() -> dict:
     # all (e.g. a bare create_app() in a test) -- distinct from a real,
     # stale heartbeat.
     if _worker is not None:
-        result["worker_last_heartbeat_seconds_ago"] = time.time() - _worker.last_heartbeat
+        age = time.time() - _worker.last_heartbeat
+        result["worker_last_heartbeat_seconds_ago"] = age
+        # Test doubles may not be threads; only a real thread can be dead.
+        is_alive = getattr(_worker, "is_alive", None)
+        if is_alive is not None:
+            result["worker_alive"] = bool(is_alive())
+            if not result["worker_alive"]:
+                reasons.append("worker thread is not running")
+        # The heartbeat ticks every poll when idle and on every pipeline
+        # event during a job, so a long silent stage can legitimately go
+        # quiet: only a long gap counts as a stall.
+        if result.get("worker_alive", True) and age > _HEARTBEAT_STALE_SECONDS:
+            reasons.append(f"worker heartbeat stale for {int(age)}s")
     result["nllb_resident"] = translate.resident_model_loaded()
+    if reasons:
+        result["status"] = "degraded"
+        result["reasons"] = reasons
+        # A dead worker or unreachable database is not a healthy service:
+        # fail the HTTP check so the container healthcheck sees it. A stale
+        # heartbeat alone is reported but stays 200 (could be a slow stage).
+        if not result["db_ok"] or result.get("worker_alive") is False:
+            result["ok"] = False
+            return JSONResponse(result, status_code=503)
     return result
 
 

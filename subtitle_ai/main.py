@@ -4,11 +4,11 @@
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 
 import api
+import logging_setup
 import startup_guard
 import translate
 import workdir
@@ -24,7 +24,7 @@ from worker import Worker
 # existing log-aggregation stack to format for specifically -- adding a
 # JSON formatter now would be speculative complexity with nothing to
 # consume it yet.
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging_setup.configure()
 
 # Fail fast, before any model/DB/worker setup, rather than serve an open API
 # beyond loopback by accident -- see startup_guard.py.

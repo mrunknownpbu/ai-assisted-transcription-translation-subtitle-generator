@@ -81,6 +81,9 @@ services:
       SUBTITLE_AI_API_KEY: ${SUBTITLE_AI_API_KEY:-}
       # The container listens on 0.0.0.0, so without a key it refuses to
       # start unless this acknowledges an open API on a trusted network.
+      # Log format (text|json) and level; see logging_setup.py.
+      SUBTITLE_AI_LOG_FORMAT: ${SUBTITLE_AI_LOG_FORMAT:-}
+      SUBTITLE_AI_LOG_LEVEL: ${SUBTITLE_AI_LOG_LEVEL:-}
       SUBTITLE_AI_ALLOW_INSECURE: ${SUBTITLE_AI_ALLOW_INSECURE:-}
       SUBTITLE_AI_BIND_HOST: ${SUBTITLE_AI_BIND_HOST:-}
       # Empty = defaults (24h failed-job scratch retention; ASR hotwords

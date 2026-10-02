@@ -785,7 +785,8 @@ class StaticFileTests(unittest.TestCase):
     def test_fallback_never_shadows_api_routes(self):
         r = self.client.get("/api/health")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json(), {"ok": True, "queue": "sqlite", "nllb_resident": False})
+        self.assertEqual(r.json(), {"ok": True, "queue": "sqlite", "status": "ok", "db_ok": True,
+                                          "nllb_resident": False})
 
     def test_unknown_api_path_still_404s_not_html(self):
         r = self.client.get("/api/does-not-exist")
@@ -1468,3 +1469,41 @@ class ListSummaryTests(ApiTestCase):
         detail = detail.get("job", detail)
         self.assertEqual(len(detail["qc"]["readability"]["findings"]), 2)
         self.assertEqual(detail["log"][0]["message"], "hello")
+
+
+class HealthStatusTests(ApiTestCase):
+    def _register(self, **attrs):
+        import time
+        import types
+        attrs.setdefault("last_heartbeat", time.time())
+        api.register_worker(types.SimpleNamespace(**attrs))
+        self.addCleanup(api.register_worker, None)
+
+    def test_reports_database_and_worker_ok(self):
+        self._register(is_alive=lambda: True)
+        body = self.client.get("/api/health").json()
+        self.assertEqual((body["status"], body["db_ok"], body["worker_alive"]), ("ok", True, True))
+        self.assertNotIn("reasons", body)
+
+    def test_dead_worker_thread_is_503(self):
+        self._register(is_alive=lambda: False)
+        r = self.client.get("/api/health")
+        self.assertEqual(r.status_code, 503)
+        self.assertFalse(r.json()["ok"])
+        self.assertEqual(r.json()["status"], "degraded")
+        self.assertIn("worker thread is not running", r.json()["reasons"])
+
+    def test_unreachable_database_is_503(self):
+        with patch.object(api._store, "ping", side_effect=RuntimeError("disk gone")):
+            r = self.client.get("/api/health")
+        self.assertEqual(r.status_code, 503)
+        self.assertFalse(r.json()["db_ok"])
+
+    def test_stale_heartbeat_degrades_but_stays_200(self):
+        import time
+        self._register(is_alive=lambda: True, last_heartbeat=time.time() - 7200)
+        r = self.client.get("/api/health")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["ok"])
+        self.assertEqual(r.json()["status"], "degraded")
+        self.assertTrue(any("heartbeat stale" in x for x in r.json()["reasons"]))

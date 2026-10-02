@@ -426,6 +426,11 @@ class JobStore:
                     (limit, offset)).fetchall()
         return [self._row_to_dict(r) for r in rows], total
 
+    def ping(self) -> None:
+        """Raise if the database can't be opened and queried."""
+        with self._connect() as conn:
+            conn.execute("SELECT 1").fetchone()
+
     def counts(self) -> dict[str, int]:
         with self._connect() as conn:
             rows = conn.execute("SELECT status, COUNT(*) as n FROM jobs GROUP BY status").fetchall()

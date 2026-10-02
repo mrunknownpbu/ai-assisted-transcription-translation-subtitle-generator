@@ -99,6 +99,15 @@ same as `CLAUDE.md`.
 
 ## Change log
 
+- 2026-10-02 — `/api/health` now checks the database and worker thread (503 if
+  either is down; `status`/`db_ok`/`worker_alive`/`reasons` fields added), and
+  logging moved to `logging_setup.py`: job id on every line logged during a
+  job, optional JSON output (`SUBTITLE_AI_LOG_FORMAT=json`), `SUBTITLE_AI_LOG_LEVEL`.
+  Paths: `subtitle_ai/{logging_setup.py,api.py,worker.py,jobstore.py,main.py}`,
+  `compose.yml`, `.env.example`, `README.md`, `tests/test_{logging_setup,api}.py`.
+  Not done: metrics (Prometheus) and logging from pipeline/ASR stages beyond
+  the job-id tag. Suite: 1290 passed.
+
 - 2026-10-02 — Added ruff (correctness rules: E4/E7/E9/F) and mypy to CI, config
   in `pyproject.toml`; removed 22 unused imports. mypy excludes 12 modules with
   68 existing errors (list in `[[tool.mypy.overrides]]`) -- OPEN: burn that

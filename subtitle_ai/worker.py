@@ -25,6 +25,7 @@ import glossary_profile
 import media_servers
 import name_correction
 import gpu
+import logging_setup
 import pipeline
 import srt_translation
 import upload_cleanup
@@ -440,17 +441,23 @@ class Worker(threading.Thread):
                     logger.exception("worker failed during idle cast refresh")
                 self._stop_event.wait(self.poll_interval)
                 continue
-            try:
-                self._process(job)
-            except Exception as exc:
-                job_id = job.get("id", "<unknown>")
-                logger.exception("job %s escaped worker error handling", job_id)
+            with logging_setup.job_context(job.get("id")):
                 try:
-                    self.store.finish(job_id, "failed", error=str(exc)[:500],
-                                      error_category="WORKER_ERROR")
-                except Exception:
-                    logger.exception("worker could not record escaped failure for job %s", job_id)
-                self._stop_event.wait(self.poll_interval)
+                    started = time.time()
+                    logger.info("job started (%s)", job.get("job_type", "video"))
+                    self._process(job)
+                    final = self.store.get(job["id"]) or {}
+                    logger.info("job finished: %s in %.1fs", final.get("status", "unknown"),
+                                time.time() - started)
+                except Exception as exc:
+                    job_id = job.get("id", "<unknown>")
+                    logger.exception("job %s escaped worker error handling", job_id)
+                    try:
+                        self.store.finish(job_id, "failed", error=str(exc)[:500],
+                                          error_category="WORKER_ERROR")
+                    except Exception:
+                        logger.exception("worker could not record escaped failure for job %s", job_id)
+                    self._stop_event.wait(self.poll_interval)
         logger.info("worker thread stopped")
 
     def _build_on_event(self, job_id: str, job_type: str = "video"):
