@@ -97,14 +97,66 @@ class EpisodeNamesTests(unittest.TestCase):
 
 
 class SeriesVocabularyTests(unittest.TestCase):
-    def test_counts_lowercase_words_and_excludes_the_reference(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cue = "1\n00:00:01,000 --> 00:00:02,000\n{}\n\n"
-            Path(tmp, "S01E01.tr.srt").write_text(cue.format("Çilek yedim, çilek güzel."), encoding="utf-8")
-            Path(tmp, "S01E02.tr.srt").write_text(cue.format("çilek"), encoding="utf-8")
-            nc._series_vocab_cache.clear()
-            self.assertEqual(nc.series_vocabulary(Path(tmp), "tr")["cilek"], 2)
-            self.assertEqual(nc.series_vocabulary(Path(tmp), "tr", exclude=Path(tmp, "S01E02.tr.srt"))["cilek"], 1)
+    """The series vocabulary comes from audio-derived cached transcripts,
+    never from subtitle files."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.series = Path(self.tmp.name) / "media" / "Show"
+        self.cache = Path(self.tmp.name) / "cache"
+        self.cache.mkdir()
+        nc._series_vocab_cache.clear()
+
+    def _cache(self, name, media, words, *, language="tr", created=1.0, suppressed=False):
+        import json
+        data = {"media_path": str(self.series / media), "media_hash": name, "audio_stream_index": 0,
+                "language": language, "created_at": created,
+                "segments": [{"suppressed": suppressed,
+                              "words": [{"text": w} for w in words]}]}
+        (self.cache / f"{name}.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def test_counts_lowercase_words_of_other_episodes_and_excludes_the_current_one(self):
+        self._cache("a", "S01E01.mkv", ["Çilek", "yedim", "çilek"])
+        self._cache("b", "S01E02.mkv", ["çilek"])
+        vocab = nc.series_vocabulary(self.series, "tr", self.cache)
+        self.assertEqual(vocab["cilek"], 2)   # lowercase only: "Çilek" is not counted
+        only_other = nc.series_vocabulary(self.series, "tr", self.cache,
+                                          exclude_media=self.series / "S01E02.mkv")
+        self.assertEqual(only_other["cilek"], 1)
+
+    def test_subtitle_files_are_never_read(self):
+        (self.series).mkdir(parents=True)
+        (self.series / "S01E09.tr.srt").write_text(
+            "1\n00:00:01,000 --> 00:00:02,000\nçilek çilek çilek\n\n", encoding="utf-8")
+        self._cache("a", "S01E01.mkv", ["yedim"])
+        self.assertEqual(nc.series_vocabulary(self.series, "tr", self.cache)["cilek"], 0)
+
+    def test_other_series_languages_and_suppressed_segments_are_ignored(self):
+        self._cache("a", "S01E01.mkv", ["çilek"], language="ms")
+        self._cache("b", "S01E02.mkv", ["çilek"], suppressed=True)
+        import json
+        other = json.loads((self.cache / "a.json").read_text())
+        other["media_path"] = str(Path(self.tmp.name) / "media" / "Other" / "S01E01.mkv")
+        other["language"] = "tr"
+        (self.cache / "c.json").write_text(json.dumps(other), encoding="utf-8")
+        self.assertEqual(nc.series_vocabulary(self.series, "tr", self.cache)["cilek"], 0)
+
+    def test_only_the_newest_cache_entry_per_episode_counts(self):
+        self._cache("old", "S01E01.mkv", ["çilek"], created=1.0)
+        self._cache("new", "S01E01.mkv", ["çilek", "çilek"], created=2.0)
+        self.assertEqual(nc.series_vocabulary(self.series, "tr", self.cache)["cilek"], 2)
+
+    def test_missing_cache_or_series_gives_an_empty_vocabulary(self):
+        self.assertEqual(nc.series_vocabulary(None, "tr", self.cache), nc.Counter())
+        self.assertEqual(nc.series_vocabulary(self.series, "tr", None), nc.Counter())
+        self.assertEqual(nc.series_vocabulary(self.series, "tr", Path(self.tmp.name) / "nope"), nc.Counter())
+
+    def test_new_cache_files_invalidate_the_memo(self):
+        self._cache("a", "S01E01.mkv", ["çilek"])
+        self.assertEqual(nc.series_vocabulary(self.series, "tr", self.cache)["cilek"], 1)
+        self._cache("b", "S01E02.mkv", ["çilek"])
+        self.assertEqual(nc.series_vocabulary(self.series, "tr", self.cache)["cilek"], 2)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not available")
@@ -141,6 +193,20 @@ class PipelineIntegrationTests(unittest.TestCase):
 
     def test_corrected_name_reaches_translation(self):
         text, events = self.run_pipeline({"names_here": {"Aydan"}, "known": {"Aydan"}, "series_root": None})
+        self.assertIn("Aydan", text)
+        self.assertEqual(events["NAME_CORRECTIONS_APPLIED"]["words"], 1)
+
+    def test_subtitle_files_never_influence_the_transcript(self):
+        """Audio is the only source for Workflow A: a series subtitle that
+        writes "aydın" lowercase everywhere must neither veto the
+        correction nor even be parsed."""
+        series = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, series, ignore_errors=True)
+        (series / "S01E09.tr.srt").write_text(
+            "1\n00:00:01,000 --> 00:00:02,000\n" + "aydın " * 20 + "\n\n", encoding="utf-8")
+        with patch("srt.parse", side_effect=AssertionError("a subtitle file was parsed")):
+            text, events = self.run_pipeline(
+                {"names_here": {"Aydan"}, "known": {"Aydan"}, "series_root": series})
         self.assertIn("Aydan", text)
         self.assertEqual(events["NAME_CORRECTIONS_APPLIED"]["words"], 1)
 

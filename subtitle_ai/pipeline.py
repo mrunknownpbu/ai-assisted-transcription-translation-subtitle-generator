@@ -182,7 +182,6 @@ def run(video_path: str, media_root: str, work_dir: str, *,
        source_lang: str = AUTO, audio_stream_index: int | None = None,
        glossary_entities: list[glossary_mod.Entity] | None = None,
        glossary_phrases: list[glossary_mod.PhraseEntry] | None = None,
-       extra_hotwords: list[str] | None = None,
        asr_config: AsrConfig | None = None, translation_config=None,
        whisper_model=None, translation_model=None, translation_tok=None, translation_bos=None,
        translate_remote_url: str | None = None,
@@ -266,15 +265,12 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     # them into the output. Built here (flat surface forms, not the
     # placeholder-keyed glossary_map below) because ASR runs before that
     # map exists.
-    # extra_hotwords (auto-mined, see auto_glossary.py) feeds ASR bias
-    # ONLY -- unioned here with the manually-curated surface forms, but
-    # never reaching glossary_map/build_glossary() below, which is what
-    # actually drives translation-time protect()/restore(). A false-
-    # positive here is a mild decoding bias; a false-positive there would
-    # silently corrupt genuine dialogue translation with no human review
-    # -- see auto_glossary.py module docstring.
+    # Only curated glossary entries (human-reviewed or cast-metadata backed)
+    # may bias ASR. Names mined from subtitle files never do: an existing
+    # subtitle must not influence Workflow A's reading of the audio (see
+    # docs/decisions/2026-10-02-audio-only-asr-inputs.md).
     hotwords = " ".join(sorted(
-        {form for e in (glossary_entities or []) for form in e.surface_forms} | set(extra_hotwords or [])
+        {form for e in (glossary_entities or []) for form in e.surface_forms}
     )) or None
     # Off by default: on real E01 data the list induced Title Case output
     # and dropped audio windows (asr.py module docstring has the numbers).
@@ -378,8 +374,9 @@ def run(video_path: str, media_root: str, work_dir: str, *,
     # worker's {"names_here", "known", "series_root"}; None = off.
     if name_correction_context and name_correction_context.get("names_here"):
         import name_correction
-        series_vocab = name_correction.series_vocabulary(name_correction_context.get("series_root"),
-                                                         transcript.language)
+        series_vocab = name_correction.series_vocabulary(
+            name_correction_context.get("series_root"), transcript.language, transcript_cache_dir,
+            exclude_media=transcript.media_path)
         vocabulary = name_correction.lowercase_vocabulary(live_words, series_vocab)
         live_words = name_correction.correct_words(live_words, name_correction_context["names_here"],
                                                    name_correction_context["known"], vocabulary)

@@ -8,12 +8,11 @@ transcript and picking out recurring names by hand -- a one-off chore
 that has to be redone per series and misses names that only become
 obviously recurring once several episodes exist.
 
-Safety framing (deliberate, load-bearing design decision -- see
-worker.py's Worker._load_auto_hotwords and pipeline.py's `run()`):
-names found here feed ASR `hotwords` ONLY, never translation-time
-protect()/restore() (glossary.build_glossary()). A false-positive
-hotword is a mild decoding bias with no correctness risk; a false-
-positive PROTECTED entity would silently corrupt genuine dialogue
+Safety framing (deliberate, load-bearing design decision): names found
+here are SUGGESTIONS for human review in the Series page. They feed neither
+ASR (an existing subtitle must not influence Workflow A's reading of the
+audio) nor translation-time protect()/restore() (glossary.build_glossary()).
+A false-positive PROTECTED entity would silently corrupt genuine dialogue
 translation with no human review. Promoting a mined name to actual
 translation protection is a human decision, made by copying it from
 this module's write_suggestions() output into the real, hand-curated

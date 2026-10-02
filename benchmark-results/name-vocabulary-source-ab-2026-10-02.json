@@ -1,0 +1,100 @@
+{
+ "date": "2026-10-02",
+ "question": "name_correction series vocabulary: subtitle files (old) vs cached audio-derived ASR transcripts (new)",
+ "method": "scripts/eval_transcription.py --system cache --system cache+names, Love Is In The Air (2020) S01E01-E04 vs the human Turkish subtitles; only these 4 episodes have a production-settings cached transcript; vocabulary for the new source = the series' other cached transcripts (S01E01-E04 minus the episode, plus S02 cache entries)",
+ "results": {
+  "old": {
+   "name_corrections_confirmed": 41,
+   "name_corrections_unconfirmed": 4,
+   "top": [
+    [
+     "Bulat -> Bolat",
+     9
+    ],
+    [
+     "Aydın -> Aydan",
+     7
+    ],
+    [
+     "Sarkan -> Serkan",
+     6
+    ],
+    [
+     "Balat -> Bolat",
+     4
+    ],
+    [
+     "Selim -> Selin",
+     4
+    ]
+   ],
+   "unconfirmed_examples": [
+    [
+     "Belin",
+     "Selin"
+    ],
+    [
+     "Seyri,",
+     "Seyfi,"
+    ],
+    [
+     "Edem",
+     "Erdem"
+    ],
+    [
+     "Meluk?",
+     "Melek?"
+    ]
+   ]
+  },
+  "new": {
+   "name_corrections_confirmed": 48,
+   "name_corrections_unconfirmed": 4,
+   "top": [
+    [
+     "Aydın -> Aydan",
+     11
+    ],
+    [
+     "Bulat -> Bolat",
+     9
+    ],
+    [
+     "Sarkan -> Serkan",
+     6
+    ],
+    [
+     "Balat -> Bolat",
+     4
+    ],
+    [
+     "Selim -> Selin",
+     4
+    ]
+   ],
+   "unconfirmed_examples": [
+    [
+     "Belin",
+     "Selin"
+    ],
+    [
+     "Seyri,",
+     "Seyfi,"
+    ],
+    [
+     "Edem",
+     "Erdem"
+    ],
+    [
+     "Meluk?",
+     "Melek?"
+    ]
+   ]
+  }
+ },
+ "printed_summary": {
+  "old": "WER 17.8%, name recall 88.3%",
+  "new": "WER 17.8%, name recall 88.6%",
+  "no_correction": "WER 17.9%, name recall 86.2%"
+ }
+}

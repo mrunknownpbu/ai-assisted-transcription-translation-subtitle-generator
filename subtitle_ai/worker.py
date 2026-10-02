@@ -274,15 +274,6 @@ class Worker(threading.Thread):
         except (FileNotFoundError, OSError, OutputSafetyError, ValueError):
             return []
 
-    def _load_auto_hotwords(self, video_path: str, glossary_entities: list) -> list[str]:
-        """ASR-hotwords-only view of _refresh_glossary_suggestions() --
-        never translation-time protection (that stays exclusively driven
-        by glossary_entities, above). Video/ASR path only; SRT-translation
-        has no hotwords concept (no audio decoding to bias) and calls
-        _refresh_glossary_suggestions() directly instead."""
-        candidates = self._refresh_glossary_suggestions(video_path, glossary_entities)
-        return [c.canonical for c in candidates]
-
     def stop(self) -> None:
         self._stop_event.set()
 
@@ -737,7 +728,10 @@ class Worker(threading.Thread):
             glossary_profile_obj = self._load_glossary_profile(job["video_path"])
             glossary_entities = glossary_profile_obj.entities
             glossary_phrases = glossary_profile_obj.phrases
-            extra_hotwords = self._load_auto_hotwords(job["video_path"], glossary_entities)
+            # Writes the Series page's suggestions file. Suggestions are for
+            # human review only: they never reach ASR (hotwords) or
+            # translation protection.
+            self._refresh_glossary_suggestions(job["video_path"], glossary_entities)
             name_context = self._name_correction_context(job["video_path"])
 
             # Evict the API's cached Analyze-sampler before this job's own
@@ -777,7 +771,6 @@ class Worker(threading.Thread):
                     source_lang=source_lang, audio_stream_index=job.get("requested_audio_stream"),
                     glossary_entities=glossary_entities,
                     glossary_phrases=glossary_phrases,
-                    extra_hotwords=extra_hotwords,
                     transcript_cache_dir=cache_dir,
                     translate_remote_url=self.translate_server_url,
                     write_output=True, allow_overwrite=True,   # scratch dir only -- always safe to overwrite

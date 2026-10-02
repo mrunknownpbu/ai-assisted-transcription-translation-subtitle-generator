@@ -455,6 +455,8 @@ def main() -> int:
     ap.add_argument("--lang", default="tr")
     ap.add_argument("--system", action="append", required=True, help="cache | asr:key=val,...")
     ap.add_argument("--work", default="/cache/eval-asr")
+    ap.add_argument("--cache-dir", default="/cache/transcripts",
+                    help="transcript cache: the 'cache' system's source and the series vocabulary for +names")
     ap.add_argument("--glossary-dir", default="/glossary")
     ap.add_argument("--json")
     ap.add_argument("--top", type=int, default=15)
@@ -524,7 +526,7 @@ def main() -> int:
         agg_seg: collections.Counter = collections.Counter()
         for name, video, ref_path, ref_w, lyric_times, ref_lines in episodes:
             if kind == "cache":
-                data = cached_transcript(video)
+                data = cached_transcript(video, args.cache_dir)
                 if data is None:
                     print(f"{spec} {name}: no cached production transcript")
                     continue
@@ -535,11 +537,13 @@ def main() -> int:
             if post_names:
                 episode = glossary_profile.find_episode(video.name)
                 here, known = name_correction.episode_names(tvdb_id, episode, args.glossary_dir, cast_report)
-                # The episode's own reference is excluded: in production the
-                # episode being transcribed usually has no subtitle.
+                # The series vocabulary comes from the OTHER episodes'
+                # cached (audio-derived) transcripts, never from subtitle
+                # files; the episode itself is excluded.
                 vocab = name_correction.lowercase_vocabulary(
                     [w for seg in segs for w in seg.words],
-                    name_correction.series_vocabulary(season.parent, args.lang, exclude=ref_path))
+                    name_correction.series_vocabulary(season.parent, args.lang, args.cache_dir,
+                                                      exclude_media=video))
                 for seg in segs:
                     seg.words = name_correction.correct_words(seg.words, here, known, vocab)
                     for w in seg.words:

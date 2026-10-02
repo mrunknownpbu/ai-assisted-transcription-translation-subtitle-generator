@@ -106,27 +106,75 @@ def episode_names(tvdb_id: int | None, episode: tuple[int, int] | None, glossary
     return here, everywhere | here
 
 
-def series_vocabulary(series_root: Path | None, language: str, exclude: Path | None = None) -> Counter:
-    """Folded lowercase word counts from the series' `<stem>.<language>.srt`
-    files (skipping `exclude`). Cached per (series, language, exclude)."""
-    if series_root is None or not language:
+_HEADER_BYTES = 4096
+_CACHE_MEDIA_PATH = re.compile(r'"media_path":\s*("(?:[^"\\]|\\.)*")')
+_CACHE_LANGUAGE = re.compile(r'"language":\s*"([^"]*)"')
+_CACHE_CREATED = re.compile(r'"created_at":\s*([0-9.eE+-]+)')
+
+
+def _cache_header(path: Path) -> tuple[str, str, float] | None:
+    """(media_path, language, created_at) peeked from the start of a cached
+    transcript without parsing the multi-megabyte file."""
+    import json
+    try:
+        with open(path, encoding="utf-8") as fh:
+            head = fh.read(_HEADER_BYTES)
+    except (OSError, UnicodeDecodeError):
+        return None
+    media_path, language = _CACHE_MEDIA_PATH.search(head), _CACHE_LANGUAGE.search(head)
+    if not media_path or not language:
+        return None
+    created = _CACHE_CREATED.search(head)
+    return json.loads(media_path.group(1)), language.group(1), float(created.group(1)) if created else 0.0
+
+
+def series_vocabulary(series_root: Path | None, language: str, cache_dir: Path | str | None,
+                      exclude_media: Path | str | None = None) -> Counter:
+    """Folded lowercase word counts from the AUDIO-DERIVED transcripts of the
+    series' other episodes (the ASR transcript cache), skipping
+    `exclude_media`.
+
+    Deliberately not read from subtitle files: an existing subtitle must never
+    influence what Workflow A makes of the audio (docs/product-requirements.md).
+    Only the transcript cache -- output of this pipeline's own ASR -- is used,
+    one entry per episode (the newest), ignoring segments flagged as
+    suppressed hallucinations. Cached per (series, language, exclusion) and
+    refreshed when the set of cache files changes."""
+    if series_root is None or not language or cache_dir is None or not Path(cache_dir).is_dir():
         return Counter()
-    key = (str(series_root), language, str(exclude) if exclude else None)
-    if key not in _series_vocab_cache:
-        from srt import parse
-        vocab: Counter = Counter()
-        for path in Path(series_root).rglob(f"*.{language}.srt"):
-            if exclude is not None and path == exclude:
+    files = sorted(Path(cache_dir).glob("*.json"))
+    key = (str(series_root), language, str(exclude_media) if exclude_media else None,
+           tuple((f.name, f.stat().st_mtime_ns) for f in files))
+    if key in _series_vocab_cache:
+        return _series_vocab_cache[key]
+    root = str(series_root).rstrip("/") + "/"
+    newest: dict[str, tuple[float, Path]] = {}
+    for path in files:
+        header = _cache_header(path)
+        if header is None:
+            continue
+        media_path, lang, created = header
+        if lang != language or not media_path.startswith(root) or media_path == str(exclude_media):
+            continue
+        if media_path not in newest or created > newest[media_path][0]:
+            newest[media_path] = (created, path)
+    vocab: Counter = Counter()
+    import json
+    for _, path in newest.values():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for segment in data.get("segments", []):
+            if segment.get("suppressed"):
                 continue
-            try:
-                for cue in parse(path):
-                    for token in re.findall(r"[^\W\d_]+", cue.text):
-                        if token[:1].islower():
-                            vocab[fold(token)] += 1
-            except (OSError, ValueError):
-                continue
-        _series_vocab_cache[key] = vocab
-    return _series_vocab_cache[key]
+            for word in segment.get("words", []):
+                for token in re.findall(r"[^\W\d_]+", word.get("text", "")):
+                    if token[:1].islower():
+                        vocab[fold(token)] += 1
+    _series_vocab_cache.clear()  # one live entry: the next key supersedes this one
+    _series_vocab_cache[key] = vocab
+    return vocab
 
 
 _series_vocab_cache: dict = {}

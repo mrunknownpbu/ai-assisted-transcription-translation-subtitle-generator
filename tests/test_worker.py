@@ -261,10 +261,10 @@ def _write_srt_pair(show_dir: Path, stem: str, lines: list[str]):
         "1\n00:00:01,000 --> 00:00:02,000\nSome translation.", encoding="utf-8")
 
 
-class AutoHotwordsTests(unittest.TestCase):
-    """auto_glossary.py mining, wired through Worker -- see that module's
-    docstring for the safety framing (hotwords only, never translation
-    protection)."""
+class SubtitleMiningIsNeverAsrInputTests(unittest.TestCase):
+    """auto_glossary.py mining, wired through Worker: it feeds the Series
+    page's suggestions file only -- never ASR hotwords or translation
+    protection (an existing subtitle must not influence Workflow A)."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -276,7 +276,7 @@ class AutoHotwordsTests(unittest.TestCase):
         (self.show_dir / "S01E01.mkv").touch()
         self.store = JobStore(Path(self.tmp.name) / "jobs.db")
 
-    def test_auto_hotwords_reach_pipeline_run(self):
+    def test_mined_names_do_not_reach_pipeline_run(self):
         lines = ["Melek geldi.", "Nerede Melek?", "Melek çok mutlu."]
         for i in (2, 3, 4):
             _write_srt_pair(self.show_dir, f"S01E0{i}", lines)
@@ -286,9 +286,9 @@ class AutoHotwordsTests(unittest.TestCase):
             mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
             claimed = self.store.claim()
             worker._process(claimed)
-        self.assertIn("Melek", mock_run.call_args.kwargs["extra_hotwords"])
+        self.assertNotIn("extra_hotwords", mock_run.call_args.kwargs)
 
-    def test_no_series_root_match_yields_no_auto_hotwords(self):
+    def test_no_series_root_match_still_passes_no_hotwords(self):
         plain_dir = self.media_root / "Plain Show"
         plain_dir.mkdir(parents=True)
         (plain_dir / "S01E01.mkv").touch()
@@ -298,7 +298,7 @@ class AutoHotwordsTests(unittest.TestCase):
             mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
             claimed = self.store.claim()
             worker._process(claimed)
-        self.assertEqual(mock_run.call_args.kwargs["extra_hotwords"], [])
+        self.assertNotIn("extra_hotwords", mock_run.call_args.kwargs)
 
     def test_current_episode_own_prior_output_excluded_from_its_own_mining(self):
         # The current job's own (e.g. prior-attempt) S01E01 output has the
@@ -314,7 +314,7 @@ class AutoHotwordsTests(unittest.TestCase):
             mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
             claimed = self.store.claim()
             worker._process(claimed)
-        self.assertNotIn("Xyzzy", mock_run.call_args.kwargs["extra_hotwords"])
+        self.assertNotIn("extra_hotwords", mock_run.call_args.kwargs)
 
     def test_names_already_in_manual_glossary_not_duplicated_via_auto_path(self):
         glossary_dir = Path(self.tmp.name) / "glossary"
@@ -332,7 +332,7 @@ class AutoHotwordsTests(unittest.TestCase):
             mock_run.side_effect = lambda **kw: fake_result(Path(kw["work_dir"]))
             claimed = self.store.claim()
             worker._process(claimed)
-        self.assertNotIn("Eda", mock_run.call_args.kwargs["extra_hotwords"])
+        self.assertNotIn("extra_hotwords", mock_run.call_args.kwargs)
 
     def test_glossary_suggestions_file_written_when_configured(self):
         lines = ["Melek geldi.", "Melek nerede?", "Melek çok mutlu."]
