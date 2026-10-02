@@ -26,6 +26,92 @@ the full detail (a `CLAUDE.md` section for something shipped, a
 Do not end a session that changed anything or found anything unresolved
 without updating this file. That is the definition of "handover" here.
 
+## Current state (2026-10-02)
+
+- **Product:** two workflows (video to English, subtitle to English) in one container;
+  413 jobs processed, queue empty; running container (image built 2026-09-30) predates
+  everything below and has not been recreated.
+- **Quality gates:** backend 1,357 tests (1 skipped), frontend 98, ruff and mypy with no
+  exclusions, CI green on the last verified push; backend line coverage 90%.
+- **Documents:** PRD, architecture, design system, agent guide, API, testing, deployment,
+  troubleshooting and the decision log are current; `CLAUDE.md` is invariants and commands only.
+- **Pushed?** Everything up to `d2b720c` is on `origin/master`; later commits (this rebuild
+  work) are local until pushed.
+
+## Completed work (this rebuild, 2026-10-02)
+
+Audit and classification (`decisions/2026-10-02-architecture-audit.md`); typed errors
+(`errors.py`) and one `_fail_job()`; configuration snapshot per job; derived `lifecycle`
+state; Workflow A no longer takes subtitle text as input (name-correction vocabulary from
+cached transcripts; subtitle-mined hotwords removed); API key now required on
+`POST /api/srt-translations` with a route-enumerating test; Workflow B no longer imports ASR;
+timing evaluator fixed (word anchoring, window medians) with measured real-data evidence;
+real-pair timing fixture slot; design tokens with an enforcing test; pipeline-level contract
+tests for both workflows; API reference with a route-coverage test; rewritten PRD, architecture,
+design system; new agent guide, testing, deployment and troubleshooting docs.
+
+## Known issues
+
+- The reported ~5.1 s human/AI offset is unresolved: the real pair is missing. On four real
+  episodes the pipeline's timeline agrees with a human reference within 0.2 s
+  (`decisions/subtitle-timing.md`).
+- Malay (and any non-Turkish) hallucinations are not suppressed: `hallucination_signatures.json`
+  has only Turkish patterns. A Malay film (Pewaris Susuk, 2026) has about 31 lines such as
+  "Terima kasih kerana menonton!" and "Sari kata oleh SDI Media" in its `.ms.srt` and 42 matching
+  lines in its `.en.srt`. Not addressed (owner declined the fix on 2026-10-02).
+- `needs_review` counts hallucination findings that were already suppressed (Love Is In The Air
+  S02E05 reports 24 for 24 suppressed lines). Not addressed.
+- The worker has no graceful shutdown; a stop kills a running job and the next start re-queues it.
+- `skipped` is a stored job status that nothing sets.
+
+## Open architectural questions
+
+- Provider boundary: introduce `TranslationProvider` first (two real implementations) or both
+  providers together? Preference: translation first.
+- Remove `skipped`, `reference_aligner.py` and/or `turns.py`, or keep? Owner decision.
+- Should stored `status` values eventually be renamed to the lifecycle names (a data migration and
+  client change), or does the derived `lifecycle` field suffice?
+- A CI Docker build: the image is about 10 GB; is a build-only job on a hosted runner acceptable,
+  or should the frontend stage and a `docker build --check` be the CI gate?
+
+## Pending experiments
+
+- Name-correction vocabulary on a series with few cached transcripts (the veto weakens; not
+  measured on a cold series).
+- The 0.001 s/s drift limit in the evaluator is unvalidated (needs a frame-rate-mismatched pair).
+- Performance: real-time factor per stage (PRD marks it TBD).
+
+## Required validation
+
+- Recreate the container from a fresh image and run the checklist in `docs/deployment.md`
+  (health, API, frontend, GPU, one job per workflow, batch, cancel, retry, atomic-failure,
+  rescan). The image has been built and exercised separately (see the change log below); the live
+  container has not been recreated because it needs a key or `SUBTITLE_AI_ALLOW_INSECURE=1` in `.env`.
+- Re-check CI after pushing.
+
+## Known technical debt
+
+`api.py`, `worker.py`, `translate.py` size and coupling; module-level environment reads; jobs as
+dicts; `TranslateSrtPage.tsx` (578 lines); no provider interfaces; tests that patch internal seams
+by name; frontend coverage unmeasured; no automated end-to-end or Docker test.
+
+## Next recommended implementation tasks
+
+1. Push the local commits and confirm CI.
+2. Extract the sampler and report helpers from `api.py`; split it into routers.
+3. Split `translate.py`; add `TranslationProvider` (local and remote) with fakes in tests.
+4. Pass an explicit configuration object into the pipelines.
+5. Graceful worker stop with a checkpoint.
+6. Add the real timing pair when available (`tests/fixtures/timing/README.md`).
+7. Hallucination signatures for other languages, with evidence, if the owner wants them.
+
+---
+
+# Ledger
+
+The sections below are the original append-only record (open issues and change log). They are
+history; the sections above are the summary.
+
 ## How to log an entry
 
 **A change you made:**
@@ -54,7 +140,7 @@ Never edit or delete another session's entry other than to append a
 RESOLVED note to one of its OPEN lines. This file is additive history, the
 same as `CLAUDE.md`.
 
-## Open issues
+## Open issues (ledger)
 
 - 2026-10-01 — OPEN: the reported ~5.1-second human/AI SRT offset could not
   be reproduced because no matching reference/candidate pair is in this
