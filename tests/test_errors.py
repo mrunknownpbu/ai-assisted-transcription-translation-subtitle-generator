@@ -21,11 +21,12 @@ class ErrorCodeContractTests(unittest.TestCase):
         self.assertEqual(
             {cls.__name__: cls.code for cls in (
                 errors.MediaError, errors.SubtitleParseError, errors.LowConfidenceLanguageError,
-                errors.UnsupportedLanguageError, errors.OutputSafetyError,
+                errors.UnsupportedLanguageError, errors.OutputSafetyError, errors.OutputWriteError,
                 errors.InsufficientVramError, errors.GpuLockTimeout)},
             {"MediaError": "MEDIA_ERROR", "SubtitleParseError": "SRT_VALIDATION_ERROR",
              "LowConfidenceLanguageError": "LOW_CONFIDENCE_LANGUAGE",
              "UnsupportedLanguageError": "UNSUPPORTED_LANGUAGE", "OutputSafetyError": "OUTPUT_ERROR",
+             "OutputWriteError": "OUTPUT_ERROR",
              "InsufficientVramError": "GPU_RESOURCE_ERROR", "GpuLockTimeout": "GPU_RESOURCE_ERROR"})
         self.assertEqual(errors.UNEXPECTED_CODE, "PIPELINE_ERROR")
 
@@ -41,6 +42,7 @@ class ErrorCodeContractTests(unittest.TestCase):
     def test_builtin_bases_are_preserved_for_existing_except_clauses(self):
         self.assertTrue(issubclass(errors.OutputSafetyError, ValueError))
         self.assertTrue(issubclass(errors.SubtitleParseError, ValueError))
+        self.assertTrue(issubclass(errors.OutputWriteError, OSError))
         self.assertTrue(issubclass(errors.MediaError, RuntimeError))
         self.assertTrue(issubclass(errors.InsufficientVramError, RuntimeError))
         self.assertTrue(issubclass(errors.GpuLockTimeout, TimeoutError))

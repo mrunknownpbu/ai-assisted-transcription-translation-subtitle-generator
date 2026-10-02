@@ -11,7 +11,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from errors import OutputSafetyError
+from errors import OutputSafetyError, OutputWriteError
 
 # Any file matching one of these is categorically off-limits: never
 # read as transcription/translation input, never written, renamed, moved,
@@ -102,16 +102,20 @@ def write_srt_atomic(path: str | Path, content: str, *, allow_overwrite: bool) -
     if target.exists() and not allow_overwrite:
         return False
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.tmp-", dir=target.parent)
-    tmp = Path(tmp_name)
+    tmp: Path | None = None
     try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.tmp-", dir=target.parent)
+        tmp = Path(tmp_name)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             os.fchmod(fh.fileno(), 0o644)
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, target)
+    except OSError as exc:
+        raise OutputWriteError(f"could not write {target.name}: {exc.strerror or exc}") from exc
     finally:
-        tmp.unlink(missing_ok=True)
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
     return True

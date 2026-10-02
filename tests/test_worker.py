@@ -1238,3 +1238,27 @@ class ProgressThrottlingTests(WorkerTestCase):
         self.assertGreater(row["phase_durations"]["Parsing SRT"], 0)
         self.assertGreater(row["phase_durations"]["Translating"], 0)
         self.assertIsNone(row["eta_seconds"])
+
+
+class OutputWriteFailureTests(WorkerTestCase):
+    def test_an_unwritable_destination_is_an_output_error_and_keeps_the_old_subtitle(self):
+        """Found by running the real container with a read-only media folder:
+        it failed as PIPELINE_ERROR with a bare 'Permission denied'."""
+        existing = self.media_root / "Show" / "S01E01.en.srt"
+        existing.write_text("OLD SUBTITLE", encoding="utf-8")
+        self.store.create("Show/S01E01.mkv", "tr", overwrite_english=True)
+        import output
+
+        def refuse(src, dst):
+            raise PermissionError(13, "Permission denied")
+
+        with patch.object(worker_mod.pipeline, "run",
+                          side_effect=lambda **kw: fake_result(Path(kw["work_dir"]))), \
+             patch.object(output.os, "replace", side_effect=refuse):
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual((final["status"], final["error_category"]), ("failed", "OUTPUT_ERROR"))
+        self.assertIn("S01E01", final["error"])
+        self.assertEqual(existing.read_text(encoding="utf-8"), "OLD SUBTITLE")
+        self.assertEqual([p.name for p in existing.parent.iterdir() if ".tmp-" in p.name], [])

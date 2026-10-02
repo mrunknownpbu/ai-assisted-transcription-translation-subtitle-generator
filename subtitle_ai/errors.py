@@ -69,6 +69,15 @@ class OutputSafetyError(SubtitleAiError, ValueError):
     stage = "output"
 
 
+class OutputWriteError(SubtitleAiError, OSError):
+    """A subtitle could not be written (permissions, full disk, vanished mount).
+    The write is atomic, so any existing subtitle is untouched."""
+    code = "OUTPUT_ERROR"
+    stage = "output"
+    remediation = ("Check write permission and free space on the media folder; "
+                   "the existing subtitle was left untouched.")
+
+
 # --- GPU --------------------------------------------------------------------
 
 class GpuResourceError(SubtitleAiError):
