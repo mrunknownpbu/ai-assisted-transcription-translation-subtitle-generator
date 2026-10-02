@@ -209,7 +209,7 @@ it speculatively. A one-scene character (e.g. "Fatma", "Faruk") is
 excluded regardless of translation quality, on recurrence alone.
 
 `auto_glossary.py` mines a series' own already-completed episodes for
-candidate names automatically, but only feeds ASR hotwords, never
+candidate names automatically, but only as suggestions for review, never
 translation protection directly -- promoting a MINED name to `protected:
 true` is always a deliberate human/session decision. The one automatic
 path is `cast_enrichment.py` (see `docs/decisions/2026-09-28-cast-metadata-tvdb-tmdb-imdb-feed-name-protection.md`), which enforces this same bar
