@@ -18,8 +18,9 @@ cd frontend && npx tsc --noEmit && npm test && npm run build
 
 CI (`.github/workflows/test.yml`) runs all of the above on every push and pull
 request: a `lint` job (ruff), a `test` job (locked CPU-only dependencies, ffmpeg,
-mypy, backend tests) and a `frontend` job (typecheck, tests, build). The Docker
-image is not built in CI yet (`docs/deployment.md`).
+mypy, backend tests) and a `frontend` job (typecheck, tests, build). A `docker` job lints the Dockerfile and builds its
+frontend stage; the full CUDA image (about 10 GB) is built and exercised by hand
+(`docs/deployment.md`).
 
 Command and count history from before 2026-10-02 is in `docs/testing-history.md`.
 

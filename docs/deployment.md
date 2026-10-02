@@ -22,7 +22,7 @@ port 8091); none is deployed today.
 | User | Non-root `subtitle` (uid/gid 1000). Only `/cache` and `/glossary` need to be writable by that uid. |
 | Health | `HEALTHCHECK` curls `/api/health` every 30 s (503 when the database or worker is down). |
 | Start | `uvicorn main:app --host 0.0.0.0 --port 8080`. |
-| Size | About 10 GB (CUDA libraries). CI does not build it. |
+| Size | About 10 GB (CUDA libraries). CI lints the Dockerfile and builds only the frontend stage. |
 | Determinism | Dependencies are pinned in `uv.lock`; base images and the ffmpeg image are pinned by tag, not digest. |
 
 ## Volumes and configuration

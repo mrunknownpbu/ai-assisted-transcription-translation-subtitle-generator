@@ -96,3 +96,18 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+  docker:
+    # The full CUDA image is about 10 GB, too large to build safely on a hosted
+    # runner (docs/deployment.md validates it by hand). This job checks the
+    # Dockerfile and builds its frontend stage, which catches a broken
+    # Dockerfile or frontend build context.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Lint the Dockerfile
+        run: docker build --check .
+
+      - name: Build the frontend stage
+        run: docker build --target frontend-build -t subtitle-ai-frontend .

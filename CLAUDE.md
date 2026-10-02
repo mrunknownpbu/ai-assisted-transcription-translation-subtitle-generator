@@ -59,7 +59,7 @@ curl http://localhost:8099/api/health
 ```
 
 CI (`.github/workflows/test.yml`) runs ruff, mypy, backend tests, frontend
-typecheck/tests/build. Keep it green; do not exclude files to make it pass.
+typecheck/tests/build and a Dockerfile lint plus frontend-stage build. Keep it green; do not exclude files to make it pass.
 
 ## Rules for this file
 

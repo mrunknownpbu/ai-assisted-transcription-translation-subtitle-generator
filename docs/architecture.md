@@ -315,7 +315,7 @@ One image: a Node stage builds the frontend, a Python 3.12 stage installs the lo
 dependencies (CUDA torch), copies a static ffmpeg, runs as a non-root user and
 serves the API and static UI from uvicorn on 8080 (published as 8099). The container
 healthcheck calls `/api/health`. CI (`.github/workflows/test.yml`): ruff, mypy, backend
-tests, frontend typecheck/tests/build. Deployment and validation: `docs/deployment.md`.
+tests, frontend typecheck/tests/build, and a Dockerfile lint plus frontend-stage build. Deployment and validation: `docs/deployment.md`.
 
 ## 19. Rejected directions
 

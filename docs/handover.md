@@ -71,8 +71,8 @@ design system; new agent guide, testing, deployment and troubleshooting docs.
 - Remove `skipped`, `reference_aligner.py` and/or `turns.py`, or keep? Owner decision.
 - Should stored `status` values eventually be renamed to the lifecycle names (a data migration and
   client change), or does the derived `lifecycle` field suffice?
-- A CI Docker build: the image is about 10 GB; is a build-only job on a hosted runner acceptable,
-  or should the frontend stage and a `docker build --check` be the CI gate?
+- CI builds only a Dockerfile lint (`docker build --check`) and the frontend stage; the full 10 GB
+  CUDA image is not built on a hosted runner. Acceptable, or use a self-hosted runner?
 
 ## Pending experiments
 
