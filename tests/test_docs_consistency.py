@@ -186,3 +186,24 @@ class DocumentedDefaultsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApiDocumentationTests(unittest.TestCase):
+    """docs/api.md must list every route the app serves."""
+
+    def test_every_api_route_is_documented(self):
+        import tempfile
+
+        import api
+        text = (ROOT / "docs" / "api.md").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api.create_app(Path(tmp) / "jobs.db", tmp)
+        missing = []
+        for route in app.routes:
+            path = getattr(route, "path", "")
+            if not path.startswith("/api/"):
+                continue
+            for method in sorted(getattr(route, "methods", set()) - {"HEAD", "OPTIONS"}):
+                if f"{method} {path}" not in text:
+                    missing.append(f"{method} {path}")
+        self.assertEqual(missing, [], "routes served but not documented in docs/api.md")
