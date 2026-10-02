@@ -591,7 +591,7 @@ async def upload_srt(file: UploadFile) -> dict:
     return {"upload_id": upload_id, "filename": original_name}
 
 
-@app.post("/api/srt-translations", status_code=201)
+@app.post("/api/srt-translations", status_code=201, dependencies=[Depends(require_api_key)])
 def create_srt_translation_job(request: SrtTranslationRequest) -> dict:
     """Original-language .srt -> English .srt, no ASR involved -- see
     srt_translation.py's module docstring. video_path is REQUIRED: the

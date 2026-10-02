@@ -42,3 +42,4 @@ Dated, evidence-based records of what was built, measured, shipped, shipped-but-
 | 2026-09-30 | [Cast metadata refresh default: 12 hours (2026-09-30)](2026-09-30-cast-metadata-refresh-default-12-hours.md) |
 | 2026-10-02 | [Refuse to start an open API beyond loopback (2026-10-02)](2026-10-02-refuse-open-api-beyond-loopback.md) |
 | 2026-10-02 | [Workflow A uses no subtitle text as input](2026-10-02-audio-only-asr-inputs.md) |
+| 2026-10-02 | [POST /api/srt-translations requires the API key](2026-10-02-srt-translations-endpoint-was-unauthenticated.md) |

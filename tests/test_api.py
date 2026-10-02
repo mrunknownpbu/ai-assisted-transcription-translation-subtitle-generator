@@ -116,6 +116,29 @@ class ApiKeyGuardTests(ApiTestCase):
         self.assertEqual(self.client.get("/api/jobs").json()["total"], 0)
         recommend.assert_not_called()
 
+    OPEN_ROUTES = {("GET", "/api/health")}
+
+    def test_every_api_route_requires_the_key_except_health(self):
+        """Enumerates the app's own routes, so a new endpoint added without
+        the key dependency fails here instead of shipping open (the
+        srt-translations endpoint did exactly that)."""
+        import re
+        checked = []
+        with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
+            for route in api.app.routes:
+                path = getattr(route, "path", "")
+                if not path.startswith("/api/"):
+                    continue
+                for method in sorted(getattr(route, "methods", set()) - {"HEAD", "OPTIONS"}):
+                    if (method, path) in self.OPEN_ROUTES:
+                        continue
+                    url = re.sub(r"\{[^}]+\}", "1", path)
+                    response = self.client.request(method, url)
+                    self.assertEqual(response.status_code, 401, f"{method} {path} is open without the API key")
+                    checked.append((method, path))
+        self.assertGreaterEqual(len(checked), 20)
+        self.assertIn(("POST", "/api/srt-translations"), checked)
+
     def test_configured_key_blocks_request_with_wrong_header(self):
         job = self.client.post("/api/jobs", json={"video_path": "Show/S01E01.mkv", "source_lang": "tr"})
         with patch.dict("os.environ", {"SUBTITLE_AI_API_KEY": "secret123"}):
