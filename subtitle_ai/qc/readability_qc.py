@@ -5,12 +5,15 @@ cues checked."""
 from __future__ import annotations
 
 from qc.types import QcCategory, QcFinding, QcResult, QcStage
+from subtitle_constraints import (MAX_CHARS_PER_LINE as CONFIG_MAX_LINE_CHARS,
+                                  MAX_CPS, MAX_CUE_DURATION,
+                                  MAX_LINES as CONFIG_MAX_LINES,
+                                  MIN_CUE_DURATION)
 
-MAX_LINE_CHARS = 42
-MAX_LINES = 2
-MIN_DURATION = 1.0
-MAX_DURATION = 7.0
-MAX_CPS = 21.0   # a little headroom over the 17 CPS target used to size cues
+MAX_LINE_CHARS = CONFIG_MAX_LINE_CHARS
+MAX_LINES = CONFIG_MAX_LINES
+MIN_DURATION = MIN_CUE_DURATION
+MAX_DURATION = MAX_CUE_DURATION
 # Duration findings sit BELOW qc.types.REVIEW_CONFIDENCE (0.7) on purpose:
 # they're about timing, which the review editor can't change (text only),
 # and in Workflow B the timing is inherited from the uploaded source SRT

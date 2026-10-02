@@ -36,12 +36,16 @@ import re
 
 from text_segmentation import ENGLISH, TURKISH, SplitLexicon, _boundary_score, wrap_lines
 from transcript import NO_SPACE_LANGUAGES, BoundaryReason, Segment, Word, render_words
+from subtitle_constraints import MAX_CHARS_PER_LINE, MAX_CUE_DURATION, MAX_LINES, MIN_CUE_DURATION
 
-MAX_CUE_CHARS = 84            # ~2 lines x 42 chars
+MAX_CUE_CHARS = MAX_CHARS_PER_LINE * MAX_LINES
 MAX_JAPANESE_CUE_CHARS = 42
-MAX_LINE_CHARS = 42
-MAX_DURATION = 7.0
+MAX_LINE_CHARS = MAX_CHARS_PER_LINE
+MAX_DURATION = MAX_CUE_DURATION
 MAX_GAP = 0.8                 # silence between words that forces a break
+# A short complete utterance can be joined across this small gap, but not
+# across a meaningful pause.  Larger gaps remain an acoustic hard boundary.
+SHORT_CUE_MERGE_GAP = 0.35
 
 _SENTENCE_END = re.compile(r"[.!?…。？！]['\"»)\]」』）】]*$")
 
@@ -92,6 +96,54 @@ def _split_long_words(ws: list[Word], language: str, lexicon: SplitLexicon,
                        key=lambda p: max(len(render_words(ws[:p], language)), len(render_words(ws[p:], language))))
     return (_split_long_words(ws[:best_pos], language, lexicon, max_chars)
            + _split_long_words(ws[best_pos:], language, lexicon, max_chars))
+
+
+def _merge_short_cues(cues: list[Segment], language: str) -> list[Segment]:
+    """Contextually absorb display fragments without crossing real turns.
+
+    This is intentionally not a duration-only operation: a candidate must be
+    adjacent in the same acoustic run, fit the display budget, stay within the
+    maximum duration, and have no meaningful inter-word pause.  The words and
+    their timestamps are retained verbatim.
+    """
+    merged = list(cues)
+    changed = True
+    while changed and len(merged) > 1:
+        changed = False
+        for i, cue in enumerate(merged):
+            if cue.end - cue.start >= MIN_CUE_DURATION:
+                continue
+            # A complete short utterance is meaningful subtitle content in
+            # its own right.  Preserve it; this pass repairs fragments such
+            # as a dangling conjunction or a decoder split mid-phrase.
+            if _SENTENCE_END.search(cue.words[-1].text):
+                continue
+            candidates = ([i + 1] if i + 1 < len(merged) else []) + ([i - 1] if i else [])
+            for other_i in candidates:
+                left_i, right_i = sorted((i, other_i))
+                left, right = merged[left_i], merged[right_i]
+                # Speaker turns and acoustic pauses are hard boundaries.
+                if right.boundary_before in {BoundaryReason.REAL_ACOUSTIC_GAP,
+                                             BoundaryReason.UTTERANCE_END}:
+                    continue
+                if right.words[0].start - left.words[-1].end > SHORT_CUE_MERGE_GAP:
+                    continue
+                words = left.words + right.words
+                if (words[-1].end - words[0].start > MAX_DURATION or
+                        len(render_words(words, language)) > MAX_CUE_CHARS):
+                    continue
+                joined = Segment(index=left.index, start=words[0].start, end=words[-1].end,
+                                 words=words, avg_logprob=min(left.avg_logprob, right.avg_logprob),
+                                 no_speech_prob=max(left.no_speech_prob, right.no_speech_prob),
+                                 compression_ratio=max(left.compression_ratio, right.compression_ratio),
+                                 boundary_before=left.boundary_before, language=language)
+                joined.lines = wrap_lines(joined.text, MAX_LINE_CHARS)
+                merged[left_i:right_i + 1] = [joined]
+                changed = True
+                break
+            if changed:
+                break
+    return merged
 
 
 def build_cues(words: list[Word], language: str = "",
@@ -172,4 +224,4 @@ def build_cues(words: list[Word], language: str = "",
                     index=len(cues), start=sub[0].start, end=sub[-1].end, words=list(sub),
                     avg_logprob=0.0, no_speech_prob=0.0, compression_ratio=0.0,
                     boundary_before=reason, language=language, lines=lines))
-    return cues
+    return _merge_short_cues(cues, language)

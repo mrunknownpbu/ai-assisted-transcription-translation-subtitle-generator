@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 
 from segmentation_source import (MAX_CUE_CHARS, MAX_JAPANESE_CUE_CHARS, MAX_LINE_CHARS,
-                                 build_cues)
-from transcript import BoundaryReason, Word
+                                 _merge_short_cues, build_cues)
+from transcript import BoundaryReason, Segment, Word
 
 
 def _word(text: str, start: float, end: float) -> Word:
@@ -71,6 +71,16 @@ class SentenceSplitTests(unittest.TestCase):
         cues = build_cues(words, language="tr")
         self.assertEqual([c.text for c in cues], ["Tamam.", "Gidelim hadi."])
         self.assertEqual(cues[1].boundary_before, BoundaryReason.SENTENCE_END)
+
+    def test_short_mid_phrase_fragment_merges_when_there_is_no_pause(self):
+        first = _word("Her", 0.0, 0.2)
+        rest = [_word("şey", 0.21, 0.5), _word("olur.", 0.51, 0.9)]
+        cues = _merge_short_cues([
+            Segment(0, first.start, first.end, [first], 0, 0, 0, language="tr"),
+            Segment(1, rest[0].start, rest[-1].end, rest, 0, 0, 0,
+                    boundary_before=BoundaryReason.DISPLAY_SPLIT, language="tr"),
+        ], "tr")
+        self.assertEqual([c.text for c in cues], ["Her şey olur."])
 
     def test_japanese_sentence_marks_split_without_spaces_and_keep_closers(self):
         words = _sentence(["「こんにちは。」", "次です！", "本当？』"], start=0.0, step=0.2)

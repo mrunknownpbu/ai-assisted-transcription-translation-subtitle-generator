@@ -94,6 +94,7 @@ services:
       SUBTITLE_AI_SAMPLE_MODEL: ${SUBTITLE_AI_SAMPLE_MODEL:-}
       SUBTITLE_AI_VRAM_MARGIN_GB: ${SUBTITLE_AI_VRAM_MARGIN_GB:-}
       SUBTITLE_AI_ORPHAN_CONTEXT_PADDING: ${SUBTITLE_AI_ORPHAN_CONTEXT_PADDING:-}
+      SUBTITLE_AI_CODE_SWITCH_DETECTION: ${SUBTITLE_AI_CODE_SWITCH_DETECTION:-}
       # Empty = int8 (see asr.py's AsrConfig.compute_type comment for which
       # GPUs need which value). Set to float16 on a GPU with efficient
       # float16 tensor throughput (Ampere+, e.g. an RTX 3070) for faster ASR.
@@ -111,6 +112,16 @@ services:
       # style experiment.
       SUBTITLE_AI_TURN_DETECTION: ${SUBTITLE_AI_TURN_DETECTION:-}
       SUBTITLE_AI_ASR_STYLE: ${SUBTITLE_AI_ASR_STYLE:-}
+      # Final subtitle display constraints (subtitle_constraints.py). Empty
+      # values retain the centralized production defaults.
+      SUBTITLE_AI_MIN_CUE_DURATION: ${SUBTITLE_AI_MIN_CUE_DURATION:-}
+      SUBTITLE_AI_TARGET_CUE_DURATION_MIN: ${SUBTITLE_AI_TARGET_CUE_DURATION_MIN:-}
+      SUBTITLE_AI_TARGET_CUE_DURATION_MAX: ${SUBTITLE_AI_TARGET_CUE_DURATION_MAX:-}
+      SUBTITLE_AI_MAX_CUE_DURATION: ${SUBTITLE_AI_MAX_CUE_DURATION:-}
+      SUBTITLE_AI_MAX_CHARS_PER_LINE: ${SUBTITLE_AI_MAX_CHARS_PER_LINE:-}
+      SUBTITLE_AI_MAX_LINES: ${SUBTITLE_AI_MAX_LINES:-}
+      SUBTITLE_AI_MAX_CPS: ${SUBTITLE_AI_MAX_CPS:-}
+      SUBTITLE_AI_TARGET_CPS: ${SUBTITLE_AI_TARGET_CPS:-}
       # Empty = keep NLLB loaded 600s between jobs (0 when GPU_SHARED).
       SUBTITLE_AI_MODEL_IDLE_SECONDS: ${SUBTITLE_AI_MODEL_IDLE_SECONDS:-}
       # Empty = ct2 (falls back to hf if scripts/convert_nllb_ct2.py hasn't

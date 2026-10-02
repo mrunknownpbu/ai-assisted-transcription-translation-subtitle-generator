@@ -146,7 +146,7 @@ class ReadabilityQcTests(unittest.TestCase):
         # Real noise (2026-09-28): the min-duration rule at 0.7 was 99.97%
         # of every needs_review hit in production. Timing isn't editable in
         # the review editor, so it must stay visible but never count.
-        cues = [TargetCue(start=0.0, end=0.95, lines=["Hi"]),
+        cues = [TargetCue(start=0.0, end=0.4, lines=["Hi"]),
                 TargetCue(start=1.0, end=9.0, lines=["Long"])]
         result = readability_qc.run(cues)
         self.assertEqual(result.flagged, 2)

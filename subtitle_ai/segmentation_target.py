@@ -23,12 +23,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-MAX_LINE_CHARS = 42
-MAX_LINES = 2
+from subtitle_constraints import (MAX_CHARS_PER_LINE, MAX_CUE_DURATION, MAX_LINES,
+                                  MIN_CUE_DURATION, TARGET_CPS, TARGET_CUE_DURATION_MIN)
+
+MAX_LINE_CHARS = MAX_CHARS_PER_LINE
 MAX_CUE_CHARS = MAX_LINE_CHARS * MAX_LINES
-MIN_DURATION = 1.0
-MAX_DURATION = 7.0
-TARGET_CPS = 17.0
+MIN_DURATION = MIN_CUE_DURATION
+MAX_DURATION = MAX_CUE_DURATION
 
 _SENTENCE_END = re.compile(
     r"[.!?…]['\"»)\]」』）】]*(?:\s|$)|[。？！]['\"»)\]」』）】]*")
@@ -167,7 +168,9 @@ def wrap_lines(text: str, max_line_chars: int = MAX_LINE_CHARS) -> list[str]:
 
 
 def _reading_duration(text: str) -> float:
-    return max(MIN_DURATION, len(text) / TARGET_CPS)
+    # This is a preference used to allocate a shared audio envelope, not a
+    # command to manufacture time where the speaker did not leave any.
+    return max(TARGET_CUE_DURATION_MIN, len(text) / TARGET_CPS)
 
 
 def distribute_timing(pieces: list[str], envelope_start: float, envelope_end: float) -> list[tuple[float, float]]:
@@ -258,6 +261,30 @@ def merge_short_pieces(pieces: list[str], max_chars: int = MAX_CUE_CHARS) -> lis
     return merged
 
 
+def merge_unreadable_pieces(pieces: list[str], envelope: float,
+                            max_chars: int = MAX_CUE_CHARS) -> list[str]:
+    """Merge only display fragments that cannot receive the configured
+    minimum duration in their source envelope.  This keeps sentence breaks
+    whenever timing permits them and never alters text or word boundaries."""
+    merged = list(pieces)
+    while len(merged) > 1:
+        timings = distribute_timing(merged, 0.0, envelope)
+        short = next((i for i, (start, end) in enumerate(timings)
+                      if end - start < MIN_DURATION), None)
+        if short is None:
+            break
+        options = [short + 1] if short + 1 < len(merged) else []
+        if short:
+            options.append(short - 1)
+        choice = next((j for j in options
+                       if len(merged[min(short, j)]) + 1 + len(merged[max(short, j)]) <= max_chars), None)
+        if choice is None:
+            break
+        left, right = sorted((short, choice))
+        merged[left:right + 1] = [f"{merged[left]} {merged[right]}"]
+    return merged
+
+
 _DASH_DIALOGUE_LINE = re.compile(r"^-\s*.+$")
 
 
@@ -313,6 +340,7 @@ def segment(text: str, envelope_start: float, envelope_end: float, *,
         pieces.extend(split_long_piece(s, max_cue_chars))
     pieces = [p for p in pieces if p.strip()] or ([text.strip()] if text.strip() else [])
     pieces = merge_short_pieces(pieces, max_cue_chars)
+    pieces = merge_unreadable_pieces(pieces, envelope_end - envelope_start, max_cue_chars)
     timings = distribute_timing(pieces, envelope_start, envelope_end)
     return [TargetCue(start=s, end=e, lines=wrap_lines(p, max_line_chars))
            for p, (s, e) in zip(pieces, timings)]
