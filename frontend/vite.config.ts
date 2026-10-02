@@ -29,7 +29,7 @@ export default mergeConfig(
   defineVitestConfig({
     test: {
       environment: "jsdom",
-      // Stylesheets are imported as ?raw text by styles/tokens.test.ts; without
+      // Stylesheets are imported as ?raw text by styles/theme.test.ts; without
       // this vitest replaces every CSS import with an empty string.
       css: true,
       setupFiles: "./src/setupTests.ts",

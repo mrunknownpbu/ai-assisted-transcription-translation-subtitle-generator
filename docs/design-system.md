@@ -52,9 +52,9 @@ Each screen answers one question and does not mix operations with configuration:
 
 ## Tokens
 
-`frontend/src/styles/tokens.css` is the only place raw colours, scales and
+`frontend/src/styles/theme.css` is the only place raw colours, scales and
 durations are defined. `global.css` and components use the variables. A test
-(`styles/tokens.test.ts`) fails on a hex or `rgb()` colour anywhere else and on an
+(`styles/theme.test.ts`) fails on a hex or `rgb()` colour anywhere else and on an
 inline `style` other than the progress-bar width.
 
 **Colour semantics**
