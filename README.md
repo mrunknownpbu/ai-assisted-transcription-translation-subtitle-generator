@@ -440,7 +440,7 @@ Cleanup problems are logged and never change a job's result.
 | `TRANSLATE_SERVER_IDLE_UNLOAD_SECONDS` | `120` | Remote translate-server only: idle seconds before its NLLB model is unloaded (see "Remote translate-server"). |
 | `TRANSLATE_SERVER_DEFAULT_LANG` | `tr` | Remote translate-server only: source language warmed at boot so the first request doesn't pay model-load latency. |
 | `TRANSLATE_SERVER_API_KEY` | unset | Required on both hosts when remote translation is enabled; sent as `X-API-Key` to protect `/translate`. |
-| `SUBTITLE_AI_TURN_DETECTION` | off | `heuristic` or `voice` turn on speaker-turn detection (`subtitle_ai/turns.py`). Off by default -- see CLAUDE.md for why neither cleared the bar yet. |
+| `SUBTITLE_AI_TURN_DETECTION` | off | `heuristic` or `voice` turn on speaker-turn detection (`subtitle_ai/turns.py`). Off by default -- see `docs/decisions/2026-09-28-speaker-turn-detection-implemented-measured-shipped-off.md` for why neither cleared the bar yet. |
 | `SUBTITLE_AI_ASR_STYLE` | off | `natural` feeds Whisper a short natural-dialogue sample as `initial_prompt`, an experiment to recover dropped interjections. Gated on measured results (CLAUDE.md); off until then. |
 
 **TLS-terminating reverse proxies.** When the app is behind a proxy,
@@ -537,7 +537,8 @@ cd frontend && npx tsc --noEmit && npm test -- --run
 Deploying (`scripts/deploy.sh`) builds the image, redeploys the main app,
 ships the same image to the translate-server host, and health-checks both;
 set `SKIP_REMOTE=1` for changes that don't touch `translate.py` or
-`translate_server.py`. `CLAUDE.md` holds deploy and operations notes;
-`docs/IMPROVEMENT_PLAN.md` and `docs/ENHANCEMENT_DRAFT.md` are completed,
-frozen planning rounds; `CLAUDE.md` is the live, continuously-updated log of
-what has shipped since.
+`translate_server.py`. Start with `docs/product-requirements.md`,
+`docs/architecture.md` and `docs/agent-guide.md`; `docs/deployment.md` and
+`docs/operations.md` hold deploy and operations notes; `docs/decisions/` is the
+dated log of what shipped and what was measured. `docs/IMPROVEMENT_PLAN.md` and
+`docs/ENHANCEMENT_DRAFT.md` are completed, frozen planning rounds.

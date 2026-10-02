@@ -4,9 +4,9 @@
 
 Read this after `README.md` at the start of a session and update it before
 ending one when there is work to hand over. It is a short, chronological
-ledger, newest first — **not** a replacement for `CLAUDE.md`'s detailed,
-evidence-based writeups. Every entry here should be 1-3 lines and link out to
-the full detail (a `CLAUDE.md` section for something shipped, a
+ledger, newest first — **not** a replacement for the evidence-based writeups in
+`docs/decisions/`. Every entry here should be 1-3 lines and link out to
+the full detail (a `docs/decisions/` entry for something shipped, a
 `docs/*-handoff.md` file for something open) rather than duplicating it.
 
 **Every agent or session working in this repo should log here:**
