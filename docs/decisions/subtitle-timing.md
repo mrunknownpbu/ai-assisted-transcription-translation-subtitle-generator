@@ -12,8 +12,12 @@ several time bases: ASR word timestamps (faster-whisper, relative to the
 extracted WAV), a source subtitle's cue times (Workflow B), the translated
 segments' boundaries, the final cue times after segmentation and projection,
 and any correction applied afterwards. No global offset is ever added to a
-subtitle; the extracted WAV starts at the file's own time zero and cue times
-are derived from word times.
+subtitle. Audio is extracted with `ffmpeg -i <video> -map 0:<stream> -ac 1 -ar
+16000 -vn -sn` (no `-ss` or `-itsoffset`), so the WAV starts at the selected
+audio stream's first sample, and cue times are derived from word times in that
+WAV. A stream that starts later than the container's time zero (one file in the
+library, by 0.062 s) is therefore shifted by that amount; the pipeline does not
+compensate.
 
 ## Problem
 
