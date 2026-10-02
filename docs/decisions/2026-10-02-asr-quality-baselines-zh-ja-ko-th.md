@@ -1,7 +1,7 @@
 # ASR quality baselines for Chinese, Japanese, Korean and Thai (2026-10-02)
 
-**Status:** measured; no production setting changed (language pin, VAD and hotwords
-all tried).
+**Status:** measured; no production setting changed (language pin, VAD, hotwords
+and fine-tuned models all tried).
 
 ## Question
 
@@ -88,6 +88,41 @@ measurement recorded in the `asr.py` docstring (Title Case output, dropped windo
 `SUBTITLE_AI_ASR_HOTWORDS` stays off. Name errors are better handled by the
 translation-time glossary, which does not touch how the audio is read.
 
+## Fine-tuned models (Turkish and Japanese)
+
+Community CTranslate2 fine-tunes, downloaded to a scratch directory in the container
+and loaded by path through `AsrConfig(model_name=...)`; production is not wired to
+them. Alternatives were pinned to the language; the baseline auto-detects (pinning
+made no reliable difference earlier). Paired bootstrap 95 % interval against
+production large-v3.
+
+Turkish, Love Is In The Air S01E01-03 (human subtitle):
+
+| Model | WER | vs production | Name recall |
+|---|---|---|---|
+| large-v3 (production) | 17.3 % | | 87.0 % |
+| large-v3-turbo (control, not fine-tuned) | 17.1 % | -0.2 [-0.8, +0.4] | 87.2 % |
+| drascom/whisper-large-v3-turbo-turkish-ct2 | 30.7 % | **+13.4** [+12.2, +14.1] | 66.7 % |
+| vincespeed/faster-whisper-large-v3-turbo-turkish | 30.7 % | **+13.4** [+12.2, +14.0] | 66.6 % |
+
+Both Turkish fine-tunes are based on turbo, so the control separates "turbo" from
+"fine-tuned": turbo alone matches large-v3, the fine-tuning is what hurts (more
+wrong words, 15.0 % against 5.6 %, and worse name recall).
+
+Japanese, Human Vapor S01E01-02 (embedded Japanese track), CER:
+
+| Model | CER | Result |
+|---|---|---|
+| large-v3 (production) | 32.1 % | |
+| kotoba-tech/kotoba-whisper-v2.0-faster | n/a | crashed (`MemoryError: std::bad_alloc`) in faster-whisper's word-timestamp alignment; the pipeline requires word timestamps, so it cannot run here as is (cause not investigated) |
+| JhonVanced/whisper-large-v3-japanese-4k-steps-ct2 | 95.2 % (+63.1 [+57.9, +68.9]) | collapsed into repetition loops ("どうどうどう...": 117-134 segments carrying 11-12k words against about 550 segments and 4.7k words); 77.5 % of the reference missed |
+
+Conclusion: none of the four fine-tunes is usable; production large-v3 stays for
+Turkish and Japanese. A fine-tune is not an upgrade by default: each must be scored
+against the production model on the same episodes first. Untried: other Japanese
+models (e.g. kotoba v2.1+ with alignment heads), a Thai fine-tune, and
+large-v3-turbo as a speed option (accuracy matched here; speed not measured).
+
 ## Decision
 
 - Nothing changes. Pinning the language is neutral (detection is already right) and
@@ -100,7 +135,8 @@ translation-time glossary, which does not touch how the audio is read.
   translation one).
 - Hotwords stay off (see above); name errors are left to the translation-time
   glossary.
-- Candidate, untested: a fine-tuned Thai model. Two episodes per language is a small sample; widen it
+- Fine-tuned Turkish and Japanese models are worse (see above); a Thai fine-tune is
+  still untested. Two episodes per language is a small sample; widen it
   before adopting anything.
 
 ## Reproduce
