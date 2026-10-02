@@ -26,6 +26,7 @@ import glossary_profile
 import media_servers
 import name_correction
 import gpu
+import job_config
 import logging_setup
 import pipeline
 import srt_translation
@@ -578,7 +579,16 @@ class Worker(threading.Thread):
             self.store.append_log(job_id, traceback.format_exc()[-2000:])
         self.store.finish(job_id, "failed", error=info.message, error_category=info.code)
 
+    def _record_config_snapshot(self, job_id: str) -> None:
+        """Best-effort: a job must never fail because its provenance could
+        not be recorded."""
+        try:
+            self.store.update(job_id, config_snapshot=job_config.capture())
+        except Exception:
+            logger.warning("could not record the configuration snapshot", exc_info=True)
+
     def _process(self, job: dict) -> None:
+        self._record_config_snapshot(job["id"])
         if job.get("job_type") == "srt_translation":
             self._process_srt_translation(job)
         else:

@@ -668,6 +668,7 @@ def _job_summary(job: dict) -> dict:
     summary["qc"] = {stage: {k: v for k, v in (result or {}).items() if k != "findings"} | {"findings": []}
                      for stage, result in (job.get("qc") or {}).items()}
     summary["log"] = []
+    summary["config_snapshot"] = {}  # full snapshot on GET /api/jobs/{id}
     return summary
 
 

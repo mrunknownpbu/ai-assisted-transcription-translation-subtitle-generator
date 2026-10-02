@@ -913,3 +913,22 @@ class SrtTranslationJobCreationTests(JobStoreTestCase):
         self.store.finish(claimed["id"], "failed")
         retried = self.store.retry(claimed["id"], overwrite_original=False)
         self.assertFalse(retried["overwrite_original"])
+
+
+class ConfigSnapshotColumnTests(unittest.TestCase):
+    def test_old_database_gains_the_column_and_round_trips_json(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "jobs.db"
+            store = JobStore(db)
+            job = store.create("Show/S01E01.mkv", "tr")
+            self.assertEqual(store.get(job["id"])["config_snapshot"], {})
+            store.update(job["id"], config_snapshot={"version": 1, "env": {"X": None}})
+            self.assertEqual(store.get(job["id"])["config_snapshot"]["version"], 1)
+            # Simulate a database created before the column existed.
+            with sqlite3.connect(db) as conn:
+                conn.execute("ALTER TABLE jobs DROP COLUMN config_snapshot")
+            reopened = JobStore(db)
+            self.assertEqual(reopened.get(job["id"])["config_snapshot"], {})

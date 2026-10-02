@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_recovery_reason TEXT,
     last_recovered_at REAL,
     claim_count INTEGER NOT NULL DEFAULT 0,
-    last_claimed_at REAL
+    last_claimed_at REAL,
+    config_snapshot TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
@@ -185,6 +186,8 @@ class JobStore:
             "phase_durations":
                 "ALTER TABLE jobs ADD COLUMN phase_durations TEXT NOT NULL DEFAULT '{}'",
             "eta_seconds": "ALTER TABLE jobs ADD COLUMN eta_seconds REAL",
+            "config_snapshot":
+                "ALTER TABLE jobs ADD COLUMN config_snapshot TEXT NOT NULL DEFAULT '{}'",
         }
         for column, ddl in migrations.items():
             if column not in existing:
@@ -267,6 +270,7 @@ class JobStore:
         d["qc"] = json.loads(d["qc"])
         d["log"] = json.loads(d["log"])
         d["phase_durations"] = json.loads(d["phase_durations"])
+        d["config_snapshot"] = json.loads(d["config_snapshot"])
         d["elapsed_seconds"] = _elapsed(d)
         return d
 
@@ -602,7 +606,7 @@ class JobStore:
             raise JobStoreError(f"update() got unknown column(s): {sorted(unknown)}")
         fields = dict(fields)
         fields["updated_at"] = time.time()
-        for key in ("outputs", "qc", "log", "phase_durations"):
+        for key in ("outputs", "qc", "log", "phase_durations", "config_snapshot"):
             if key in fields and not isinstance(fields[key], str):
                 fields[key] = json.dumps(fields[key])
         assignments = ", ".join(f"{k}=?" for k in fields)

@@ -463,6 +463,28 @@ class LanguageDetectionFailureTests(WorkerTestCase):
         self.assertEqual(final["error_category"], "UNSUPPORTED_LANGUAGE")
 
 
+class ConfigSnapshotTests(WorkerTestCase):
+    def test_a_started_job_records_the_configuration_it_ran_with(self):
+        self.store.create("Show/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run", side_effect=RuntimeError("stop here")), \
+             patch.dict("os.environ", {"SUBTITLE_AI_NAME_CORRECTION": "off"}):
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        snapshot = self.store.get(claimed["id"])["config_snapshot"]
+        self.assertEqual(snapshot["env"]["SUBTITLE_AI_NAME_CORRECTION"], "off")
+        self.assertIn("pipeline_version", snapshot)
+
+    def test_snapshot_failure_never_fails_the_job(self):
+        self.store.create("Show/S01E01.mkv", "tr")
+        with patch.object(worker_mod.job_config, "capture", side_effect=RuntimeError("no")), \
+             patch.object(worker_mod.pipeline, "run", side_effect=RuntimeError("real failure")):
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        final = self.store.get(claimed["id"])
+        self.assertEqual(final["config_snapshot"], {})
+        self.assertIn("real failure", final["error"])
+
+
 class TypedErrorReportingTests(WorkerTestCase):
     def _run_failing(self, exc):
         self.store.create("Show/S01E01.mkv", "tr")
