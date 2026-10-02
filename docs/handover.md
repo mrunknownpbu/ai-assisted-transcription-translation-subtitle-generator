@@ -56,6 +56,11 @@ same as `CLAUDE.md`.
 
 ## Open issues
 
+- 2026-10-01 — OPEN: the reported ~5.1-second human/AI SRT offset could not
+  be reproduced because no matching reference/candidate pair is in this
+  checkout. Run `scripts/eval_srt_quality.py reference.srt candidate.srt`
+  against the actual pair before changing media timestamp origin; it reports
+  constant offset separately from linear/non-linear drift.
 - 2026-09-30 — OPEN: setting `SUBTITLE_AI_API_KEY` now protects all API
   reads and SSE, but the bundled browser UI has no secure API-key provisioning
   mechanism; deploy it behind same-origin reverse-proxy authentication or add
@@ -94,6 +99,15 @@ same as `CLAUDE.md`.
 
 ## Change log
 
+- 2026-10-01 — Added conservative final-cue re-segmentation and centralized
+  subtitle constraints: incomplete sub-0.5s fragments merge only across a
+  short non-turn/non-pause boundary; target pieces merge when their audio
+  envelope cannot support the minimum duration. Paths:
+  `subtitle_ai/{subtitle_constraints.py,segmentation_source.py,segmentation_target.py,qc/readability_qc.py}`,
+  `.env.example`, `compose.yml`; uncommitted alongside pre-existing work.
+  Added `scripts/eval_srt_quality.py` plus regression tests for fragment
+  merging and constant-offset versus drift detection. Full suite: 1269 passed,
+  3 warnings, 71 subtests.
 - 2026-09-30 — Reran audio transcription and English translation for Love Is
   In The Air (2020) S02E01–E03 and Queen of Tears (2025) S01E01–E03; all six
   jobs completed. Saved each old `.tr.srt`/`.en.srt` as
