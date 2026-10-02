@@ -14,9 +14,9 @@ import json
 import subprocess
 from pathlib import Path
 
+from errors import MediaError
 
-class MediaError(RuntimeError):
-    pass
+
 
 
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".avi", ".mov", ".m4v", ".ts", ".webm"}

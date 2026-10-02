@@ -50,6 +50,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from errors import GpuLockTimeout, InsufficientVramError
+
 # Defaults under the OS temp dir -- always writable, no dependency on a
 # /cache mount existing (e.g. in unit tests run outside any container) --
 # so this only provides same-process/same-host locking unless a
@@ -118,14 +120,8 @@ def _vram_margin_from_env(default: float = 3.2) -> float:
 DEFAULT_VRAM_MARGIN_GB = _vram_margin_from_env()
 
 
-class InsufficientVramError(RuntimeError):
-    """Raised by preflight_vram_check() when free VRAM is still below the
-    required margin after the whole wait window -- refusing to attempt a
-    model construction that would very likely CUDA-OOM, rather than let
-    ctranslate2/PyTorch's own allocator fail loudly (and non-uniformly:
-    confirmed real cases left partially-allocated VRAM stuck for the rest
-    of the process's life -- see free_gpu()'s and gpu_lock()'s docstrings)
-    mid-load."""
+# InsufficientVramError: raised by preflight_vram_check() when free VRAM stays below
+# the required margin for the whole wait window (see errors.py).
 
 
 # Models deliberately kept loaded between jobs (translate._ResidentNllb),
@@ -376,5 +372,4 @@ def gpu_lock(timeout: float | None = None):
             fh.close()
 
 
-class GpuLockTimeout(TimeoutError):
-    """Raised when a bounded GPU lock acquisition cannot proceed."""
+# GpuLockTimeout (errors.py): a bounded GPU lock acquisition could not proceed.

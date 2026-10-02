@@ -20,6 +20,7 @@ from pathlib import Path
 
 import api
 import auto_glossary
+import errors
 import cast_enrichment
 import glossary_profile
 import media_servers
@@ -562,6 +563,21 @@ class Worker(threading.Thread):
                 raise JobCancelled()
         return on_event
 
+    def _fail_job(self, job_id: str, exc: Exception) -> None:
+        """Record a job failure. Typed errors (errors.SubtitleAiError) carry
+        their own stable code and a remediation hint; anything else is a
+        defect: its traceback goes to the log and the job log, and the user
+        sees a bounded message under PIPELINE_ERROR."""
+        info = errors.describe(exc)
+        if info.expected:
+            logger.warning("job failed at stage %s: [%s] %s", info.stage, info.code, info.message)
+            if info.remediation:
+                self.store.append_log(job_id, f"Hint: {info.remediation}")
+        else:
+            logger.exception("job %s failed with an unhandled exception", job_id)
+            self.store.append_log(job_id, traceback.format_exc()[-2000:])
+        self.store.finish(job_id, "failed", error=info.message, error_category=info.code)
+
     def _process(self, job: dict) -> None:
         if job.get("job_type") == "srt_translation":
             self._process_srt_translation(job)
@@ -669,18 +685,8 @@ class Worker(threading.Thread):
             self._notify_media_servers(job_id, outputs)
         except JobCancelled:
             self.store.finish(job_id, "cancelled")
-        except OutputSafetyError as exc:
-            self.store.finish(job_id, "failed", error=str(exc), error_category="OUTPUT_ERROR")
-        except srt_translation.SrtValidationError as exc:
-            self.store.finish(job_id, "failed", error=str(exc), error_category="SRT_VALIDATION_ERROR")
-        except pipeline.LowConfidenceLanguageError as exc:
-            self.store.finish(job_id, "failed", error=str(exc), error_category="LOW_CONFIDENCE_LANGUAGE")
-        except pipeline.UnsupportedLanguageError as exc:
-            self.store.finish(job_id, "failed", error=str(exc), error_category="UNSUPPORTED_LANGUAGE")
         except Exception as exc:
-            logger.exception("job %s failed with an unhandled exception", job_id)
-            self.store.append_log(job_id, traceback.format_exc()[-2000:])
-            self.store.finish(job_id, "failed", error=str(exc)[:500], error_category="PIPELINE_ERROR")
+            self._fail_job(job_id, exc)
         finally:
             # See _process_video's identical finally block for why this
             # must be unconditional, not just inside the `with gpu_lock()`.
@@ -831,16 +837,8 @@ class Worker(threading.Thread):
             self._notify_media_servers(job_id, outputs)
         except JobCancelled:
             self.store.finish(job_id, "cancelled")
-        except OutputSafetyError as exc:
-            self.store.finish(job_id, "failed", error=str(exc), error_category="OUTPUT_ERROR")
-        except pipeline.LowConfidenceLanguageError as exc:
-            self.store.finish(job_id, "failed", error=str(exc), error_category="LOW_CONFIDENCE_LANGUAGE")
-        except pipeline.UnsupportedLanguageError as exc:
-            self.store.finish(job_id, "failed", error=str(exc), error_category="UNSUPPORTED_LANGUAGE")
         except Exception as exc:
-            logger.exception("job %s failed with an unhandled exception", job_id)
-            self.store.append_log(job_id, traceback.format_exc()[-2000:])
-            self.store.finish(job_id, "failed", error=str(exc)[:500], error_category="PIPELINE_ERROR")
+            self._fail_job(job_id, exc)
         finally:
             # Confirmed necessary by a real production failure: an OOM
             # raised many frames deep inside a model's own forward pass

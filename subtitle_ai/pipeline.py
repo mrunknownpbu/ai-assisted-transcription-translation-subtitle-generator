@@ -23,6 +23,7 @@ import segmentation_target
 import srt
 import translate
 import turns
+from errors import LowConfidenceLanguageError, UnsupportedLanguageError
 from asr import AsrConfig, PIPELINE_VERSION, asr_style_prompt, hotwords_enabled, transcribe as asr_transcribe, vad_parameters
 from output import TARGET_LANG, write_srt_atomic
 from projection import SourceGroup, merge_groups, project, validate_coverage
@@ -39,14 +40,8 @@ DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
 DEFAULT_LOW_CONFIDENCE_ACTION = "continue"
 
 
-class LowConfidenceLanguageError(RuntimeError):
-    """source_lang=AUTO and the detected language's confidence is below
-    low_confidence_threshold, with low_confidence_action="require_override"."""
-
-
-class UnsupportedLanguageError(RuntimeError):
-    """The resolved source language (detected or manually requested) has
-    no configured NLLB translation mapping (see translate.NLLB_LANG)."""
+# LowConfidenceLanguageError / UnsupportedLanguageError live in errors.py and
+# are imported above, so this module keeps exporting them.
 
 
 @dataclass

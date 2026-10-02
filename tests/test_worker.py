@@ -463,6 +463,31 @@ class LanguageDetectionFailureTests(WorkerTestCase):
         self.assertEqual(final["error_category"], "UNSUPPORTED_LANGUAGE")
 
 
+class TypedErrorReportingTests(WorkerTestCase):
+    def _run_failing(self, exc):
+        self.store.create("Show/S01E01.mkv", "tr")
+        with patch.object(worker_mod.pipeline, "run", side_effect=exc):
+            claimed = self.store.claim()
+            self.worker._process(claimed)
+        return self.store.get(claimed["id"])
+
+    def test_gpu_shortage_is_a_gpu_resource_error_with_a_hint(self):
+        final = self._run_failing(worker_mod.gpu.InsufficientVramError("only 1.2 GB free"))
+        self.assertEqual((final["status"], final["error_category"]), ("failed", "GPU_RESOURCE_ERROR"))
+        self.assertEqual(final["error"], "only 1.2 GB free")
+        self.assertTrue(any("Hint:" in str(entry) for entry in final["log"]))
+
+    def test_media_failure_is_a_media_error(self):
+        final = self._run_failing(worker_mod.errors.MediaError("ffprobe failed"))
+        self.assertEqual(final["error_category"], "MEDIA_ERROR")
+
+    def test_a_defect_keeps_its_traceback_in_the_log_not_the_message(self):
+        final = self._run_failing(KeyError("missing"))
+        self.assertEqual(final["error_category"], "PIPELINE_ERROR")
+        self.assertNotIn("Traceback", final["error"])
+        self.assertTrue(any("Traceback" in str(entry) for entry in final["log"]))
+
+
 class AudioStreamJobTests(WorkerTestCase):
     def test_auto_stream_selection_passes_none_to_pipeline(self):
         job = self.store.create("Show/S01E01.mkv")   # no explicit stream -> AUTO

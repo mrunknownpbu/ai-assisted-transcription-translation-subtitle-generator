@@ -11,6 +11,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from errors import OutputSafetyError
+
 # Any file matching one of these is categorically off-limits: never
 # read as transcription/translation input, never written, renamed, moved,
 # or deleted, by any code path, ever -- not even with an explicit
@@ -34,8 +36,6 @@ MAX_SRT_FILE_BYTES = 2 * 1024 * 1024
 TARGET_LANG = "en"
 
 
-class OutputSafetyError(ValueError):
-    pass
 
 
 def _is_protected(name: str) -> bool:

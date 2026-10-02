@@ -31,7 +31,7 @@ import segmentation_target
 import srt
 import translate
 from output import MAX_SRT_FILE_BYTES, TARGET_LANG, write_srt_atomic
-from pipeline import LowConfidenceLanguageError, UnsupportedLanguageError
+from errors import LowConfidenceLanguageError, SubtitleParseError, UnsupportedLanguageError
 from qc import entity_qc, output_qc, readability_qc, timing_qc, translation_qc
 from qc.types import JobQc
 
@@ -42,13 +42,9 @@ from qc.types import JobQc
 LOW_CONFIDENCE_THRESHOLD = 0.5
 
 
-class SrtValidationError(ValueError):
-    """The source .srt is malformed in a way this workflow refuses to
-    silently tolerate. srt.parse() (used elsewhere for lenient QA/
-    reference-comparison reads, where silently skipping a bad block is
-    the right behavior) is deliberately left unchanged; a translation JOB
-    run against a broken source file should fail fast and visibly instead
-    of quietly translating a truncated subset of it."""
+# The source .srt is malformed in a way this workflow refuses to tolerate: see
+# errors.SubtitleParseError. srt.parse() stays lenient for QA/reference reads.
+SrtValidationError = SubtitleParseError
 
 
 @dataclass
