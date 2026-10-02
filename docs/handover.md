@@ -31,7 +31,7 @@ without updating this file. That is the definition of "handover" here.
 - **Product:** two workflows (video to English, subtitle to English) in one container;
   413 jobs processed, queue empty; running container (image built 2026-09-30) predates
   everything below and has not been recreated.
-- **Quality gates:** backend 1,357 tests (1 skipped), frontend 98, ruff and mypy with no
+- **Quality gates:** backend 1,358 tests (1 skipped), frontend 98, ruff and mypy with no
   exclusions, CI green on the last verified push; backend line coverage 90%.
 - **Documents:** PRD, architecture, design system, agent guide, API, testing, deployment,
   troubleshooting and the decision log are current; `CLAUDE.md` is invariants and commands only.
@@ -81,12 +81,32 @@ design system; new agent guide, testing, deployment and troubleshooting docs.
 - The 0.001 s/s drift limit in the evaluator is unvalidated (needs a frame-rate-mismatched pair).
 - Performance: real-time factor per stage (PRD marks it TBD).
 
-## Required validation
+## Validation performed (2026-10-02, image `subtitle-ai:validate`, a side container on port 18099 with a scratch media folder; the live container was not touched)
 
-- Recreate the container from a fresh image and run the checklist in `docs/deployment.md`
-  (health, API, frontend, GPU, one job per workflow, batch, cancel, retry, atomic-failure,
-  rescan). The image has been built and exercised separately (see the change log below); the live
-  container has not been recreated because it needs a key or `SUBTITLE_AI_ALLOW_INSECURE=1` in `.env`.
+| Check | Result |
+|---|---|
+| Image build | Succeeded (4 min cold, about 10.5 GB). |
+| Startup guard | No key on `0.0.0.0`: the process exits with the "refusing to start" error. With a key: healthy in 20 s. |
+| Health | `ok`, `status: ok`, `db_ok`, `worker_alive` present. |
+| API | 401 without the key, including on `POST /api/srt-translations`; 200 with it; unknown `/api/*` path is JSON 404. |
+| Frontend | `/` and `/assets/*` served (200). |
+| GPU | `torch.cuda.is_available()` True (RTX 3070); during a job GPU memory rose from 187 to 4,343 MiB at 97% utilisation. |
+| Workflow A | A 150 s clip of Love Is In The Air S01E01 completed in 25 s: Turkish detected (0.98), `.tr.srt` and `.en.srt` valid, `config_snapshot` present, glossary name "Eda" preserved. |
+| Workflow B | A 32-cue Turkish upload completed in 0.7 s: no audio or ASR events, original saved beside the English, every English cue inside its source cue and start/end times identical to the source. |
+| Batch | Two queued video jobs ran one at a time and both succeeded; a duplicate of an active job was refused (409). |
+| Cancellation | A queued job cancelled immediately; a running job went `CANCELLING` then `CANCELLED` and the existing English subtitle was byte-identical afterwards. |
+| Failure and retry | A non-video file failed as `MEDIA_ERROR` with a hint; retry created a new job (attempt 2, `retry_of` set) and left the original untouched. |
+| Atomic output failure | A read-only media folder: the existing subtitle was byte-identical and no temp files remained. This first failed as `PIPELINE_ERROR` with a raw errno; fixed to `OUTPUT_ERROR` with a hint and re-verified in a rebuilt image. |
+| Logs | With `SUBTITLE_AI_LOG_FORMAT=json`, 24 of 25 application log lines carried the job ID (the other is startup); no tracebacks. |
+| Rescan | Not testable: Plex and Jellyfin are not configured in the side container. |
+
+## Required validation (still open)
+
+- Recreate the LIVE container from a fresh image (`./scripts/deploy.sh`) and repeat the health, API
+  and frontend checks. It was not recreated: `.env` has neither `SUBTITLE_AI_API_KEY` nor
+  `SUBTITLE_AI_ALLOW_INSECURE=1`, so the new image would refuse to start. That is the owner's call.
+- A real rescan against Plex or Jellyfin.
+- Re-run Workflow A on the Malay film to see the unsuppressed hallucinations again after any signature work.
 - Re-check CI after pushing.
 
 ## Known technical debt

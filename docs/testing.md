@@ -27,7 +27,7 @@ Command and count history from before 2026-10-02 is in `docs/testing-history.md`
 
 | Suite | Count | Notes |
 |---|---|---|
-| Backend | 1,357 tests, 1 skipped | The skip is the real timing pair that does not exist yet. |
+| Backend | 1,358 tests, 1 skipped | The skip is the real timing pair that does not exist yet. |
 | Frontend | 98 tests in 13 files | Vitest, Testing Library, jsdom. |
 | Backend line coverage | 90% (6,254 statements, 634 missed) | Measured with `coverage` over the unittest run; not enforced in CI. |
 
