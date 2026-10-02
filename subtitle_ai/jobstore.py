@@ -42,6 +42,19 @@ def _english_destination(original: dict) -> str:
 STATUSES = ("queued", "running", "completed", "failed", "skipped", "cancelled")
 TERMINAL_STATUSES = frozenset({"completed", "failed", "skipped", "cancelled"})
 ACTIVE_STATUSES = frozenset({"queued", "running"})
+
+# The stored `status` values are a public contract older rows and clients
+# depend on, so they are not renamed. `lifecycle` is the same state under the
+# documented names, derived on read: a running job whose cancellation was
+# requested is CANCELLING (cancel_requested is a flag, not a status).
+_LIFECYCLE = {"queued": "QUEUED", "running": "RUNNING", "completed": "SUCCEEDED",
+              "failed": "FAILED", "cancelled": "CANCELLED", "skipped": "SKIPPED"}
+
+
+def lifecycle(status: str, cancel_requested: bool) -> str:
+    if status == "running" and cancel_requested:
+        return "CANCELLING"
+    return _LIFECYCLE.get(status, status.upper())
 MAX_JOB_LOG_ENTRIES = 200
 MAX_JOB_LOG_MESSAGE_CHARS = 4_000
 LOG_MESSAGE_TRUNCATION_SUFFIX = "… [truncated]"
@@ -271,6 +284,7 @@ class JobStore:
         d["log"] = json.loads(d["log"])
         d["phase_durations"] = json.loads(d["phase_durations"])
         d["config_snapshot"] = json.loads(d["config_snapshot"])
+        d["lifecycle"] = lifecycle(d["status"], d["cancel_requested"])
         d["elapsed_seconds"] = _elapsed(d)
         return d
 

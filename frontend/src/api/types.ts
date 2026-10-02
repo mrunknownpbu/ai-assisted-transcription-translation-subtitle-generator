@@ -47,6 +47,8 @@ export interface Job {
   destination_srt_path: string | null;
   source_is_uploaded: boolean;
   status: JobStatus;
+  /** Same state under the documented names; CANCELLING = running with a cancel requested. */
+  lifecycle?: "QUEUED" | "RUNNING" | "CANCELLING" | "CANCELLED" | "SUCCEEDED" | "FAILED" | "SKIPPED";
   stage: string;
   progress: number;
   source_lang: string | null;

@@ -932,3 +932,29 @@ class ConfigSnapshotColumnTests(unittest.TestCase):
                 conn.execute("ALTER TABLE jobs DROP COLUMN config_snapshot")
             reopened = JobStore(db)
             self.assertEqual(reopened.get(job["id"])["config_snapshot"], {})
+
+
+class LifecycleStateTests(unittest.TestCase):
+    def test_documented_names_derive_from_stored_status(self):
+        from jobstore import lifecycle
+        self.assertEqual(
+            [lifecycle(s, False) for s in ("queued", "running", "completed", "failed", "cancelled", "skipped")],
+            ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "SKIPPED"])
+
+    def test_running_with_a_cancel_request_is_cancelling(self):
+        from jobstore import lifecycle
+        self.assertEqual(lifecycle("running", True), "CANCELLING")
+        self.assertEqual(lifecycle("queued", True), "QUEUED")   # a queued job is cancelled outright
+
+    def test_rows_expose_lifecycle(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp) / "jobs.db")
+            job = store.create("Show/S01E01.mkv", "tr")
+            self.assertEqual(store.get(job["id"])["lifecycle"], "QUEUED")
+            store.claim()
+            self.assertEqual(store.get(job["id"])["lifecycle"], "RUNNING")
+            store.request_cancel(job["id"])
+            self.assertEqual(store.get(job["id"])["lifecycle"], "CANCELLING")
+            store.finish(job["id"], "cancelled")
+            self.assertEqual(store.get(job["id"])["lifecycle"], "CANCELLED")
