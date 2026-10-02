@@ -101,6 +101,15 @@ design system; new agent guide, testing, deployment and troubleshooting docs.
 | Logs | With `SUBTITLE_AI_LOG_FORMAT=json`, 24 of 25 application log lines carried the job ID (the other is startup); no tracebacks. |
 | Rescan | Not testable: Plex and Jellyfin are not configured in the side container. |
 
+## Fresh-transcription change (2026-10-02, owner request: "every job must run fresh transcription")
+
+`SUBTITLE_AI_REUSE_TRANSCRIPT_CACHE` (default off); see `decisions/2026-10-02-every-job-transcribes-afresh.md`.
+Verified on the live container after redeploy: an ordinary (non-retry) job on Hammer Session! S01E01 with
+overwrite off transcribed for 260 s (289 s total, against 13 s when cached), logged `ASR_STARTED`,
+`ASR_COMPLETED` and `ASR_CACHE_STORED` and no cache hit. Correction to an earlier statement: a retry does
+not store its transcript (it passed no cache directory); that was fixed by this change. Existing library
+subtitles were not replaced in either test (overwrite flags off).
+
 ## Required validation (still open)
 
 - ~~Recreate the live container.~~ Done 2026-10-02 after the owner asked: `SUBTITLE_AI_API_KEY` was set in
