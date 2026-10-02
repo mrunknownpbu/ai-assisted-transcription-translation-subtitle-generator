@@ -178,27 +178,31 @@ protection requires cast-metadata credit, recurring transcript evidence and a
 demonstrated unprotected-translation failure (`cast_enrichment.py`).
 
 Code-switching: `langid.detect_language_overrides()` runs on the already-decoded
-(audio-derived) text. A sentence needs at least 20 characters and at least 0.90
-detector confidence to count, and a run of at least 3 consecutive qualifying
-sentences in a language other than the job's is translated with that language;
-shorter runs and anything below the thresholds stay with the job language. Limits:
+(audio-derived) text, at clause level (sentences split on punctuation and commas).
+A clause needs at least 20 characters and at least 0.90 detector confidence to
+count; a run of at least 3 consecutive qualifying clauses in one language other
+than the job's marks their sentences to be translated with that language. A
+shorter clause neither counts nor breaks a run. Shorter runs and anything below the
+thresholds stay with the job language, because the detector is confidently wrong
+on short lines ("Vay be!" as English). Limits:
 a text detector, so very short or mixed lines are not overridden; thresholds were
 measured on one real episode and a 90,076-cue library
-(`docs/decisions/2026-09-29-code-switched-dialogue-mistranslated-per-sentence-language-override.md`).
+(`docs/decisions/2026-09-29-code-switched-dialogue-mistranslated-per-sentence-language-o.md`).
 
 ## 9. Quality control
 
 Per-stage advisory checks (`qc/*`): transcription, translation, entity, timing,
 readability, segmentation, output, and source-side readability and output. A job
-fails only on structural findings. `needs_review` counts findings at confidence
-0.7 or higher. QC never changes a subtitle; text-changing behaviour lives in a named
+fails only on structural findings. `needs_review` counts entity and hallucination
+findings and anything at confidence 0.7 or higher. QC never changes a subtitle; text-changing behaviour lives in a named
 stage (`name_correction`, `normalize`, glossary restore, target segmentation).
 
 ## 10. File safety
 
-Subtitles are written by `output.write_srt_atomic`: a temporary file in the target
-directory (unique name), content validated, `fsync`, atomic rename, and the
-temporary file removed on failure. `allow_overwrite=False` keeps an existing file
+Subtitles are written by `output.write_srt_atomic`: a uniquely named temporary file
+in the target directory, `fsync`, an atomic `os.replace`, and the temporary file
+removed on failure. Content is validated before this call (the pipeline's `valid`
+check and the SRT parser), not inside it. `allow_overwrite=False` keeps an existing file
 (reported as KEEP). Paths are resolved against the media root, reject `..`,
 symlinks leaving it and protected suffixes (`resolve_media_path`,
 `resolve_output_path`). Source and English outputs have independent overwrite
