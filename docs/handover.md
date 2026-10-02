@@ -35,8 +35,9 @@ without updating this file. That is the definition of "handover" here.
   exclusions, CI green on the last verified push; backend line coverage 90%.
 - **Documents:** PRD, architecture, design system, agent guide, API, testing, deployment,
   troubleshooting and the decision log are current; `CLAUDE.md` is invariants and commands only.
-- **Pushed?** Everything up to `d2b720c` is on `origin/master`; later commits (this rebuild
-  work) are local until pushed.
+- **Pushed:** this work is on `origin/master`; CI (lint, test, frontend, docker) was green on `e1a9b1e`.
+  An earlier push of it failed CI because new frontend files matched the `*token*` ignore pattern and
+  were never committed; fixed by renaming them (`styles/theme.css`).
 
 ## Completed work (this rebuild, 2026-10-02)
 

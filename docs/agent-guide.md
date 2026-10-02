@@ -76,6 +76,10 @@ every issue noticed but not fixed, and the next recommended tasks.
 - Do not hide a failed write, database update or stage behind broad exception
   handling; fail the job with a typed error (`errors.py`).
 - Do not write deployment-owned glossary YAML with a lossy writer.
+- `.gitignore` (and `.dockerignore`) exclude any path containing `token`, `secret` or `credential`
+  (a secrets safeguard). A new file with one of those words in its name is silently never committed;
+  local tests pass and CI fails. Check `git status` shows every new file, and verify with a clean
+  `git archive HEAD` build when in doubt.
 - Do not rewrite historical decision records to look current; add a new one that
   supersedes it.
 - Do not add authentication machinery, an ORM, a queue service or a new database
