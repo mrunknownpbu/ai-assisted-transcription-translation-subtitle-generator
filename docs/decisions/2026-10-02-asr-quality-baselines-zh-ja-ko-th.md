@@ -1,6 +1,7 @@
 # ASR quality baselines for Chinese, Japanese, Korean and Thai (2026-10-02)
 
-**Status:** measured; no production setting changed.
+**Status:** measured; no production setting changed (language pin, VAD and hotwords
+all tried).
 
 ## Question
 
@@ -61,6 +62,32 @@ Language detection was correct on all eight episodes (confidence 0.56-0.99).
 | Chinese | 0.0 [-0.3, +0.4] | +1.1 [-0.1, +2.4] |
 | Japanese | -0.6 [-1.8, +0.5] | +1.3 [-0.8, +3.4] |
 
+## Hotwords (Chinese and Korean)
+
+Does biasing decoding toward names help? `asr:hotwords=...` against the baseline,
+same two episodes each, paired bootstrap 95 % interval.
+
+- *Cast names*: what production could supply today. TMDB/TVDB credits for these
+  series are romanised ("Ling Chao", "Park Ji-sang"), not in Hanzi or Hangul.
+- *Native-script names (oracle)*: Korean 채은아 박지상 유교수 암병원, Chinese 凌 肖,
+  taken from the baseline's recurring errors against the human subtitle. This is an
+  upper bound, not something production can build; it uses answers a curator would
+  have to supply.
+
+| Variant | Korean (WER) | Chinese (CER) |
+|---|---|---|
+| Baseline | 52.2 % | 25.0 % |
+| Cast names, Latin script | 66.3 % (**+14.1** [+9.9, +18.7]) | 26.8 % (**+1.8** [+0.6, +3.5]) |
+| Native-script names (oracle) | 52.0 % (-0.2 [-4.1, +3.2]) | 25.4 % (+0.4 [-0.9, +1.8]) |
+
+Latin hotwords clearly hurt both languages (Korean E01 per-character 38.3 -> 53.9 %).
+Native-script names cut the targeted errors (凌 -> 林: 21 -> 10) but add new ones that
+cancel the gain, and the hotwords leak into the output where nothing was said
+("the" -> 유교수, "자막제공" -> 박지상, "bloody" -> 암병원). This agrees with the Turkish
+measurement recorded in the `asr.py` docstring (Title Case output, dropped windows):
+`SUBTITLE_AI_ASR_HOTWORDS` stays off. Name errors are better handled by the
+translation-time glossary, which does not touch how the audio is read.
+
 ## Decision
 
 - Nothing changes. Pinning the language is neutral (detection is already right) and
@@ -71,8 +98,9 @@ Language detection was correct on all eight episodes (confidence 0.56-0.99).
   (凌 -> 林 x21, 채은아 -> 채연아 x7), Thai confuses similar consonants (ร/ล,
   ม/อ), Chinese mixes Simplified/Traditional forms (a scoring effect more than a
   translation one).
-- Candidates, untested: glossary hotwords for names (Chinese, Korean) and a
-  fine-tuned Thai model. Two episodes per language is a small sample; widen it
+- Hotwords stay off (see above); name errors are left to the translation-time
+  glossary.
+- Candidate, untested: a fine-tuned Thai model. Two episodes per language is a small sample; widen it
   before adopting anything.
 
 ## Reproduce
