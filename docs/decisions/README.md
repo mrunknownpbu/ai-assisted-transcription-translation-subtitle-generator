@@ -49,3 +49,4 @@ Dated, evidence-based records of what was built, measured, shipped, shipped-but-
 | — | [Entity-protection precedent: the evidence bar](entity-protection-evidence-bar.md) |
 | 2026-10-02 | [Every job transcribes the audio afresh](2026-10-02-every-job-transcribes-afresh.md) |
 | 2026-10-02 | [ASR quality baselines for Chinese, Japanese, Korean and Thai](2026-10-02-asr-quality-baselines-zh-ja-ko-th.md) |
+| 2026-10-03 | [Re-time an existing subtitle against the audio](2026-10-03-subtitle-retiming.md) |

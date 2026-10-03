@@ -46,6 +46,7 @@ segmentation and QC code but imports no ASR module (a test pins it).
 | ASR | `asr.py`, `transcript.py`, `normalize.py`, `hallucination.py`, `name_correction.py`, `turns.py` | Transcription, cache provenance, canonical transcript, suppression, rule-based normalisation. |
 | Translation | `translate.py`, `translate_server.py`, `langid.py` | Local/remote NLLB, batching and recovery, code-switch detection. |
 | Subtitle processing | `segmentation_source.py`, `segmentation_target.py`, `projection.py`, `text_segmentation.py`, `subtitle_constraints.py`, `srt.py` | Cues, timing, constraints, SRT/WebVTT parsing and rendering. |
+| Subtitle re-timing | `retime.py`, `scripts/retime_subtitle.py` | Moves an existing subtitle's cues onto the audio's word times without changing text; not part of Workflow A or B. |
 | QC | `qc/*` | Advisory per-stage findings. Never mutates a subtitle. |
 | Glossary and cast | `glossary.py`, `glossary_profile.py`, `glossary_files.py`, `auto_glossary.py`, `cast_enrichment.py`, `cast_metadata.py` | Entity protection, layered profiles, mined suggestions, evidence-gated enrichment. |
 | Output safety | `output.py` | Path containment, protected suffixes, atomic write. |
