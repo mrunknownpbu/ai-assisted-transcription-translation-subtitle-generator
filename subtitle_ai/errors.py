@@ -43,6 +43,15 @@ class SubtitleParseError(SubtitleAiError, ValueError):
     remediation = "Fix or replace the source subtitle file."
 
 
+class RetimeRefusedError(SubtitleAiError, ValueError):
+    """A subtitle shares too little text with the video's audio to be re-timed
+    on evidence (wrong episode, wrong language, or a very different edit)."""
+    code = "RETIME_REFUSED"
+    stage = "retiming"
+    remediation = ("Check that the subtitle belongs to this video and that its language matches; "
+                   "nothing was written.")
+
+
 # --- language ---------------------------------------------------------------
 
 class LowConfidenceLanguageError(SubtitleAiError, RuntimeError):

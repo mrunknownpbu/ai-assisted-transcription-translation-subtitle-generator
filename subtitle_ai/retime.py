@@ -26,6 +26,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Iterable
 
+from errors import RetimeRefusedError
+
 # Languages written without spaces between words: compared per character.
 UNSPACED = frozenset({"ja", "zh", "th"})
 
@@ -75,8 +77,7 @@ ALIGNED_WITHIN = 0.25
 MAX_ABS_SLOPE = 0.1   # seconds of offset per second; a 25 vs 23.976 fps mismatch is 0.043
 
 
-class RetimeRefused(Exception):
-    """Not enough evidence to retime this subtitle against this audio."""
+RetimeRefused = RetimeRefusedError   # not enough evidence to retime this subtitle against this audio
 
 
 @dataclass

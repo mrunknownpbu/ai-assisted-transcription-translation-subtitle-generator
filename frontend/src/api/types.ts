@@ -37,7 +37,7 @@ export interface LogEntry {
   message: string;
 }
 
-export type JobType = "video" | "srt_translation";
+export type JobType = "video" | "srt_translation" | "subtitle_retime";
 
 export interface Job {
   id: string;
@@ -278,6 +278,19 @@ export interface DeleteGlossaryEntityResponse {
 export interface JobChangedEvent {
   type: "job_changed";
   job_id: string;
+}
+
+export interface RetimeRequest {
+  video_path: string;
+  // Exactly one of these two must be given.
+  source_srt_path?: string | null;
+  source_upload_id?: string | null;
+  // The subtitle's language; the server reads it from the file name
+  // (film.tr.srt) when omitted, but an upload has no usable name.
+  language?: string;
+  // false: write <stem>.<language>.retimed.srt and leave every other
+  // subtitle alone. true: replace <stem>.<language>.srt.
+  replace_original?: boolean;
 }
 
 export interface SrtTranslationRequest {

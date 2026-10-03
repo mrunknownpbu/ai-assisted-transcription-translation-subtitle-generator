@@ -86,6 +86,18 @@ def resolve_output_path(media_root: str | Path, video_path: str | Path, language
     return target
 
 
+def resolve_retimed_path(media_root: str | Path, video_path: str | Path, language: str) -> Path:
+    """`<video stem>.<language>.retimed.srt`: where a re-timed copy of an
+    original-language subtitle goes when the existing `<stem>.<language>.srt`
+    is to be left alone. Same containment and protected-name rules as
+    resolve_output_path."""
+    canonical = resolve_output_path(media_root, video_path, language)
+    target = canonical.with_name(f"{canonical.stem}.retimed.srt")
+    if _is_protected(target.name):
+        raise OutputSafetyError(f"refusing to target a protected external-subtitle path: {target.name}")
+    return target
+
+
 def re_lang_ok(language: str) -> bool:
     return bool(language) and language.isalpha() and language.islower() and 2 <= len(language) <= 3
 

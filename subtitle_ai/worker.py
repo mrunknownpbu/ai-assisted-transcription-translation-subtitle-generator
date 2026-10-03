@@ -30,6 +30,7 @@ import gpu
 import job_config
 import logging_setup
 import pipeline
+import retime_job
 import srt_translation
 import upload_cleanup
 import workdir
@@ -120,8 +121,30 @@ _SRT_FINE_PROGRESS: dict[str, tuple[str, float, float, str, str]] = {
 }
 
 
+_RETIME_STAGE_MILESTONES: dict[str, tuple[str, float]] = {
+    "RETIME_STARTED": ("Reading subtitle", 0),
+    "RETIME_PARSE_COMPLETED": ("Reading subtitle", 3),
+    "ASR_CACHE_HIT": ("Transcribing", 90),
+    "RETIME_TRANSCRIPT_READY": ("Aligning", 92),
+    "RETIME_ALIGNED": ("Aligning", 97),
+    "OUTPUT_COMMITTED": ("Writing output", 99),
+    "JOB_COMPLETED": ("Completed", 100),
+}
+_RETIME_FINE_PROGRESS: dict[str, tuple[str, float, float, str, str]] = {
+    "ASR_PROGRESS": ("Transcribing", 4, 90, "position", "total"),
+}
+
+
 LOG_PROGRESS_STEP = 5       # percent of a stage between logged progress events
 MIN_PROGRESS_DELTA = 0.5    # progress points before a progress-only row write
+
+
+def _stage_tables(job_type: str) -> tuple[dict, dict]:
+    if job_type == "srt_translation":
+        return _SRT_STAGE_MILESTONES, _SRT_FINE_PROGRESS
+    if job_type == "subtitle_retime":
+        return _RETIME_STAGE_MILESTONES, _RETIME_FINE_PROGRESS
+    return _VIDEO_STAGE_MILESTONES, _VIDEO_FINE_PROGRESS
 
 
 def _stage_progress_for_event(job_type: str, name: str, data: dict) -> tuple[str, float] | None:
@@ -130,9 +153,7 @@ def _stage_progress_for_event(job_type: str, name: str, data: dict) -> tuple[str
     no mapped milestone -- still logged via append_log(), just doesn't
     move the needle; an unmapped event never regresses progress backward
     or raises."""
-    is_srt = job_type == "srt_translation"
-    milestones = _SRT_STAGE_MILESTONES if is_srt else _VIDEO_STAGE_MILESTONES
-    fine = _SRT_FINE_PROGRESS if is_srt else _VIDEO_FINE_PROGRESS
+    milestones, fine = _stage_tables(job_type)
     if name in fine:
         label, start, end, pos_key, total_key = fine[name]
         total = data.get(total_key) or 0
@@ -531,8 +552,7 @@ class Worker(threading.Thread):
                 # from observed throughput; milestone-only phases have no
                 # trustworthy completion denominator and deliberately
                 # expose no ETA.
-                fine = (_SRT_FINE_PROGRESS if job_type == "srt_translation"
-                        else _VIDEO_FINE_PROGRESS).get(name)
+                fine = _stage_tables(job_type)[1].get(name)
                 if fine and stage_started_at is not None:
                     _, _, _, position_key, total_key = fine
                     total = data.get(total_key) or 0
@@ -583,6 +603,8 @@ class Worker(threading.Thread):
         self._record_config_snapshot(job["id"])
         if job.get("job_type") == "srt_translation":
             self._process_srt_translation(job)
+        elif job.get("job_type") == "subtitle_retime":
+            self._process_retime(job)
         else:
             self._process_video(job)
 
@@ -692,6 +714,54 @@ class Worker(threading.Thread):
         finally:
             # See _process_video's identical finally block for why this
             # must be unconditional, not just inside the `with gpu_lock()`.
+            gpu.free_gpu()
+            self._finalize_work_dir(job_id)
+
+    def _process_retime(self, job: dict) -> None:
+        """Existing original-language subtitle -> the same subtitle with its cue
+        times moved onto the audio (retime.py). No translation. Same two-step
+        write as the other job types: scratch directory, then one atomic write."""
+        job_id = job["id"]
+        try:
+            self.store.append_log(job_id, f"Starting re-timing job for {job['source_srt_path']}")
+            destination_path = resolve_media_path(self.media_root, job["destination_srt_path"], must_exist=False)
+            source_root = self.srt_upload_dir if job.get("source_is_uploaded") else self.media_root
+            assert source_root is not None, "SRT upload directory is not configured"
+            source_path = resolve_media_path(source_root, job["source_srt_path"], must_exist=True)
+            video_path = resolve_media_path(self.media_root, job["video_path"], must_exist=True)
+            work_dir = self.work_root / job_id
+            on_event = self._build_on_event(job_id, "subtitle_retime")
+
+            with gpu.gpu_lock():
+                api.release_stream_sampler()
+                outcome = retime_job.run_retime(
+                    str(video_path), str(source_path), str(work_dir), job["source_lang"],
+                    transcript_cache_dir=self.transcript_cache_dir, on_event=on_event)
+
+            report = outcome.report
+            self.store.append_log(
+                job_id, f"{report.method}: {report.anchored_cues}/{report.cues} cues matched the audio "
+                f"(transcript from {outcome.transcript}; residual median {report.residual_p50:.2f} s, "
+                f"95th percentile {report.residual_p95:.2f} s)")
+            for piece in report.pieces:
+                self.store.append_log(
+                    job_id, f"  {piece.t0:.0f}s-{piece.t1:.0f}s: offset {piece.offset0:+.2f} s "
+                    f"-> {piece.offset_at(piece.t1):+.2f} s")
+            outputs: list[str] = []
+            if outcome.srt_path is None:
+                self.store.append_log(job_id, "Already in step with the audio; nothing written")
+            else:
+                content = Path(outcome.srt_path).read_text(encoding="utf-8")
+                write_srt_atomic(destination_path, content, allow_overwrite=True)
+                outputs.append(str(destination_path))
+                self.store.append_log(job_id, f"Committed {destination_path.name}")
+            self.store.finish(job_id, "completed", outputs=outputs)
+            self._notify_media_servers(job_id, outputs)
+        except JobCancelled:
+            self.store.finish(job_id, "cancelled")
+        except Exception as exc:
+            self._fail_job(job_id, exc)
+        finally:
             gpu.free_gpu()
             self._finalize_work_dir(job_id)
 

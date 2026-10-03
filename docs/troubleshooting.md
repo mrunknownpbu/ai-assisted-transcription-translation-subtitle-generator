@@ -24,6 +24,7 @@ very long silent stage, or a wedged job (`docker logs`, then cancel it).
 | `LOW_CONFIDENCE_LANGUAGE` | Language detection was below the threshold and the policy requires a manual choice. | Retry with `source_lang` set. |
 | `UNSUPPORTED_LANGUAGE` | No translation mapping for the language. | Pick a supported one (`GET /api/languages`). |
 | `SRT_VALIDATION_ERROR` | The source subtitle is malformed. | Fix or replace it; the message names the cue. |
+| `RETIME_REFUSED` | A re-timing job found too little shared text between the subtitle and the audio. | Check the subtitle belongs to this video and its language is right; nothing was written. |
 | `OUTPUT_ERROR` | Unsafe path or a write failed; existing outputs untouched. | Check permissions and free space on the media mount. |
 | `MEDIA_ERROR` | ffprobe/ffmpeg could not read the file or stream. | Play the file; try another audio stream. |
 | `GPU_RESOURCE_ERROR` | Not enough free VRAM, or the GPU lock wait timed out. | Free GPU memory (other processes; a resident model); retry. See `docs/operations.md`. |

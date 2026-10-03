@@ -6,6 +6,7 @@ import { ToastProvider } from "./components/Toast";
 import { JobDetailPage } from "./pages/JobDetailPage";
 import { JobsPage } from "./pages/JobsPage";
 import { LibraryPage } from "./pages/LibraryPage";
+import { RetimePage } from "./pages/RetimePage";
 import { SeriesDetailPage } from "./pages/SeriesDetailPage";
 import { SeriesListPage } from "./pages/SeriesListPage";
 import { TranslateSrtPage } from "./pages/TranslateSrtPage";
@@ -39,6 +40,9 @@ export function App() {
             <NavLink to="/translate" className={({ isActive }) => (isActive ? "active" : "")}>
               Translate Subtitle
             </NavLink>
+            <NavLink to="/retime" className={({ isActive }) => (isActive ? "active" : "")}>
+              Re-time Subtitle
+            </NavLink>
             <NavLink to="/jobs" className={({ isActive }) => (isActive ? "active" : "")}>
               Jobs
             </NavLink>
@@ -52,6 +56,7 @@ export function App() {
           <Route path="/series" element={<SeriesListPage />} />
           <Route path="/series/:tvdbId" element={<SeriesDetailPage />} />
           <Route path="/translate" element={<TranslateSrtPage />} />
+          <Route path="/retime" element={<RetimePage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="/jobs/:id" element={<JobDetailPage />} />
         </Routes>

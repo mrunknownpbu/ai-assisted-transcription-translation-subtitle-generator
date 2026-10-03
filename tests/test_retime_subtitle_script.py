@@ -43,7 +43,7 @@ class RetimeScriptTests(unittest.TestCase):
         return path
 
     def run_script(self, *args):
-        with mock.patch.object(sys, "argv", ["retime_subtitle.py", str(self.video), *map(str, args),
+        with mock.patch.object(sys, "argv", ["retime_subtitle.py", str(self.video), *map(str, args), "--language", "tr",
                                              "--cache-dir", self.cache]):
             return script.main()
 

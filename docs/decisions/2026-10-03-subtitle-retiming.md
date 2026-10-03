@@ -1,7 +1,7 @@
 # Decision: Re-time an existing subtitle against the audio (2026-10-03)
 
-Status: Accepted for the library module and the command-line tool. Not yet a
-queued job or an API route.
+Status: Accepted. Library module, command-line tool, queued job type
+`subtitle_retime` and `POST /api/subtitle-retimes`.
 
 ## Context
 
@@ -85,7 +85,19 @@ contradictory evidence, no overlap after a step, tokenisation) and
 untouched, `--in-place`, `--dry-run`, aligned left alone, refusal, protected
 name). Full suite 1,389 passed; ruff and mypy clean.
 
-## Next
+## As a job
 
-Queue it as a job (`POST /api/subtitle-retimes`) and add it to the UI. Both touch
-public contracts (job types, error categories), so they are separate decisions.
+- `POST /api/subtitle-retimes` queues `job_type` `subtitle_retime`; the worker runs
+  `retime_job.run_retime` in a scratch directory and commits with one atomic write.
+  Adds a job type and the error code `RETIME_REFUSED` (add-only contract changes).
+- Default output is the sidecar `<stem>.<language>.retimed.srt`, so no existing
+  subtitle is touched; `replace_original` writes `<stem>.<language>.srt` instead.
+  The destination is chosen when the job is created and is always overwritable, so
+  re-running replaces the previous retimed copy.
+- A protected external subtitle (`.en.hi.srt` etc.) is refused as a source.
+- The transcript comes from the transcript cache when the video has one, else the
+  audio is transcribed on the GPU (about 8 minutes for a 2 hour episode). Nothing
+  is written to the cache.
+- A subtitle already in step with the audio completes with no output.
+- The subtitle's language is required (it decides per-character matching); it is
+  read from the file name (`film.tr.srt`) when not given.

@@ -14,7 +14,8 @@ export function JobDetailPage() {
   if (isLoading) return <div>Loading&hellip;</div>;
   if (!job) return <div>Job not found.</div>;
 
-  const isSrt = job.job_type === "srt_translation";
+  const isSrt = job.job_type === "srt_translation" || job.job_type === "subtitle_retime";
+  const typeLabel = job.job_type === "subtitle_retime" ? "Subtitle re-timing" : "SRT Translation";
 
   return (
     <section className="panel">
@@ -25,7 +26,9 @@ export function JobDetailPage() {
       {isSrt && (
         <div className="option-row">
           <span>Type</span>
-          <strong>SRT Translation → {job.destination_srt_path}</strong>
+          <strong>
+            {typeLabel} → {job.destination_srt_path}
+          </strong>
         </div>
       )}
       {isSrt && (
@@ -91,7 +94,9 @@ export function JobDetailPage() {
         </div>
       )}
 
-      {job.status === "completed" && <SrtEditor jobId={job.id} />}
+      {job.status === "completed" && (job.job_type !== "subtitle_retime" || job.outputs.length > 0) && (
+        <SrtEditor jobId={job.id} />
+      )}
 
       <div className="detail">
         <h3>QC findings</h3>

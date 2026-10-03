@@ -420,6 +420,41 @@ class JobStore:
         self._notify(job_id)
         return self._require(job_id)
 
+    def create_retime(self, source_srt_path: str, destination_srt_path: str, *, video_path: str,
+                      language: str, source_is_uploaded: bool = False, replace_original: bool = False,
+                      retry_of_job_id: str | None = None, attempt: int = 1) -> dict:
+        """A job that moves an existing original-language subtitle's cues onto
+        the video's audio (see retime.py). `language` is the subtitle's own
+        language, stored as source_lang and target_lang. `destination_srt_path`
+        is where the result goes, already chosen by the API: the library's
+        `<stem>.<language>.srt` when `replace_original`, else the
+        `<stem>.<language>.retimed.srt` sidecar; it is always overwritable, so
+        `replace_original` is recorded in overwrite_original only for display
+        and retry.
+
+        Duplicate-active-job check is scoped to job_type='subtitle_retime' and
+        keyed on destination_srt_path, like create_srt_translation."""
+        job_id = uuid.uuid4().hex
+        now = time.time()
+        tvdb_id = glossary_profile.find_tvdb_id(video_path)
+        with self._immediate() as conn:
+            existing = conn.execute(
+                "SELECT id FROM jobs WHERE job_type='subtitle_retime' AND destination_srt_path=? "
+                "AND status IN ('queued','running')", (destination_srt_path,)).fetchone()
+            if existing:
+                raise JobStoreError(
+                    f"an active re-timing job already exists for this destination (id={existing['id']})")
+            self._insert_job(conn, job_id=job_id, job_type="subtitle_retime", video_path=video_path,
+                             source_lang=language, target_lang=language, source_language_mode="MANUAL",
+                             requested_audio_stream=None, stream_selection_mode="AUTO",
+                             overwrite_original=replace_original, overwrite_english=False,
+                             created_at=now, updated_at=now, retry_of_job_id=retry_of_job_id,
+                             attempt=attempt, tvdb_id=tvdb_id, source_srt_path=source_srt_path,
+                             destination_srt_path=destination_srt_path,
+                             source_is_uploaded=source_is_uploaded)
+        self._notify(job_id)
+        return self._require(job_id)
+
     def _require(self, job_id: str) -> dict:
         """A row this method just wrote must exist."""
         row = self.get(job_id)
@@ -748,6 +783,13 @@ class JobStore:
                                        else overwrite_original)
         new_overwrite_english: Any = (original["overwrite_english"] if overwrite_english == "unset"
                                       else overwrite_english)
+        if original["job_type"] == "subtitle_retime":
+            return self.create_retime(
+                original["source_srt_path"], original["destination_srt_path"],
+                video_path=original["video_path"], language=original["source_lang"],
+                source_is_uploaded=original["source_is_uploaded"],
+                replace_original=bool(original["overwrite_original"]),
+                retry_of_job_id=job_id, attempt=original["attempt"] + 1)
         if original["job_type"] == "srt_translation":
             return self.create_srt_translation(
                 original["source_srt_path"], _english_destination(original),

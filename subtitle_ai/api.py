@@ -29,6 +29,7 @@ import glossary_files
 import glossary_profile
 import gpu
 import media
+import retime_job
 import srt
 import translate
 import workdir
@@ -36,7 +37,7 @@ from events import EventBus
 from jobstore import JobStore, JobStoreError
 from media import VIDEO_EXTENSIONS
 from output import (MAX_SRT_FILE_BYTES, PROTECTED_SUFFIXES, TARGET_LANG, OutputSafetyError,
-                    resolve_media_path, resolve_output_path, write_srt_atomic)
+                    resolve_media_path, resolve_output_path, resolve_retimed_path, write_srt_atomic)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -246,6 +247,22 @@ class SrtTranslationRequest(BaseModel):
     # the translated output.
     overwrite_original: bool = False
     overwrite_english: bool = False
+
+
+class RetimeRequest(BaseModel):
+    """Move an existing original-language subtitle's cues onto the video's
+    audio (retime.py). The text is never changed."""
+    video_path: str
+    # Exactly one of these two, as for SrtTranslationRequest.
+    source_srt_path: str | None = None
+    source_upload_id: str | None = None
+    # The subtitle's own language, which the matching needs (unspaced scripts
+    # are compared per character). Taken from the file name (`film.tr.srt`)
+    # when omitted; a name with no language tag then needs it stated.
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")
+    # False (default) writes `<stem>.<language>.retimed.srt` beside the video
+    # and leaves every other subtitle alone; True replaces `<stem>.<language>.srt`.
+    replace_original: bool = False
 
 
 class RetryRequest(BaseModel):
@@ -657,6 +674,68 @@ def create_srt_translation_job(request: SrtTranslationRequest) -> dict:
     return {"job": job}
 
 
+@app.post("/api/subtitle-retimes", status_code=201, dependencies=[Depends(require_api_key)])
+def create_retime_job(request: RetimeRequest) -> dict:
+    """Existing original-language .srt -> the same subtitle with its times moved
+    onto the audio. See docs/decisions/2026-10-03-subtitle-retiming.md."""
+    media_root = Path(get_media_root()).resolve()
+    try:
+        video = resolve_media_path(media_root, request.video_path, must_exist=True)
+    except OutputSafetyError as exc:
+        raise HTTPException(status_code=400, detail=f"video_path: {exc}") from exc
+    if video.suffix.lower() not in VIDEO_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="video_path is not a video file")
+
+    if bool(request.source_srt_path) == bool(request.source_upload_id):
+        raise HTTPException(status_code=400,
+                            detail="exactly one of source_srt_path or source_upload_id must be given")
+    source_is_uploaded = request.source_upload_id is not None
+    if source_is_uploaded:
+        upload_dir = get_srt_upload_dir()
+        if not upload_dir:
+            raise HTTPException(status_code=503, detail="SRT upload is not configured")
+        try:
+            source = resolve_media_path(upload_dir, f"{request.source_upload_id}.srt", must_exist=True)
+        except OutputSafetyError as exc:
+            raise HTTPException(status_code=400, detail=f"source_upload_id: {exc}") from exc
+        source_root = Path(upload_dir).resolve()
+        name_hint = None   # an upload's stored name is a uuid
+    else:
+        assert request.source_srt_path is not None
+        try:
+            source = resolve_media_path(media_root, request.source_srt_path, must_exist=True)
+        except OutputSafetyError as exc:
+            raise HTTPException(status_code=400, detail=f"source_srt_path: {exc}") from exc
+        source_root = media_root
+        name_hint = source.name
+    if source.suffix.lower() != ".srt":
+        raise HTTPException(status_code=400, detail="source must be a .srt file")
+    if source.name.endswith(PROTECTED_SUFFIXES):
+        raise HTTPException(status_code=400, detail="source is a protected external subtitle")
+    if source.stat().st_size > MAX_SRT_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="source subtitle exceeds the size limit")
+
+    language = request.language or (retime_job.language_from_filename(name_hint) if name_hint else None)
+    if not language:
+        raise HTTPException(status_code=400,
+                            detail="language is required: the subtitle's file name has no language tag")
+    try:
+        destination = (resolve_output_path(media_root, request.video_path, language) if request.replace_original
+                       else resolve_retimed_path(media_root, request.video_path, language))
+    except OutputSafetyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if source == destination and not request.replace_original:
+        raise HTTPException(status_code=400, detail="source subtitle and destination must not be identical")
+    try:
+        job = get_store().create_retime(
+            str(source.relative_to(source_root)), str(destination.relative_to(media_root)),
+            video_path=str(video.relative_to(media_root)), language=language,
+            source_is_uploaded=source_is_uploaded, replace_original=request.replace_original)
+    except JobStoreError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"job": job}
+
+
 def _job_summary(job: dict) -> dict:
     """The list shape of a job: QC reduced to each stage's population/
     flagged counts and no log -- everything the job and series tables
@@ -917,7 +996,7 @@ def _job_target_srt_path(job: dict) -> Path | None:
     (destination_srt_path); video jobs derive it the same way worker.py
     does, since only video_path/target language are stored, not a
     separate output-path column."""
-    if job["job_type"] == "srt_translation":
+    if job["job_type"] in ("srt_translation", "subtitle_retime"):
         if not job.get("destination_srt_path"):
             return None
         return resolve_media_path(get_media_root(), job["destination_srt_path"], must_exist=False)

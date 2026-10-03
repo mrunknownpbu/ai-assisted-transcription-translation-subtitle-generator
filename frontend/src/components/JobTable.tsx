@@ -8,6 +8,12 @@ import { useToast } from "./Toast";
 import { JobStatusBadge } from "./JobStatusBadge";
 import { ProgressBar } from "./ProgressBar";
 
+const JOB_TYPE_LABELS: Record<string, string> = {
+  video: "Video",
+  srt_translation: "SRT Translation",
+  subtitle_retime: "Re-time",
+};
+
 const ACTIVE = new Set(["queued", "running"]);
 const RETRYABLE = new Set(["completed", "failed", "cancelled", "skipped"]);
 const DELETABLE = new Set(["completed", "failed", "cancelled", "skipped"]);
@@ -60,7 +66,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
             </tr>
           )}
           {jobs.map((job) => {
-            const isSrt = job.job_type === "srt_translation";
+            const isSrt = job.job_type === "srt_translation" || job.job_type === "subtitle_retime";
             // An SRT-translation job is identified by the EPISODE it translates,
             // not its source file: an uploaded source is stored under an
             // internal <hash>.srt name that means nothing to the user.
@@ -72,7 +78,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
               : job.video_path;
             return (
             <tr key={job.id} className={job.status === "failed" ? "status-failed" : ""}>
-              <td>{isSrt ? "SRT Translation" : "Video"}</td>
+              <td>{JOB_TYPE_LABELS[job.job_type] ?? "Video"}</td>
               <td className="file-cell" title={fileTitle}>
                 {fileIdentity.split("/").pop()}
               </td>

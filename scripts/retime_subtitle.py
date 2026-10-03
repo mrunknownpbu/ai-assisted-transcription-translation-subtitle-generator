@@ -14,49 +14,15 @@ See docs/decisions/2026-10-03-subtitle-retiming.md.
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "subtitle_ai"))
 import output
 import retime
+import retime_job
 import srt
-from retime import TimedWord
-
-
-def cached_words(video: Path, cache_dir: str) -> tuple[list[TimedWord], str] | None:
-    """Words and language of the newest cached transcript of `video`."""
-    best = None
-    for name in glob.glob(f"{cache_dir}/*.json"):
-        data = json.loads(Path(name).read_text(encoding="utf-8"))
-        if data.get("media_path") == str(video) and (best is None or data.get("created_at", 0) > best.get("created_at", 0)):
-            best = data
-    if best is None:
-        return None
-    return ([TimedWord(w["text"], w["start"], w["end"]) for s in best["segments"] if not s.get("suppressed")
-             for w in s["words"]], best["language"])
-
-
-def transcribe_words(video: Path) -> tuple[list[TimedWord], str]:
-    """Audio-only transcription with production settings (needs the GPU)."""
-    import asr
-    import audio_streams
-    import hallucination
-    import media
-    from gpu import gpu_lock
-    with tempfile.TemporaryDirectory() as tmp:
-        work = Path(tmp)
-        stream = audio_streams.recommend_stream(video, work).recommended_index
-        wav = work / "audio.wav"
-        media.extract_audio(video, stream, wav)
-        with gpu_lock():
-            transcript = asr.transcribe(str(wav), str(video), "retime", stream)
-    hallucination.detect(transcript.segments, transcript.language)
-    return ([TimedWord(w.text, w.start, w.end) for s in transcript.segments if not getattr(s, "suppressed", False)
-             for w in s.words], transcript.language)
 
 
 def main() -> int:
@@ -66,7 +32,7 @@ def main() -> int:
     ap.add_argument("--out", type=Path, help="where to write the re-timed subtitle")
     ap.add_argument("--in-place", action="store_true", help="replace SUBTITLE (atomically) instead of --out")
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
-    ap.add_argument("--language", help="subtitle language (default: the transcript's)")
+    ap.add_argument("--language", help="subtitle language code (default: the tag in its file name, e.g. film.tr.srt)")
     ap.add_argument("--cache-dir", default="/cache/transcripts")
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
     args = ap.parse_args()
@@ -74,9 +40,16 @@ def main() -> int:
         ap.error("give --out, --in-place or --dry-run")
 
     cues = srt.parse_lines(args.subtitle)
-    found = cached_words(args.video, args.cache_dir) or transcribe_words(args.video)
-    words, language = found
-    language = args.language or language
+    language = args.language or retime_job.language_from_filename(args.subtitle.name)
+    if not language:
+        ap.error("cannot tell the subtitle's language from its name; give --language")
+    words = retime_job.cached_words(args.video, args.cache_dir)
+    if words is None:
+        import tempfile
+
+        from gpu import gpu_lock
+        with tempfile.TemporaryDirectory() as tmp, gpu_lock():
+            words = retime_job.transcribe_words(args.video, Path(tmp))
     flat = [srt.SrtCue(c.start, c.end, " ".join(c.lines)) for c in cues]
     try:
         times, report = retime.retime(flat, words, language)

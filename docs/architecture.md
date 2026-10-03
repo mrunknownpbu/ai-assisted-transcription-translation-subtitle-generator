@@ -46,7 +46,7 @@ segmentation and QC code but imports no ASR module (a test pins it).
 | ASR | `asr.py`, `transcript.py`, `normalize.py`, `hallucination.py`, `name_correction.py`, `turns.py` | Transcription, cache provenance, canonical transcript, suppression, rule-based normalisation. |
 | Translation | `translate.py`, `translate_server.py`, `langid.py` | Local/remote NLLB, batching and recovery, code-switch detection. |
 | Subtitle processing | `segmentation_source.py`, `segmentation_target.py`, `projection.py`, `text_segmentation.py`, `subtitle_constraints.py`, `srt.py` | Cues, timing, constraints, SRT/WebVTT parsing and rendering. |
-| Subtitle re-timing | `retime.py`, `scripts/retime_subtitle.py` | Moves an existing subtitle's cues onto the audio's word times without changing text; not part of Workflow A or B. |
+| Subtitle re-timing | `retime.py`, `retime_job.py`, `scripts/retime_subtitle.py` | Moves an existing subtitle's cues onto the audio's word times without changing text; job type `subtitle_retime`, not part of Workflow A or B. |
 | QC | `qc/*` | Advisory per-stage findings. Never mutates a subtitle. |
 | Glossary and cast | `glossary.py`, `glossary_profile.py`, `glossary_files.py`, `auto_glossary.py`, `cast_enrichment.py`, `cast_metadata.py` | Entity protection, layered profiles, mined suggestions, evidence-gated enrichment. |
 | Output safety | `output.py` | Path containment, protected suffixes, atomic write. |
@@ -285,7 +285,7 @@ into pipelines; typed job record; graceful worker stop.
 `errors.py` defines `SubtitleAiError` with `code`, `stage` and `remediation`.
 Codes are stable and stored as `error_category`: `MEDIA_ERROR`,
 `SRT_VALIDATION_ERROR`, `LOW_CONFIDENCE_LANGUAGE`, `UNSUPPORTED_LANGUAGE`,
-`OUTPUT_ERROR`, `GPU_RESOURCE_ERROR`, `VALIDATION_ERROR`, `WORKER_ERROR`,
+`OUTPUT_ERROR`, `GPU_RESOURCE_ERROR`, `VALIDATION_ERROR`, `RETIME_REFUSED`, `WORKER_ERROR`,
 `ORPHANED_JOB_RECOVERY_EXHAUSTED` and `PIPELINE_ERROR` (anything unexpected). The
 worker's single `_fail_job()` records the code, logs a remediation hint, and keeps
 a traceback in the log and job log only for unexpected errors. Users never see a raw

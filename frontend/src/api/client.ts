@@ -17,6 +17,7 @@ import type {
   SrtEditRequest,
   SrtEditResponse,
   SrtEditorResponse,
+  RetimeRequest,
   SrtTranslationRequest,
   UpdateGlossaryEntityRequest,
   UpdateGlossaryEntityResponse,
@@ -112,6 +113,8 @@ export const api = {
   languages: () => request<LanguagesResponse>("/api/languages"),
   createSrtTranslationJob: (body: SrtTranslationRequest) =>
     request<{ job: Job }>("/api/srt-translations", { method: "POST", body: JSON.stringify(body) }),
+  createRetimeJob: (body: RetimeRequest) =>
+    request<{ job: Job }>("/api/subtitle-retimes", { method: "POST", body: JSON.stringify(body) }),
   uploadSrt: async (file: File) => {
     // Deliberately bypasses request<T>()'s JSON Content-Type header --
     // the browser must set its own multipart boundary for FormData.

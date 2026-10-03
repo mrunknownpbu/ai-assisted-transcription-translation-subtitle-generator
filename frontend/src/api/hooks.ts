@@ -6,6 +6,7 @@ import type {
   JobRequest,
   PromoteGlossaryEntityRequest,
   RetryRequest,
+  RetimeRequest,
   SrtEditRequest,
   SrtTranslationRequest,
   UpdateGlossaryEntityRequest,
@@ -128,6 +129,14 @@ export function useCreateSrtTranslationJob() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: SrtTranslationRequest) => api.createSrtTranslationJob(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+}
+
+export function useCreateRetimeJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: RetimeRequest) => api.createRetimeJob(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
   });
 }
