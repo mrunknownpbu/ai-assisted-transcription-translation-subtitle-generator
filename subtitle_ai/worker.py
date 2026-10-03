@@ -757,6 +757,8 @@ class Worker(threading.Thread):
                 self.store.append_log(job_id, f"Committed {destination_path.name}")
             self.store.finish(job_id, "completed", outputs=outputs)
             self._notify_media_servers(job_id, outputs)
+            if job["target_lang"] != job["source_lang"]:
+                self._queue_translation_after_retime(job, outputs)
         except JobCancelled:
             self.store.finish(job_id, "cancelled")
         except Exception as exc:
@@ -764,6 +766,29 @@ class Worker(threading.Thread):
         finally:
             gpu.free_gpu()
             self._finalize_work_dir(job_id)
+
+    def _queue_translation_after_retime(self, job: dict, outputs: list[str]) -> None:
+        """Queue the English translation of a successfully re-timed subtitle.
+        Translates what the re-timing wrote; when it wrote nothing (already in
+        step) the subtitle that was given. A failure to queue never changes the
+        re-timing job, which has already completed."""
+        job_id = job["id"]
+        try:
+            if outputs:
+                source = str(Path(outputs[0]).relative_to(Path(self.media_root).resolve()))
+                uploaded = False
+            else:
+                source, uploaded = job["source_srt_path"], bool(job.get("source_is_uploaded"))
+            english = resolve_output_path(self.media_root, job["video_path"], TARGET_LANG)
+            queued = self.store.create_srt_translation(
+                source, str(english.relative_to(Path(self.media_root).resolve())),
+                source_lang=job["source_lang"], target_lang=TARGET_LANG, video_path=job["video_path"],
+                overwrite_original=False, overwrite_english=bool(job["overwrite_english"]),
+                source_is_uploaded=uploaded)
+            self.store.append_log(job_id, f"Queued English translation job {queued['id']}")
+        except Exception as exc:
+            logger.warning("could not queue the translation after re-timing", exc_info=True)
+            self.store.append_log(job_id, f"Could not queue the English translation: {exc}")
 
     def _process_video(self, job: dict) -> None:
         job_id = job["id"]

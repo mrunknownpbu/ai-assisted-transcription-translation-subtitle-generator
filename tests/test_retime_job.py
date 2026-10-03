@@ -132,6 +132,82 @@ class WorkerTests(RetimeFixture):
         translation.assert_not_called()
 
 
+class TranslateAfterTests(RetimeFixture):
+    def translations(self):
+        jobs, _ = self.store.list(limit=50)
+        return [j for j in jobs if j["job_type"] == "srt_translation"]
+
+    def test_queues_the_english_translation_of_the_retimed_copy(self):
+        final = self.run_job(translate_to_english=True)
+        self.assertEqual(final["status"], "completed")
+        (t,) = self.translations()
+        self.assertEqual((t["source_srt_path"], t["destination_srt_path"], t["video_path"], t["source_lang"]),
+                         ("Show/S01E01.tr.retimed.srt", "Show/S01E01.en.srt", "Show/S01E01.mkv", "tr"))
+        self.assertEqual((t["status"], t["overwrite_english"], t["overwrite_original"], t["source_is_uploaded"]),
+                         ("queued", 0, 0, 0))
+        self.assertTrue(any(f"Queued English translation job {t['id']}" in e["message"] for e in final["log"]))
+
+    def test_translation_reads_the_file_the_retime_wrote(self):
+        self.run_job(translate_to_english=True, destination="Show/S01E01.tr.srt", replace_original=True)
+        (t,) = self.translations()
+        self.assertEqual(t["source_srt_path"], "Show/S01E01.tr.srt")
+
+    def test_overwrite_english_is_passed_on(self):
+        self.run_job(translate_to_english=True, overwrite_english=True)
+        self.assertTrue(self.translations()[0]["overwrite_english"])
+
+    def test_no_translation_unless_asked(self):
+        self.run_job()
+        self.assertEqual(self.translations(), [])
+
+    def test_overwrite_english_alone_does_nothing(self):
+        final = self.run_job(overwrite_english=True)
+        self.assertEqual(self.translations(), [])
+        self.assertFalse(final["overwrite_english"])
+
+    def test_refused_retime_never_queues_a_translation(self):
+        other, _ = make_programme(n=200, seed=77)
+        (self.media_root / "Show" / "S01E01.tr.srt").write_text(
+            srt.render([srt.SrtCueLines(c.start, c.end, [c.text.replace("kelime", "baska")]) for c in other]),
+            encoding="utf-8")
+        final = self.run_job(translate_to_english=True)
+        self.assertEqual(final["status"], "failed")
+        self.assertEqual(self.translations(), [])
+
+    def test_already_aligned_subtitle_is_translated_as_given(self):
+        write_subtitle(self.media_root / "Show" / "S01E01.tr.srt", self.truth, 0.0)
+        final = self.run_job(translate_to_english=True)
+        self.assertEqual(final["outputs"], [])
+        (t,) = self.translations()
+        self.assertEqual(t["source_srt_path"], "Show/S01E01.tr.srt")
+
+    def test_uploaded_source_stays_an_upload_when_nothing_was_written(self):
+        write_subtitle(self.uploads / "abc.srt", self.truth, 0.0)
+        self.store.create_retime("abc.srt", "Show/S01E01.tr.retimed.srt", video_path="Show/S01E01.mkv",
+                                 language="tr", source_is_uploaded=True, translate_to_english=True)
+        self.worker._process(self.store.claim())
+        (t,) = self.translations()
+        self.assertEqual((t["source_srt_path"], t["source_is_uploaded"]), ("abc.srt", 1))
+
+    def test_failure_to_queue_does_not_undo_the_retime(self):
+        with patch.object(self.store, "create_srt_translation", side_effect=JobStoreError("busy")):
+            final = self.run_job(translate_to_english=True)
+        self.assertEqual(final["status"], "completed")
+        self.assertTrue((self.media_root / "Show" / "S01E01.tr.retimed.srt").exists())
+        self.assertTrue(any("Could not queue the English translation" in e["message"] for e in final["log"]))
+
+    def test_job_records_english_as_its_target_and_retry_keeps_the_option(self):
+        final = self.run_job(translate_to_english=True, overwrite_english=True)
+        self.assertEqual((final["source_lang"], final["target_lang"]), ("tr", "en"))
+        again = self.store.retry(final["id"])
+        self.assertEqual((again["target_lang"], again["overwrite_english"]), ("en", 1))
+
+    def test_plain_retime_targets_its_own_language(self):
+        final = self.run_job()
+        self.assertEqual(final["target_lang"], "tr")
+        self.assertEqual(self.store.retry(final["id"])["target_lang"], "tr")
+
+
 class StoreTests(RetimeFixture):
     def test_creates_a_retime_job(self):
         job = self.store.create_retime("Show/S01E01.tr.srt", "Show/S01E01.tr.retimed.srt",
@@ -242,6 +318,15 @@ class ApiTests(unittest.TestCase):
 
     def test_protected_external_subtitle_is_never_a_source(self):
         self.assertEqual(self.post(source_srt_path="Show/S01E01.en.hi.srt", language="en").status_code, 400)
+
+    def test_translate_to_english_is_recorded(self):
+        job = self.post(translate_to_english=True, overwrite_english=True).json()["job"]
+        self.assertEqual((job["target_lang"], job["overwrite_english"]), ("en", True))
+
+    def test_translating_an_english_subtitle_is_refused(self):
+        r = self.post(source_srt_path="Show/S01E01.tr.srt", language="en", translate_to_english=True)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.client.get("/api/jobs").json()["total"], 0)
 
     def test_duplicate_active_job_is_a_conflict(self):
         self.assertEqual(self.post().status_code, 201)

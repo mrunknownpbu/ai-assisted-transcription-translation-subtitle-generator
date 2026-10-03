@@ -291,6 +291,11 @@ export interface RetimeRequest {
   // false: write <stem>.<language>.retimed.srt and leave every other
   // subtitle alone. true: replace <stem>.<language>.srt.
   replace_original?: boolean;
+  // Queue an English translation of the re-timed subtitle when it is done
+  // (not for a non-English subtitle's refusal or failure). Not for English.
+  translate_to_english?: boolean;
+  // Whether that translation replaces an existing <stem>.en.srt.
+  overwrite_english?: boolean;
 }
 
 export interface SrtTranslationRequest {

@@ -109,6 +109,33 @@ describe("RetimePage", () => {
     expect(JSON.parse(findRequest(fetchMock, "/api/subtitle-retimes")!.body as string).replace_original).toBe(true);
   });
 
+  it("translating afterwards sends both flags and previews the English file", async () => {
+    await chooseVideoAndSubtitle();
+    fireEvent.click(await screen.findByLabelText("Translate to English afterwards"));
+    expect(screen.getByText(/translates the re-timed subtitle to S01E01\.en\.srt/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Replace an existing English subtitle"));
+    fireEvent.click(screen.getByText("Re-time"));
+    await waitFor(() => expect(findRequest(fetchMock, "/api/subtitle-retimes")).toBeTruthy());
+    const body = JSON.parse(findRequest(fetchMock, "/api/subtitle-retimes")!.body as string);
+    expect(body.translate_to_english).toBe(true);
+    expect(body.overwrite_english).toBe(true);
+  });
+
+  it("sends no translation fields unless asked", async () => {
+    await chooseVideoAndSubtitle();
+    fireEvent.click(await screen.findByText("Re-time"));
+    await waitFor(() => expect(findRequest(fetchMock, "/api/subtitle-retimes")).toBeTruthy());
+    const body = JSON.parse(findRequest(fetchMock, "/api/subtitle-retimes")!.body as string);
+    expect(body.translate_to_english).toBeUndefined();
+    expect(body.overwrite_english).toBeUndefined();
+  });
+
+  it("cannot translate an English subtitle", async () => {
+    await chooseVideoAndSubtitle();
+    fireEvent.change(await screen.findByLabelText("Subtitle language"), { target: { value: "en" } });
+    expect(screen.getByLabelText("Translate to English afterwards")).toBeDisabled();
+  });
+
   it("cannot submit without a subtitle or with an invalid language", async () => {
     renderPage();
     await waitFor(() => screen.getByText(/S01E01\.mkv/));

@@ -263,6 +263,11 @@ class RetimeRequest(BaseModel):
     # False (default) writes `<stem>.<language>.retimed.srt` beside the video
     # and leaves every other subtitle alone; True replaces `<stem>.<language>.srt`.
     replace_original: bool = False
+    # Queue an English translation of the re-timed subtitle once it is done
+    # (not when re-timing is refused or fails). Needs a non-English subtitle.
+    translate_to_english: bool = False
+    # Whether that translation replaces an existing `<stem>.en.srt`.
+    overwrite_english: bool = False
 
 
 class RetryRequest(BaseModel):
@@ -724,13 +729,16 @@ def create_retime_job(request: RetimeRequest) -> dict:
                        else resolve_retimed_path(media_root, request.video_path, language))
     except OutputSafetyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if request.translate_to_english and language == TARGET_LANG:
+        raise HTTPException(status_code=400, detail="the subtitle is already English; nothing to translate")
     if source == destination and not request.replace_original:
         raise HTTPException(status_code=400, detail="source subtitle and destination must not be identical")
     try:
         job = get_store().create_retime(
             str(source.relative_to(source_root)), str(destination.relative_to(media_root)),
             video_path=str(video.relative_to(media_root)), language=language,
-            source_is_uploaded=source_is_uploaded, replace_original=request.replace_original)
+            source_is_uploaded=source_is_uploaded, replace_original=request.replace_original,
+            translate_to_english=request.translate_to_english, overwrite_english=request.overwrite_english)
     except JobStoreError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"job": job}

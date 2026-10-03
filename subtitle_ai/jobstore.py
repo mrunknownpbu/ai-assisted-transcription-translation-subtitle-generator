@@ -422,6 +422,7 @@ class JobStore:
 
     def create_retime(self, source_srt_path: str, destination_srt_path: str, *, video_path: str,
                       language: str, source_is_uploaded: bool = False, replace_original: bool = False,
+                      translate_to_english: bool = False, overwrite_english: bool = False,
                       retry_of_job_id: str | None = None, attempt: int = 1) -> dict:
         """A job that moves an existing original-language subtitle's cues onto
         the video's audio (see retime.py). `language` is the subtitle's own
@@ -431,6 +432,12 @@ class JobStore:
         `<stem>.<language>.retimed.srt` sidecar; it is always overwritable, so
         `replace_original` is recorded in overwrite_original only for display
         and retry.
+
+        `translate_to_english` asks the worker to queue an SRT-translation job
+        for the result once the re-timing succeeds (never when it is refused or
+        fails); it is recorded as target_lang="en" (otherwise target_lang is the
+        subtitle's own language), and `overwrite_english` is passed on to that
+        translation job.
 
         Duplicate-active-job check is scoped to job_type='subtitle_retime' and
         keyed on destination_srt_path, like create_srt_translation."""
@@ -445,9 +452,12 @@ class JobStore:
                 raise JobStoreError(
                     f"an active re-timing job already exists for this destination (id={existing['id']})")
             self._insert_job(conn, job_id=job_id, job_type="subtitle_retime", video_path=video_path,
-                             source_lang=language, target_lang=language, source_language_mode="MANUAL",
+                             source_lang=language,
+                             target_lang=TARGET_LANG if translate_to_english else language,
+                             source_language_mode="MANUAL",
                              requested_audio_stream=None, stream_selection_mode="AUTO",
-                             overwrite_original=replace_original, overwrite_english=False,
+                             overwrite_original=replace_original,
+                             overwrite_english=overwrite_english and translate_to_english,
                              created_at=now, updated_at=now, retry_of_job_id=retry_of_job_id,
                              attempt=attempt, tvdb_id=tvdb_id, source_srt_path=source_srt_path,
                              destination_srt_path=destination_srt_path,
@@ -789,6 +799,8 @@ class JobStore:
                 video_path=original["video_path"], language=original["source_lang"],
                 source_is_uploaded=original["source_is_uploaded"],
                 replace_original=bool(original["overwrite_original"]),
+                translate_to_english=original["target_lang"] != original["source_lang"],
+                overwrite_english=bool(original["overwrite_english"]),
                 retry_of_job_id=job_id, attempt=original["attempt"] + 1)
         if original["job_type"] == "srt_translation":
             return self.create_srt_translation(

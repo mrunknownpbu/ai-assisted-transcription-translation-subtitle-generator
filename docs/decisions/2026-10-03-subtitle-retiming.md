@@ -101,3 +101,28 @@ name). Full suite 1,389 passed; ruff and mypy clean.
 - A subtitle already in step with the audio completes with no output.
 - The subtitle's language is required (it decides per-character matching); it is
   read from the file name (`film.tr.srt`) when not given.
+
+## Translating afterwards
+
+`translate_to_english` (with `overwrite_english`) queues an ordinary SRT-translation
+job (Workflow B) when the re-timing job completes, so the English inherits the
+corrected times instead of the subtitle's original error.
+
+- It translates the file the re-timing wrote; when the subtitle was already in step
+  and nothing was written, the subtitle as given (an upload stays an upload).
+- It is never queued when re-timing is refused or fails: unretimed text is not
+  translated on the quiet.
+- It is recorded as the job's `target_lang` (`en`; otherwise the subtitle's own
+  language), so no schema change; a retry keeps it.
+- Failing to queue it (for example a duplicate active translation) is logged and
+  does not change the completed re-timing job.
+- Workflow B's usual rule applies: the original-language sibling is kept when it
+  exists (`overwrite_original` is never set here).
+
+Measured once, S02E01 (the real pair behind the ~5.1 s report): the uploaded human
+Turkish subtitle was a constant 5.12 s late (1,743 of 2,282 cues matched, residual
+median 0.16 s). Translating the re-timed file against the human English subtitle:
+word match 51% (37% for the English made from the AI transcript), median offset
+-0.25 s (-0.20 s), 2,854 cues (3,072), 24.6% of cues over the reading-speed limit
+(17.0%). One episode; the English from human text agrees more with a human
+translation but is harder to read at speed.

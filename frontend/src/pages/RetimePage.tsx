@@ -27,6 +27,10 @@ export function retimeDestination(videoPath: string, language: string, replace: 
   return `${dir}${stem}.${language || "xx"}${replace ? "" : ".retimed"}.srt`;
 }
 
+export function retimeEnglishDestination(videoPath: string): string {
+  return retimeDestination(videoPath, "en", true);
+}
+
 export function RetimePage() {
   const navigate = useNavigate();
   const { notify } = useToast();
@@ -35,11 +39,16 @@ export function RetimePage() {
   const [sourceTab, setSourceTab] = useState<"library" | "upload">("library");
   const [language, setLanguage] = useState("");
   const [replaceOriginal, setReplaceOriginal] = useState(false);
+  const [translate, setTranslate] = useState(false);
+  const [replaceEnglish, setReplaceEnglish] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadSrt = useUploadSrt();
   const createJob = useCreateRetimeJob();
 
   const languageValid = /^[a-z]{2,3}$/.test(language);
+  // An English subtitle has nothing to translate.
+  const canTranslate = language !== "en";
+  const translating = translate && canTranslate;
 
   const selectLibrarySource = (path: string) => {
     const filename = path.split("/").pop() ?? path;
@@ -69,10 +78,11 @@ export function RetimePage() {
         ...(source.mode === "library" ? { source_srt_path: source.path } : { source_upload_id: source.uploadId }),
         language,
         replace_original: replaceOriginal,
+        ...(translating ? { translate_to_english: true, overwrite_english: replaceEnglish } : {}),
       },
       {
         onSuccess: ({ job }) => {
-          notify("Re-timing job queued.");
+          notify(translating ? "Re-timing job queued; the English translation follows it." : "Re-timing job queued.");
           navigate(`/jobs/${job.id}`);
         },
         onError: (err) => notify(err instanceof ApiError ? err.message : "Failed to queue job", "error"),
@@ -166,6 +176,32 @@ export function RetimePage() {
               Replace the library subtitle instead of keeping it
             </label>
             <div className="lang-info">Will write to: {retimeDestination(videoPath, language, replaceOriginal)}</div>
+
+            <label className="existing-row">
+              <input
+                type="checkbox"
+                checked={translating}
+                disabled={!canTranslate}
+                onChange={(e) => setTranslate(e.target.checked)}
+              />
+              Translate to English afterwards
+            </label>
+            {translating && (
+              <>
+                <label className="existing-row">
+                  <input
+                    type="checkbox"
+                    checked={replaceEnglish}
+                    onChange={(e) => setReplaceEnglish(e.target.checked)}
+                  />
+                  Replace an existing English subtitle
+                </label>
+                <div className="lang-info">
+                  Then translates the re-timed subtitle to {retimeEnglishDestination(videoPath)}. Not queued if
+                  re-timing is refused or fails.
+                </div>
+              </>
+            )}
             {replaceOriginal && (
               <div className="lang-info">
                 The episode's current <code>.{language || "xx"}.srt</code> is overwritten. Edits made to it are
