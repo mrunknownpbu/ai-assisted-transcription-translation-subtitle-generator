@@ -123,6 +123,34 @@ against the production model on the same episodes first. Untried: other Japanese
 models (e.g. kotoba v2.1+ with alignment heads), a Thai fine-tune, and
 large-v3-turbo as a speed option (accuracy matched here; speed not measured).
 
+## Turkish improvement ideas (Love Is In The Air S01E01-03)
+
+Baseline: 17.3 % WER, 87.0 % name recall, 24.4 % lyrics coverage of 655 words.
+Differences are paired bootstrap 95 % intervals against that baseline.
+
+| Idea | WER | Name recall | Notes |
+|---|---|---|---|
+| 1. Name correction post-pass (`+names`) | 17.2 % | 90.2 % | 50 corrections, 48 confirmed by the reference |
+| 2. Wider decoding: beam 10 | 17.6 % | | no gain |
+| 2. `logprob_threshold` -0.7 | 17.2 % | | no gain |
+| 2. large-v3-turbo alone | 17.1 % | | matches large-v3 |
+| 3. Vocals separated with htdemucs, then large-v3 | 16.7 % (-0.60 [-1.43, -0.18]) | 89.4 % | lyrics coverage 34.4 % |
+| 4. Word vote (ROVER) of baseline + vocals + turbo | **16.3 %** (-1.00 [-1.21, -0.73]) | 89.3 % | lyrics coverage 26.9 % |
+| 4. Same vote plus beam-10 as a fourth system | 16.6 % (-0.70 [-0.86, -0.47]) | 88.7 % | extra large-v3 run adds little |
+| 4. Vote plus name correction | **16.2 %** (-1.10 [-1.28, -0.81]) | **91.2 %** | 28 of 31 corrections confirmed |
+
+- Idea 1 helps names, not WER; the audio-derived vocabulary never reads the
+  reference subtitles.
+- Idea 3 per episode: E01 16.9 -> 16.6, E02 18.7 -> 16.7, E03 16.2 -> 16.6, so the
+  gain is mostly one episode. Bolat gets worse (62 -> 59 of 82).
+- Idea 4 improves every episode (E01 15.7, E02 17.6, E03 15.5). Each word position
+  goes to the majority of the systems; a word only one system heard is dropped and
+  ties go to the baseline. The voting script was a scratch experiment and is not in
+  the repo.
+- Cost: demucs separation is about 3.5 minutes per 128-minute episode and needed
+  10-minute chunks to fit 8 GB of GPU memory and 14 GB of RAM. It is not in the
+  production image. The vote needs three transcription passes.
+
 ## Decision
 
 - Nothing changes. Pinning the language is neutral (detection is already right) and
@@ -135,6 +163,11 @@ large-v3-turbo as a speed option (accuracy matched here; speed not measured).
   translation one).
 - Hotwords stay off (see above); name errors are left to the translation-time
   glossary.
+- Turkish: nothing ships on this evidence. Vocal separation alone is the best value
+  (-0.6 WER for one extra pass plus a new dependency); the three-way vote gains
+  about 1 point for roughly three times the transcription work. Wider decoding and
+  turbo alone do nothing. Name correction is worth keeping for name recall but adds
+  little WER once a vote has run. Three episodes of one series is a small sample.
 - Fine-tuned Turkish and Japanese models are worse (see above); a Thai fine-tune is
   still untested. Two episodes per language is a small sample; widen it
   before adopting anything.
@@ -149,3 +182,6 @@ the container:
       --work /cache/eval-asr/base-ja
 
 Each `asr:` system is ~6 minutes of GPU per episode.
+
+Vocal separation variant: `--system asr:audio_dir=<dir of vocals WAVs named
+sha1(video path)[:16].wav>` (this option is uncommitted in the eval script).

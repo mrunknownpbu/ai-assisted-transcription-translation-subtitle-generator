@@ -58,6 +58,20 @@ class LanguageNormaliseTests(unittest.TestCase):
         self.assertEqual(ev.normalise("10 valla"), ["10", "valla"])
 
 
+class PreparedAudioTests(unittest.TestCase):
+    def test_finds_wav_named_by_video_path_hash(self):
+        import hashlib
+        video = Path("/media/Show/S01E01.mkv")
+        with tempfile.TemporaryDirectory() as d:
+            wav = Path(d) / (hashlib.sha1(str(video).encode()).hexdigest()[:16] + ".wav")
+            wav.write_bytes(b"RIFF")
+            self.assertEqual(ev.prepared_audio(video, d), wav)
+
+    def test_missing_wav_stops_the_run(self):
+        with tempfile.TemporaryDirectory() as d, self.assertRaises(SystemExit):
+            ev.prepared_audio(Path("/media/Show/S01E01.mkv"), d)
+
+
 class AlignTests(unittest.TestCase):
     def test_counts_each_error_type(self):
         s, d, i, subs = ev.align(["serkan", "eve", "geldi"], ["sarkan", "geldi"])

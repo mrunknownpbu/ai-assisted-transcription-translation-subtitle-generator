@@ -260,7 +260,15 @@ def cached_transcript(video: Path, cache_dir: str = "/cache/transcripts"):
     return best
 
 
-def run_asr(video: Path, overrides: dict, work: Path, stream: int | None):
+def prepared_audio(video: Path, audio_dir: str) -> Path:
+    """The WAV in `audio_dir` made for `video` (named by the sha1 of its path)."""
+    wav = Path(audio_dir) / (hashlib.sha1(str(video).encode()).hexdigest()[:16] + ".wav")
+    if not wav.is_file():
+        raise SystemExit(f"no prepared audio for {video.name}: {wav}")
+    return wav
+
+
+def run_asr(video: Path, overrides: dict, work: Path, stream: int | None, audio_dir: str | None = None):
     """Production transcription with AsrConfig overrides; saved and reused."""
     import asr
     import media
@@ -277,11 +285,16 @@ def run_asr(video: Path, overrides: dict, work: Path, stream: int | None):
         import audio_streams
         stream = audio_streams.recommend_stream(video, work).recommended_index
     wav = work / "audio.wav"
-    media.extract_audio(video, stream, wav)
+    prepared = prepared_audio(video, audio_dir) if audio_dir else None
+    if prepared is not None:
+        wav = prepared                      # e.g. a separated vocal track; never deleted below
+    else:
+        media.extract_audio(video, stream, wav)
     from gpu import gpu_lock
     with gpu_lock():
         transcript: CanonicalTranscript = asr.transcribe(str(wav), str(video), "eval", stream, config=config)
-    wav.unlink(missing_ok=True)
+    if prepared is None:
+        wav.unlink(missing_ok=True)
     transcript.save(out)
     return json.loads(out.read_text(encoding="utf-8"))
 
@@ -530,9 +543,14 @@ def main() -> int:
         base_spec = spec[:-len("+names")] if post_names else spec
         kind, _, rest = base_spec.partition(":")
         overrides = {}
+        audio_dir = None
         for kv in filter(None, rest.split(",")):
             k, _, v = kv.partition("=")
-            if k == "style":
+            if k == "audio_dir":
+                # Not an AsrConfig field: transcribe a prepared WAV (named by the
+                # video path's sha1) from this directory instead of the soundtrack.
+                audio_dir = v
+            elif k == "style":
                 # Not a real AsrConfig field -- resolves to initial_prompt
                 # via the same preset asr.asr_style_prompt() uses in
                 # production, so `asr:style=natural` exercises exactly
@@ -561,7 +579,7 @@ def main() -> int:
                     continue
             else:
                 work = Path(args.work) / hashlib.sha1(rest.encode()).hexdigest()[:10]
-                data = run_asr(video, overrides, work, None)
+                data = run_asr(video, overrides, work, None, audio_dir)
             segs = kept_segments(data)
             if post_names:
                 episode = glossary_profile.find_episode(video.name)
