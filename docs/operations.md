@@ -50,6 +50,14 @@ Moved verbatim from `CLAUDE.md` (formerly "Scratch dirs and the remote translate
   `preflight_vram_check()`, which runs it. A script that loads a model
   some other way while the app has NLLB resident WILL OOM -- that exact
   failure (an eval script vs the app's idle 2.8GB) is why this exists.
+- **Turkish translates with its own model**, `Helsinki-NLP/opus-mt-tc-big-tr-en`
+  (Hugging Face backend, float16, under 1 GB), found in `/models/hf` like NLLB.
+  `translate.DEDICATED_TRANSLATORS` maps a source language to its model; every
+  other language, and a language found inside a Turkish job, still uses NLLB.
+  `SUBTITLE_AI_DEDICATED_TRANSLATORS=0` turns it off. The remote translate-server
+  only runs NLLB, so a Turkish job never sends text there. Switching between a
+  Turkish and another-language job reloads the resident model.
+  (`docs/decisions/2026-10-04-turkish-dedicated-translator.md`)
 - **NLLB runs on CTranslate2 by default** (`SUBTITLE_AI_NLLB_BACKEND`,
   2026-09-28), a float16 conversion at
   `${CONFIG_PATH}/subtitle-ai/models/ct2/` made by

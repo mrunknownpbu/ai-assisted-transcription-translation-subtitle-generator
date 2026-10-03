@@ -346,7 +346,8 @@ class TranslateSpansRemoteTests(unittest.TestCase):
         with patch("translate.remote_translate_batch", return_value=["Hello, how are you"]) as mock_remote, \
              patch("translate.load_model") as mock_load, \
              patch("translate.translate_batch") as mock_batch:
-            result = translate_spans(cues, spans, "tr", remote_url="http://media:8091")
+            result = translate_spans(cues, spans, "tr", remote_url="http://media:8091",
+                                    config=TranslationConfig(dedicated_translators=False))
         mock_remote.assert_called_once()
         mock_load.assert_not_called()
         mock_batch.assert_not_called()
@@ -358,7 +359,8 @@ class TranslateSpansRemoteTests(unittest.TestCase):
         with patch("translate.remote_translate_batch", side_effect=RemoteTranslationError("down")), \
              patch("translate.load_model", return_value=(object(), object(), 0)) as mock_load, \
              patch("translate.translate_batch", return_value=["Hello, how are you"]) as mock_batch:
-            result = translate_spans(cues, spans, "tr", remote_url="http://media:8091")
+            result = translate_spans(cues, spans, "tr", remote_url="http://media:8091",
+                                    config=TranslationConfig(dedicated_translators=False))
         mock_load.assert_called_once()
         mock_batch.assert_called_once()
         self.assertEqual(result, ["Hello, how are you"])
@@ -372,7 +374,8 @@ class TranslateSpansRemoteTests(unittest.TestCase):
              patch("translate.load_model", return_value=(object(), object(), 0)) as mock_load, \
              patch("translate.translate_batch",
                    side_effect=[["Local primary translation."], ["Chunk one.", "Chunk two.", "Chunk three."]]) as mock_batch:
-            result = translate_spans(cues, spans, "tr", remote_url="http://media:8091")
+            result = translate_spans(cues, spans, "tr", remote_url="http://media:8091",
+                                    config=TranslationConfig(dedicated_translators=False))
         self.assertEqual(mock_remote.call_count, 2)
         mock_load.assert_called_once()
         self.assertEqual(mock_batch.call_count, 2)

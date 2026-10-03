@@ -13,7 +13,7 @@ import logging
 import os
 import re
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from collections.abc import Sequence
 from typing import Any, cast
 
@@ -72,6 +72,15 @@ def remote_translate_batch(url: str, sentences: list[str], src_lang: str,
     return out
 
 NLLB_REPO = "facebook/nllb-200-distilled-1.3B"
+# A source language with its own dedicated one-pair model (docs/decisions/
+# 2026-10-04-turkish-dedicated-translator.md): Turkish scored +6 to +7 chrF over
+# NLLB against human English subtitles (15 + 1 episodes, paired bootstrap
+# intervals well clear of zero) and needs under 1 GB. Every other language
+# keeps NLLB. SUBTITLE_AI_DEDICATED_TRANSLATORS=0 turns this off.
+DEDICATED_TRANSLATORS = {"tr": "Helsinki-NLP/opus-mt-tc-big-tr-en"}
+# A Marian model has no target-language token to force (it only translates to
+# English), so its "bos" is this marker instead of a token id.
+NO_FORCED_BOS = -1
 NLLB_LANG = {
     "tr": "tur_Latn", "en": "eng_Latn", "es": "spa_Latn", "fr": "fra_Latn",
     "de": "deu_Latn", "ru": "rus_Cyrl", "ar": "arb_Arab", "ja": "jpn_Jpan",
@@ -258,6 +267,10 @@ def _default_num_beams() -> int:
                              SHARED_NUM_BEAMS if gpu_shared() else DEDICATED_NUM_BEAMS)
 
 
+def _dedicated_translators_default() -> bool:
+    return os.environ.get("SUBTITLE_AI_DEDICATED_TRANSLATORS", "").strip().lower() not in ("0", "false", "no", "off")
+
+
 @dataclass
 class TranslationConfig:
     repo: str = NLLB_REPO
@@ -314,6 +327,7 @@ class TranslationConfig:
     # default, see DEFAULT_BACKEND) or "hf" (transformers generate()). Env:
     # SUBTITLE_AI_NLLB_BACKEND / SUBTITLE_AI_NLLB_CT2_PATH.
     backend: str = field(default_factory=lambda: _default_backend())
+    dedicated_translators: bool = field(default_factory=lambda: _dedicated_translators_default())
     ct2_path: str = field(default_factory=lambda: os.environ.get(
         "SUBTITLE_AI_NLLB_CT2_PATH", "").strip() or DEFAULT_CT2_PATH)
 
@@ -346,6 +360,20 @@ def build_context_spans(cues: list[Segment], real_boundaries: frozenset = frozen
     return spans
 
 
+def engine_config(config: TranslationConfig, src_lang: str) -> TranslationConfig:
+    """`config` with the dedicated model for `src_lang` when one applies,
+    else `config` itself. Always the Hugging Face backend: the dedicated
+    models are loaded with transformers (the measured setup), not converted."""
+    repo = DEDICATED_TRANSLATORS.get(src_lang)
+    if repo is None or not config.dedicated_translators:
+        return config
+    return replace(config, repo=repo, backend="hf")
+
+
+def is_dedicated(config: TranslationConfig) -> bool:
+    return config.repo in DEDICATED_TRANSLATORS.values()
+
+
 def load_tokenizer(config: TranslationConfig, src_lang_code: str):
     """The tokenizer alone -- the only language-specific part of NLLB
     (its `src_lang` setting). The model weights are language-agnostic, so
@@ -360,6 +388,8 @@ def load_tokenizer(config: TranslationConfig, src_lang_code: str):
     # hit a bare PermissionError on os.makedirs() at the translation
     # stage, on every job regardless of source language, once this was
     # actually exercised end-to-end for the first time in this deployment.
+    if is_dedicated(config):  # one language pair: no source-language setting
+        return AutoTokenizer.from_pretrained(config.repo, cache_dir="/models/hf", local_files_only=True)
     return AutoTokenizer.from_pretrained(config.repo, src_lang=src_lang_code,
                                          cache_dir="/models/hf", local_files_only=True)
 
@@ -380,7 +410,7 @@ def load_model(config: TranslationConfig, src_lang_code: str):
         # (and there is nothing of ours loaded to evict at that point).
         preflight_vram_check(keep_resident="nllb")
     tok = load_tokenizer(config, src_lang_code)
-    use_ct2 = config.backend == "ct2"
+    use_ct2 = config.backend == "ct2" and not is_dedicated(config)
     if use_ct2 and not os.path.isfile(os.path.join(config.ct2_path, "model.bin")):
         _logger.warning("NLLB backend ct2 requested but %s has no converted model "
                         "(run scripts/convert_nllb_ct2.py); using hf", config.ct2_path)
@@ -400,6 +430,8 @@ def load_model(config: TranslationConfig, src_lang_code: str):
                                                   cache_dir="/models/hf", local_files_only=True
                                                   ).to(config.device).eval()
     model.generation_config.max_length = None
+    if is_dedicated(config):
+        return model, tok, NO_FORCED_BOS
     bos = tok.convert_tokens_to_ids("eng_Latn")
     return model, tok, bos
 
@@ -540,7 +572,8 @@ def _generate_one_batch(model, tok, bos: int, batch: list[str], device: str,
     enc = tok(batch, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
     try:
         with torch.inference_mode():
-            gen = model.generate(**enc, forced_bos_token_id=bos, max_new_tokens=config.max_new_tokens,
+            gen = model.generate(**enc, forced_bos_token_id=None if bos == NO_FORCED_BOS else bos,
+                                 max_new_tokens=config.max_new_tokens,
                                  num_beams=config.num_beams,
                                  no_repeat_ngram_size=config.no_repeat_ngram_size)
         # clean_up_tokenization_spaces MUST be explicit: this tokenizer's
@@ -1046,6 +1079,10 @@ def _translate_sentences(sentences: list[str], src_lang: str,
             payload.append(p)
 
     owns_model = model is None
+    if owns_model:
+        config = engine_config(config, src_lang)
+        if is_dedicated(config):
+            remote_url = None  # the remote translate-server only runs NLLB
     from contextlib import nullcontext
     from gpu import gpu_lock
 

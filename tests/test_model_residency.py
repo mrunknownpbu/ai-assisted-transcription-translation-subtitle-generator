@@ -59,7 +59,7 @@ class EnabledTests(ResidencyTestCase):
         self.assertTrue(translate.resident_model_loaded())
 
     def test_second_language_loads_only_a_tokenizer(self):
-        self.translate_one("tr")
+        self.translate_one("es")
         with patch("translate.load_tokenizer", return_value="tok-ja") as tok:
             self.translate_one("ja")
         self.assertEqual(self.load.call_count, 1)

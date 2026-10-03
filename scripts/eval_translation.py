@@ -23,7 +23,9 @@ Run inside the app container (GPU, /models, /glossary):
         --season "/data/.../Season 01" --episodes 6-10 --tvdb-id 383383 \\
         --system hf:32x2 --system ct2:32x2 --json /tmp/eval.json --ab-sheet /tmp/ab.html
 
-A system is BACKEND:BATCHxBEAMS.
+A system is BACKEND:BATCHxBEAMS. BACKEND is `hf` or `ct2` (NLLB), or `opus`
+(Helsinki-NLP/opus-mt-tc-big-tr-en, Turkish only), which goes through the same
+span, glossary and entity-recovery code with only the model swapped.
 """
 
 from __future__ import annotations
@@ -131,6 +133,30 @@ def translate_episode(path: Path, lang: str, glossary_entities, glossary_phrases
     return out
 
 
+OPUS_REPOS = {"tr": "Helsinki-NLP/opus-mt-tc-big-tr-en"}
+
+
+def load_system(backend: str, config, lang: str):
+    """(model, tokenizer, bos) for translate_spans(). `opus` is a Marian
+    seq2seq model: translate._generate_one_batch drives it like NLLB with no
+    forced BOS token: the pipeline needs a non-None `bos`, so a placeholder is
+    returned and dropped before generate()."""
+    import translate
+    if backend != "opus":
+        return translate.load_model(config, translate.NLLB_LANG[lang])
+    import torch
+    from transformers import MarianMTModel, MarianTokenizer
+    repo = OPUS_REPOS[lang]
+    model = MarianMTModel.from_pretrained(repo, torch_dtype=torch.float16).cuda().eval()
+    generate = model.generate
+
+    def generate_without_bos(*args, forced_bos_token_id=None, **kwargs):
+        return generate(*args, **kwargs)
+
+    model.generate = generate_without_bos
+    return model, MarianTokenizer.from_pretrained(repo), 0
+
+
 def parse_episodes(spec: str) -> list[int]:
     out: list[int] = []
     for part in spec.split(","):
@@ -216,11 +242,12 @@ def main() -> int:
     for spec in args.system:
         backend, _, size = spec.partition(":")
         batch, beams = (int(x) for x in size.lower().split("x"))
-        os.environ["SUBTITLE_AI_NLLB_BACKEND"] = backend
+        if backend != "opus":
+            os.environ["SUBTITLE_AI_NLLB_BACKEND"] = backend
         config = translate.TranslationConfig(batch_size=batch, num_beams=beams)
         seconds = 0.0
         with gpu_lock():
-            model, tok, bos = translate.load_model(config, translate.NLLB_LANG[args.lang])
+            model, tok, bos = load_system(backend, config, args.lang)
             try:
                 for name, src, pairs in episodes:
                     t0 = time.monotonic()
