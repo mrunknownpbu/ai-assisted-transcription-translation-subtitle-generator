@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -60,14 +61,22 @@ def extract_audio(video_path: str | Path, stream_index: int, out_wav: str | Path
     the video file only; never touches any existing subtitle."""
     out = Path(out_wav)
     out.parent.mkdir(parents=True, exist_ok=True)
+    # Written to a sibling temp file and renamed only on success, so a timeout or a
+    # killed ffmpeg can never leave a truncated WAV at the final path where a later
+    # `is_file()` check would mistake it for good audio. `-f wav` is explicit because
+    # the temp name has no .wav extension; `-nostdin` stops ffmpeg reading the
+    # worker's stdin.
+    tmp = out.with_name(f".{out.name}.part")
     command = [
-        "ffmpeg", "-y", "-i", str(video_path),
+        "ffmpeg", "-nostdin", "-y", "-i", str(video_path),
         "-map", f"0:{stream_index}", "-ac", "1", "-ar", str(sample_rate),
-        "-vn", "-sn", str(out),
+        "-vn", "-sn", "-f", "wav", str(tmp),
     ]
     try:
         subprocess.run(command, capture_output=True, text=True, timeout=1800, check=True)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        os.replace(tmp, out)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        tmp.unlink(missing_ok=True)
         raise MediaError(f"ffmpeg extraction failed: {exc}") from exc
     return out
 

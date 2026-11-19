@@ -42,6 +42,11 @@ export function useEventStream() {
       queryClient.invalidateQueries({ queryKey: ["series"] });
     };
 
+    // Retry delay: 2 s, doubling up to 30 s while the server keeps failing, reset once a
+    // stream is established. A refused key (401/403) is not retried: it would only
+    // re-prompt for the key every few seconds.
+    let retryDelay = 2_000;
+
     const connect = async () => {
       controller = new AbortController();
       try {
@@ -49,7 +54,16 @@ export function useEventStream() {
           headers: { Accept: "text/event-stream" },
           signal: controller.signal,
         });
-        if (!response.ok || !response.body) return;
+        if (response.status === 401 || response.status === 403) return;
+        if (!response.ok || !response.body) {
+          // e.g. 502/503 from the proxy or API while the container restarts
+          if (!stopped) {
+            reconnectTimer = setTimeout(connect, retryDelay);
+            retryDelay = Math.min(retryDelay * 2, 30_000);
+          }
+          return;
+        }
+        retryDelay = 2_000;
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffered = "";
