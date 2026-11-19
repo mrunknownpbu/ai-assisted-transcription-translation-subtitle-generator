@@ -13,12 +13,21 @@ import { TranslateSrtPage } from "./pages/TranslateSrtPage";
 
 function QueueSummary() {
   const { data } = useQueueCounts();
-  if (!data) return <span className="status">Loading queue&hellip;</span>;
+  if (!data) return <div className="queue-summary status">Loading queue&hellip;</div>;
+  const stats: Array<[string, number, string]> = [
+    ["queued", data.QUEUED, "queued"],
+    ["running", data.RUNNING, "running"],
+    ["completed", data.COMPLETED, "completed"],
+    ["failed", data.FAILED, "failed"],
+  ];
   return (
-    <span className="status">
-      {data.QUEUED} queued &middot; {data.RUNNING} running &middot; {data.COMPLETED} completed &middot;{" "}
-      {data.FAILED} failed
-    </span>
+    <div className="queue-summary status" aria-label="Queue summary">
+      {stats.map(([label, n, tone]) => (
+        <span key={label} className={`queue-stat queue-stat-${tone}`}>
+          <strong>{n}</strong> {label}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -27,29 +36,31 @@ export function App() {
 
   return (
     <ToastProvider>
-      <header className="topbar">
-        <div>
-          <h1>Subtitle AI</h1>
+      <div className="app-shell">
+        <aside className="sidebar">
+          <div className="brand">
+            <span className="brand-mark" aria-hidden="true">S</span>
+            <h1>Subtitle AI</h1>
+          </div>
           <nav className="nav">
-            <NavLink to="/" end className={({ isActive }) => (isActive ? "active" : "")}>
-              Library
-            </NavLink>
-            <NavLink to="/series" className={({ isActive }) => (isActive ? "active" : "")}>
-              Series
-            </NavLink>
-            <NavLink to="/translate" className={({ isActive }) => (isActive ? "active" : "")}>
-              Translate Subtitle
-            </NavLink>
-            <NavLink to="/retime" className={({ isActive }) => (isActive ? "active" : "")}>
-              Re-time Subtitle
-            </NavLink>
-            <NavLink to="/jobs" className={({ isActive }) => (isActive ? "active" : "")}>
-              Jobs
-            </NavLink>
+          <NavLink to="/" end className={({ isActive }) => (isActive ? "active" : "")}>
+            Library
+          </NavLink>
+          <NavLink to="/series" className={({ isActive }) => (isActive ? "active" : "")}>
+            Series
+          </NavLink>
+          <NavLink to="/translate" className={({ isActive }) => (isActive ? "active" : "")}>
+            Translate Subtitle
+          </NavLink>
+          <NavLink to="/retime" className={({ isActive }) => (isActive ? "active" : "")}>
+            Re-time Subtitle
+          </NavLink>
+          <NavLink to="/jobs" className={({ isActive }) => (isActive ? "active" : "")}>
+            Jobs
+          </NavLink>
           </nav>
-        </div>
-        <QueueSummary />
-      </header>
+          <QueueSummary />
+        </aside>
       <main>
         <Routes>
           <Route path="/" element={<LibraryPage />} />
@@ -61,6 +72,7 @@ export function App() {
           <Route path="/jobs/:id" element={<JobDetailPage />} />
         </Routes>
       </main>
+      </div>
     </ToastProvider>
   );
 }
