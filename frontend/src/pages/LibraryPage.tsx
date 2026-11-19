@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { useBrowse, useCreateJob, useMedia } from "../api/hooks";
+import { useBrowse, useCreateJob, useLanguages, useMedia } from "../api/hooks";
 import { ApiError } from "../api/client";
 import { AudioStreamPicker } from "../components/AudioStreamPicker";
 import { MediaBrowser } from "../components/MediaBrowser";
@@ -9,6 +9,8 @@ import { fmtDuration } from "../format";
 export function LibraryPage() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [audioStreamIndex, setAudioStreamIndex] = useState<number | null>(null);
+  const [sourceLang, setSourceLang] = useState("auto");
+  const languages = useLanguages();
   const [overwriteOriginal, setOverwriteOriginal] = useState(false);
   const [overwriteEnglish, setOverwriteEnglish] = useState(false);
   const [message, setMessage] = useState<{ text: string; kind: "ok" | "error" } | null>(null);
@@ -97,6 +99,7 @@ export function LibraryPage() {
     createJob.mutate(
       {
         video_path: selectedPath,
+        source_lang: sourceLang,
         audio_stream_index: audioStreamIndex,
         overwrite_original: overwriteOriginal,
         overwrite_english: overwriteEnglish,
@@ -211,6 +214,17 @@ export function LibraryPage() {
               selectedIndex={audioStreamIndex}
               onSelectIndex={setAudioStreamIndex}
             />
+            <label className="stream-select">
+              Original language
+              <select value={sourceLang} onChange={(e) => setSourceLang(e.target.value)}>
+                <option value="auto">Auto detect</option>
+                {(languages.data?.languages ?? []).map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="options">
               <div className="option-row">
                 <span>Transcription</span>
