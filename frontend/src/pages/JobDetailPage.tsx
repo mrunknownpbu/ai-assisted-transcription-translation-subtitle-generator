@@ -102,11 +102,6 @@ export function JobDetailPage() {
       )}
 
       <div className="detail">
-        <h3>QC findings</h3>
-        <QcFindingsList qc={job.qc} />
-      </div>
-
-      <div className="detail">
         <h3>Log</h3>
         <div className="log">
           {job.log.map((entry, i) => (
@@ -115,6 +110,11 @@ export function JobDetailPage() {
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="detail">
+        <h3>QC findings</h3>
+        <QcFindingsList qc={job.qc} />
       </div>
     </section>
   );
