@@ -23,49 +23,50 @@ export function JobDetailPage() {
         <h2>{job.video_path}</h2>
         <JobStatusBadge status={job.status} />
       </div>
+      <div className="job-progress">
+        <div className="job-progress-head">
+          <span className="fact-label">Stage</span>
+          <strong>{job.stage}</strong>
+        </div>
+        <ProgressBar progress={job.progress} status={job.status} elapsedSeconds={job.elapsed_seconds}
+                     etaSeconds={job.eta_seconds} />
+      </div>
+
+      <div className="facts">
       {isSrt && (
-        <div className="option-row">
-          <span>Type</span>
+        <div className="fact fact-wide">
+          <span className="fact-label">Type</span>
           <strong>
             {typeLabel} → {job.destination_srt_path}
           </strong>
         </div>
       )}
       {isSrt && (
-        <div className="option-row">
-          <span>Source subtitle</span>
+        <div className="fact fact-wide">
+          <span className="fact-label">Source subtitle</span>
           <strong>{job.source_is_uploaded ? "Uploaded from computer" : job.source_srt_path}</strong>
         </div>
       )}
 
-      <div className="option-row">
-        <span>Stage</span>
-        <strong>{job.stage}</strong>
-      </div>
-      <div className="option-row">
-        <span>Progress</span>
-        <ProgressBar progress={job.progress} status={job.status} elapsedSeconds={job.elapsed_seconds}
-                     etaSeconds={job.eta_seconds} />
-      </div>
-      <div className="option-row">
-        <span>Elapsed</span>
+      <div className="fact">
+        <span className="fact-label">Elapsed</span>
         <strong>{fmtElapsed(job.elapsed_seconds)}</strong>
       </div>
-      <div className="option-row">
-        <span>Source language</span>
+      <div className="fact">
+        <span className="fact-label">Source language</span>
         <strong>
           requested {job.source_lang} ({job.source_language_mode})
           {job.detected_language &&
             ` → detected ${job.detected_language} (${fmtPercent(job.language_confidence)})`}
         </strong>
       </div>
-      <div className="option-row">
-        <span>Target language</span>
+      <div className="fact">
+        <span className="fact-label">Target language</span>
         <strong>{job.target_lang}</strong>
       </div>
       {!isSrt && (
-        <div className="option-row">
-          <span>Audio stream</span>
+        <div className="fact fact-wide">
+          <span className="fact-label">Audio stream</span>
           <strong>
             {job.selected_audio_stream ?? "auto"} ({job.stream_selection_mode})
             {job.embedded_stream_language && ` — embedded: ${job.embedded_stream_language}`}
@@ -74,19 +75,21 @@ export function JobDetailPage() {
         </div>
       )}
       {job.retry_of_job_id && (
-        <div className="option-row">
-          <span>Retry chain</span>
+        <div className="fact fact-wide">
+          <span className="fact-label">Retry chain</span>
           <strong>
             attempt {job.attempt}, retried from <Link to={`/jobs/${job.retry_of_job_id}`}>{job.retry_of_job_id}</Link>
           </strong>
         </div>
       )}
       {job.outputs.length > 0 && (
-        <div className="option-row">
-          <span>Outputs</span>
+        <div className="fact fact-wide">
+          <span className="fact-label">Outputs</span>
           <strong>{job.outputs.join(", ")}</strong>
         </div>
       )}
+      </div>
+
       {job.error && (
         <div className="detail">
           <h3>Error {job.error_category ? `(${job.error_category})` : ""}</h3>

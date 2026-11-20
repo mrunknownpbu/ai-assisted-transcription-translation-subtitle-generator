@@ -323,3 +323,17 @@ tr.status-failed { color: var(--color-error-text); }
 .toast-error { border-color: var(--danger); color: var(--color-error-text); }
 
 .hidden { display: none !important; }
+
+/* Job detail: progress hero, then a grid of label/value facts. */
+.job-progress { margin-bottom: var(--space-5); }
+.job-progress-head { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-2); font-size: var(--font-size-lg); }
+.job-progress .progress-cell { flex-direction: row; align-items: center; gap: var(--space-4); }
+.job-progress .progress-bar { height: 10px; border-radius: 5px; flex: 1; }
+.job-progress .progress-bar-fill { border-radius: 5px; }
+.job-progress .progress-text { font-size: var(--font-size-md); min-width: 120px; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-3); margin-bottom: var(--space-5); }
+.fact { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); min-width: 0; }
+.fact-wide { grid-column: 1 / -1; }
+.fact-label { color: var(--muted); font-size: var(--font-size-sm); text-transform: uppercase; letter-spacing: 0.05em; }
+.fact strong { font-weight: 500; overflow-wrap: anywhere; }
+.panel .log { max-height: 420px; }
