@@ -6,15 +6,16 @@
 
    Breakpoints cannot be CSS variables inside @media queries, so they are
    documented here and repeated literally where used:
-     --bp-narrow: 800px   (workspace collapses to one column) */
+     --bp-narrow: 800px   (workspace collapses to one column)
+     --bp-sidebar: 1000px (sidebar becomes a top bar) */
 :root {
   /* Surfaces and text */
-  --color-bg: #0f1216;
-  --color-surface: #171b21;
-  --color-surface-hover: #1e242c;
-  --color-border: #262c35;
-  --color-text: #e6e9ef;
-  --color-text-muted: #8a93a3;
+  --color-bg: #0b0e13;
+  --color-surface: #12161d;
+  --color-surface-hover: #1a2029;
+  --color-border: #232a35;
+  --color-text: #e8ebf1;
+  --color-text-muted: #8f98a8;
   --color-text-on-accent: #ffffff;
 
   /* Semantic colours. Status meaning is never carried by colour alone: every
@@ -22,7 +23,7 @@
   --color-success: #3fb950;
   --color-warning: #d9a520;
   --color-error: #e5534b;
-  --color-info: #4f8cff;
+  --color-info: #5b8cff;
   --color-neutral: #8a93a3;
   /* Job lifecycle aliases */
   --color-running: var(--color-info);
@@ -30,10 +31,20 @@
   --color-cancelled: var(--color-neutral);
 
   /* Tints: backgrounds for selected / flagged / highlighted rows */
-  --tint-info: #1c2c4a;
-  --tint-info-subtle: #16223a;
+  --tint-info: #1a2a4d;
+  --tint-info-subtle: #141d33;
   --tint-warning: #241d10;
   --color-error-text: #ffb4ae;
+
+  /* Layout and chrome (desktop console) */
+  --color-surface-raised: #161b23;
+  --color-sidebar: #0e1218;
+  --color-accent-hover: #7aa2ff;
+  --color-focus: #8fb0ff;
+  --tint-success: #112419;
+  --tint-error: #2a1514;
+  --sidebar-width: 232px;
+  --content-max: 1680px;
 
   /* Spacing scale (4px base) */
   --space-1: 4px;
@@ -46,12 +57,13 @@
   /* Radius */
   --radius-sm: 4px;
   --radius-md: 6px;
-  --radius-lg: 8px;
+  --radius-lg: 10px;
   --radius-badge: 10px;
   --radius-pill: 14px;
 
   /* Typography */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --font-size-xs: 11px;
   --font-size-sm: 12px;
   --font-size-md: 13px;
@@ -60,6 +72,7 @@
   --line-height-base: 1.5;
 
   /* Elevation (flat UI: only floating layers cast a shadow) */
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-floating: 0 4px 12px rgba(0, 0, 0, 0.4);
 
   /* Motion */

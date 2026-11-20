@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useBrowse } from "../api/hooks";
 import type { BrowseEntry } from "../api/types";
@@ -37,7 +37,22 @@ export function MediaBrowser({
   batchDisabledReason,
 }: Props) {
   const [path, setPath] = useState("");
+  const [filter, setFilter] = useState("");
   const { data, isLoading, error } = useBrowse(path, fileType);
+
+  // Changing folder clears the filter: it narrows the folder being viewed.
+  useEffect(() => setFilter(""), [path]);
+
+  // Every whitespace-separated word must appear in the name (any order, any case).
+  const entries = data?.entries;
+  const visible = useMemo(() => {
+    const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!entries || words.length === 0) return entries;
+    return entries.filter((e) => {
+      const name = e.name.toLowerCase();
+      return words.every((w) => name.includes(w));
+    });
+  }, [entries, filter]);
 
   useEffect(() => {
     onPathChange?.(path);
@@ -73,11 +88,32 @@ export function MediaBrowser({
           </span>
         ))}
       </div>
+      <div className="browser-search">
+        <input
+          type="search"
+          className="browser-search-input"
+          placeholder="Filter this folder…"
+          aria-label="Filter files and folders"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setFilter("");
+          }}
+        />
+        {filter && entries && (
+          <span className="browser-search-count">
+            {visible?.length ?? 0} of {entries.length}
+          </span>
+        )}
+      </div>
       <div className="browser" aria-live="polite">
         {isLoading && "Loading…"}
         {error && `Failed to load: ${(error as Error).message}`}
         {data?.entries.length === 0 && <div className="browser-row">Empty folder</div>}
-        {data?.entries.map((entry) =>
+        {filter && visible?.length === 0 && (entries?.length ?? 0) > 0 && (
+          <div className="browser-row">No match for &ldquo;{filter}&rdquo;</div>
+        )}
+        {visible?.map((entry) =>
           entry.type === "directory" ? (
             <button key={entry.path} className="browser-row" onClick={() => setPath(entry.path)}>
               &#128193; {entry.name}

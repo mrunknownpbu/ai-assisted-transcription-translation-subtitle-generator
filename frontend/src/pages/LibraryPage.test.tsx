@@ -112,3 +112,48 @@ describe("LibraryPage batch queueing (IMPROVEMENT_PLAN.md 4.1)", () => {
     expect(await screen.findByText("Queue 0 selected")).toBeDisabled();
   });
 });
+
+describe("LibraryPage original-language selector", () => {
+  let posted: Record<string, unknown>[];
+
+  beforeEach(() => {
+    posted = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/browse")) {
+          return jsonResponse({
+            path: "",
+            entries: [{ name: "Film.mkv", path: "Film.mkv", type: "video", size: 1, has_english_subtitle: false }],
+          });
+        }
+        if (url.startsWith("/api/languages")) return jsonResponse({ languages: ["ko", "tr"] });
+        if (url.startsWith("/api/media")) {
+          return jsonResponse({ filename: "Film.mkv", duration: 60, audio_tracks: [], existing_subtitles: [] });
+        }
+        if (url.startsWith("/api/jobs") && init?.method === "POST") {
+          posted.push(JSON.parse(init.body as string));
+          return jsonResponse({ job: { id: "j1", job_type: "video" } }, 201);
+        }
+        return jsonResponse({}, 404);
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to auto detect and sends the chosen language", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText(/Film\.mkv/));
+    const select = (await screen.findByLabelText("Original language")) as HTMLSelectElement;
+    expect(select.value).toBe("auto");
+    await screen.findByRole("option", { name: "ko" });
+    fireEvent.change(select, { target: { value: "ko" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start processing" }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toMatchObject({ video_path: "Film.mkv", source_lang: "ko" });
+  });
+});
